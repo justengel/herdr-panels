@@ -46,9 +46,9 @@ pub struct ServerConfig {
     pub url: String,
 }
 
-pub async fn serve(config: ServerConfig) -> anyhow::Result<()> {
-    let settings = store::load_settings(&config.config_dir)?;
-    let mut watch_paths = vec![config.config_dir.clone()];
+pub fn build_app(config_dir: PathBuf, herdr_socket: PathBuf) -> anyhow::Result<Router> {
+    let settings = store::load_settings(&config_dir)?;
+    let mut watch_paths = vec![config_dir.clone()];
     watch_paths.extend(settings.content_roots.iter().cloned());
     let watch = WatchHub::start(&watch_paths)?;
     let http = reqwest::Client::builder()
@@ -58,13 +58,13 @@ pub async fn serve(config: ServerConfig) -> anyhow::Result<()> {
         .build()?;
     let dist_dir = find_dist_dir().map(Arc::new);
     let state = AppState {
-        config_dir: Arc::new(config.config_dir.clone()),
-        runtime: RuntimeCache::new(HerdrClient::new(config.herdr_socket.clone())),
+        config_dir: Arc::new(config_dir),
+        runtime: RuntimeCache::new(HerdrClient::new(herdr_socket.clone())),
         http,
         dist_dir: dist_dir.clone(),
         watch,
         agent: AgentHub::new(),
-        controls: PaneControls::new(session_name_from_socket(&config.herdr_socket)),
+        controls: PaneControls::new(session_name_from_socket(&herdr_socket)),
     };
 
     let mut router = Router::new()
@@ -101,10 +101,13 @@ pub async fn serve(config: ServerConfig) -> anyhow::Result<()> {
         router.fallback(get(setup_page))
     };
 
-    let app = router
+    Ok(router
         .layer(axum::extract::DefaultBodyLimit::max(20 * 1024 * 1024))
-        .layer(from_fn(guard));
+        .layer(from_fn(guard)))
+}
 
+pub async fn serve(config: ServerConfig) -> anyhow::Result<()> {
+    let app = build_app(config.config_dir.clone(), config.herdr_socket.clone())?;
     let addr = SocketAddr::from((config.host, config.port));
     let listener = tokio::net::TcpListener::bind(addr).await?;
     crate::client::record_server(&config.config_dir, &config.url)?;

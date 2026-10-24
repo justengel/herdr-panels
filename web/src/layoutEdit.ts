@@ -167,6 +167,27 @@ export function addPanelTab(node: LayoutNode, id: string): LayoutNode {
   return mapPanel(node, id, (current) => ({ ...current, panel: withAddedTab(current) }));
 }
 
+export function closePanelTab(node: LayoutNode, panelId: string, tabId: string): LayoutNode {
+  const current = findPanel(node, panelId);
+  if (!current || current.panel.type !== "tabs") return node;
+  const group = current.panel;
+  const remaining = group.tabs.filter((tab) => tab.id !== tabId);
+  if (remaining.length > 1) {
+    const nextActive = group.active === tabId ? remaining[remaining.length - 1].id : group.active;
+    return mapPanel(node, panelId, (panel) => ({
+      ...panel,
+      panel: { ...group, active: nextActive, tabs: remaining },
+    }));
+  }
+  const only = remaining[0] ?? blankTab("tab-1");
+  const title = only.title && only.title !== "New tab" ? only.title : current.title;
+  return mapPanel(node, panelId, (panel) => ({
+    ...panel,
+    title: title ?? null,
+    panel: only.panel,
+  }));
+}
+
 export function assignContent(node: LayoutNode, id: string, panel: PanelConfig, retitle = false): LayoutNode {
   const current = findPanel(node, id);
   if (!current || current.panel.type !== "tabs") return setPanel(node, id, panel);

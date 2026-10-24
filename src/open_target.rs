@@ -80,11 +80,7 @@ pub fn open_title(kind: &OpenKind) -> String {
         OpenKind::Browser { url, .. } => browser_title(url),
         OpenKind::Plugin { id } => id.clone(),
         OpenKind::Markdown { path } | OpenKind::Html { path } | OpenKind::Text { path } | OpenKind::Explorer { path } => {
-            Path::new(path)
-                .file_name()
-                .map(|name| name.to_string_lossy().into_owned())
-                .filter(|name| !name.is_empty())
-                .unwrap_or_else(|| "File".into())
+            file_label(path)
         }
     }
 }
@@ -282,10 +278,24 @@ fn has_scheme(target: &str) -> bool {
     let Some((scheme, rest)) = target.split_once(':') else {
         return false;
     };
-    if scheme.len() == 1 && rest.starts_with('\\') {
+    if is_drive_path(scheme, rest) {
         return false;
     }
     !scheme.is_empty() && scheme.chars().all(|ch| ch.is_ascii_alphabetic())
+}
+
+fn is_drive_path(scheme: &str, rest: &str) -> bool {
+    scheme.len() == 1
+        && scheme.chars().next().is_some_and(|ch| ch.is_ascii_alphabetic())
+        && (rest.starts_with('/') || rest.starts_with('\\'))
+}
+
+fn file_label(path: &str) -> String {
+    path.split(|ch| ch == '/' || (cfg!(windows) && ch == '\\'))
+        .filter(|part| !part.is_empty())
+        .next_back()
+        .unwrap_or("File")
+        .to_string()
 }
 
 fn has_parent(target: &str) -> bool {
@@ -431,14 +441,31 @@ mod tests {
         assert!(classify_target("  ", no_file).is_err());
         assert!(classify_target("notes/../../secret.md", no_file).is_err());
         assert!(classify_target("javascript:alert(1)", no_file).is_err());
-        assert!(classify_target(r"C:\missing\nope.txt", no_file).is_err());
+        let missing = std::env::temp_dir().join("hwp-does-not-exist.txt");
+        let err = classify_target(&missing.display().to_string(), no_file).unwrap_err();
+        assert!(err.contains("was not found"), "{err}");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_drive_path_is_a_file_with_either_separator() {
+        let slash = classify_target("C:/missing/nope.txt", no_file).unwrap_err();
+        let back = classify_target(r"C:\missing\nope.txt", no_file).unwrap_err();
+        assert!(slash.contains("was not found"), "{slash}");
+        assert!(back.contains("was not found"), "{back}");
+        assert_eq!(
+            open_title(&OpenKind::Explorer {
+                path: r"C:\work\pkg".into()
+            }),
+            "pkg"
+        );
     }
 
     #[test]
     fn titles_use_the_file_or_page_name() {
         assert_eq!(
             open_title(&OpenKind::Markdown {
-                path: r"C:\work\readme.md".into()
+                path: "work/readme.md".into()
             }),
             "readme.md"
         );
@@ -451,7 +478,7 @@ mod tests {
         );
         assert_eq!(
             open_title(&OpenKind::Explorer {
-                path: r"C:\work\pkg".into()
+                path: "work/pkg".into()
             }),
             "pkg"
         );

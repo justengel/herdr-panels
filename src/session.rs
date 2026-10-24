@@ -354,7 +354,7 @@ mod tests {
               "workspace_id": "w1",
               "tab_id": "w1:t1",
               "focused": true,
-              "cwd": "C:\\repo",
+              "cwd": "/repo",
               "agent_status": "unknown",
               "scroll": {"viewport_rows": 39}
             }],

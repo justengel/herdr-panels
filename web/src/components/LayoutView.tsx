@@ -1,6 +1,7 @@
 import { useRef } from "react";
 import type { AgentView, Attachment, GridNode, LayoutNode, PaneView, PanelConfig, WorkspaceView } from "../types";
 import { api } from "../api";
+import { baseName, samePath } from "../paths";
 import { cellNode } from "../layoutEdit";
 import { useDesign } from "../design";
 import { PanelChrome } from "./PanelChrome";
@@ -28,7 +29,7 @@ interface Props {
   onRatio: (path: string, ratio: number) => void;
   onTracks: (path: string, columns: number[], rows: number[]) => void;
   onPanel: (id: string, panel: PanelConfig) => void;
-  onRelease: (id: string, panel: PanelConfig, title: string) => void;
+  onCloseTab: (id: string, tabId: string) => void;
   onFocusPane: (paneId: string) => void;
 }
 
@@ -44,7 +45,7 @@ export function LayoutView({
   onRatio,
   onTracks,
   onPanel,
-  onRelease,
+  onCloseTab,
   onFocusPane,
 }: Props) {
   if (node.type === "split") {
@@ -63,7 +64,7 @@ export function LayoutView({
             onRatio={onRatio}
             onTracks={onTracks}
             onPanel={onPanel}
-            onRelease={onRelease}
+            onCloseTab={onCloseTab}
             onFocusPane={onFocusPane}
           />
         </div>
@@ -87,7 +88,7 @@ export function LayoutView({
             onRatio={onRatio}
             onTracks={onTracks}
             onPanel={onPanel}
-            onRelease={onRelease}
+            onCloseTab={onCloseTab}
             onFocusPane={onFocusPane}
           />
         </div>
@@ -109,7 +110,7 @@ export function LayoutView({
         onRatio={onRatio}
       onTracks={onTracks}
       onPanel={onPanel}
-      onRelease={onRelease}
+      onCloseTab={onCloseTab}
       onFocusPane={onFocusPane}
     />
   );
@@ -127,7 +128,7 @@ export function LayoutView({
       pending={pending[node.id] ?? []}
       onConsume={onConsume}
       onPanel={onPanel}
-      onRelease={onRelease}
+      onCloseTab={onCloseTab}
       onFocusPane={onFocusPane}
     />
   );
@@ -145,7 +146,7 @@ function GridView({
   onRatio,
   onTracks,
   onPanel,
-  onRelease,
+  onCloseTab,
   onFocusPane,
 }: Props & { node: GridNode }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -182,7 +183,7 @@ function GridView({
             onRatio={onRatio}
             onTracks={onTracks}
             onPanel={onPanel}
-            onRelease={onRelease}
+            onCloseTab={onCloseTab}
             onFocusPane={onFocusPane}
           />
         </div>
@@ -238,10 +239,10 @@ function PanelView(props: {
   pending: Attachment[];
   onConsume: (panelId: string) => void;
   onPanel: (id: string, panel: PanelConfig) => void;
-  onRelease: (id: string, panel: PanelConfig, title: string) => void;
+  onCloseTab: (id: string, tabId: string) => void;
   onFocusPane: (paneId: string) => void;
 }) {
-  const { id, title, panel, onPanel, onRelease } = props;
+  const { id, title, panel, onPanel, onCloseTab } = props;
   const design = useDesign();
   const selected = design.enabled && design.selectedId === id;
   const select = (event: React.MouseEvent<HTMLElement>) => {
@@ -270,7 +271,7 @@ function PanelView(props: {
         <TabGroup
           group={panel}
           onChange={(next) => onPanel(id, next)}
-          onSingle={(next, tabTitle) => onRelease(id, next, tabTitle)}
+          onClose={(tabId) => onCloseTab(id, tabId)}
           renderContent={(tab, update) => (
             <Surface {...props} id={`${id}:${tab.id}`} panel={tab.panel} onPanel={(_id, next) => update(next)} />
           )}
@@ -469,16 +470,13 @@ function folderRoots(workspaces: WorkspaceView[], panes: PaneView[]) {
   for (const pane of panes) {
     if (!pane.cwd) continue;
     if (roots.some((root) => sameFolder(root.path, pane.cwd!) || sameFolder(pane.cwd!, root.path))) continue;
-    const name = pane.cwd.split(/[\\/]/).filter(Boolean).pop() || pane.cwd;
-    roots.push({ path: pane.cwd, label: name });
+    roots.push({ path: pane.cwd, label: baseName(pane.cwd) || pane.cwd });
   }
   return roots;
 }
 
 function sameFolder(path: string, root: string) {
-  const child = path.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
-  const base = root.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
-  return child === base || child.startsWith(`${base}/`);
+  return samePath(path, root);
 }
 
 function badgeText(pane: PaneView | undefined): string {

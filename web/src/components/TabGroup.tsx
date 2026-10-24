@@ -1,17 +1,18 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { blankTab, freshTabId } from "../layoutEdit";
+import { baseName } from "../paths";
 import type { PanelConfig, PanelTab, TabsPanel } from "../types";
 
 export function TabGroup({
   group,
   onChange,
-  onSingle,
+  onClose,
   renderContent,
 }: {
   group: TabsPanel;
   onChange: (next: TabsPanel) => void;
-  onSingle: (panel: PanelConfig, title: string) => void;
+  onClose: (tabId: string) => void;
   renderContent: (tab: PanelTab, onPanel: (panel: PanelConfig) => void) => ReactNode;
 }) {
   const active = group.tabs.find((tab) => tab.id === group.active) ?? group.tabs[0];
@@ -46,14 +47,7 @@ export function TabGroup({
   }
 
   function closeTab(tabId: string) {
-    const remaining = group.tabs.filter((tab) => tab.id !== tabId);
-    if (remaining.length <= 1) {
-      const only = remaining[0] ?? blankTab("tab-1");
-      onSingle(only.panel, only.title);
-      return;
-    }
-    const nextActive = group.active === tabId ? remaining[remaining.length - 1].id : group.active;
-    onChange({ ...group, active: nextActive, tabs: remaining });
+    onClose(tabId);
   }
 
   function addTab() {
@@ -217,6 +211,5 @@ function titleFor(panel: PanelConfig): string | null {
   if (panel.type === "plugin") return panel.plugin;
   const path = panel.type === "markdown" || panel.type === "file" || panel.type === "explorer" ? panel.path : "";
   if (!path) return panel.type === "explorer" ? "Files" : null;
-  const parts = path.split(/[/\\]/).filter(Boolean);
-  return parts[parts.length - 1] ?? null;
+  return baseName(path) || null;
 }

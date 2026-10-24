@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api, baseName } from "../../api";
+import { parentPath, plainPath, samePath } from "../../paths";
 
 interface Root {
   path: string;
@@ -202,26 +203,10 @@ function FileIcon() {
   );
 }
 
-function plainPath(path: string): string {
-  return path.startsWith("\\\\?\\") ? path.slice(4) : path;
-}
-
 function parentOf(path: string): string {
-  path = plainPath(path);
-  const trimmed = path.replace(/[\\/]+$/, "");
-  const index = Math.max(trimmed.lastIndexOf("\\"), trimmed.lastIndexOf("/"));
-  if (index < 0) return "";
-  if (index === 2 && /^[A-Za-z]:/.test(trimmed)) return trimmed.slice(0, 3);
-  if (index === 0) return trimmed.slice(0, 1);
-  return trimmed.slice(0, index);
+  return parentPath(path);
 }
 
 function nested(path: string, root: string): boolean {
-  const child = normalize(path);
-  const base = normalize(root);
-  return child === base || child.startsWith(`${base}/`);
-}
-
-function normalize(path: string): string {
-  return path.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+  return samePath(path, root);
 }

@@ -46,6 +46,19 @@ pub fn validate_plugin_id(id: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
+fn is_relative_file(value: &str) -> bool {
+    let value = value.trim();
+    if value.is_empty() || value.contains('\0') || value.starts_with('/') || value.starts_with('\\') {
+        return false;
+    }
+    if let Some((prefix, _)) = value.split_once(':') {
+        if prefix.len() == 1 && prefix.chars().all(|ch| ch.is_ascii_alphabetic()) {
+            return false;
+        }
+    }
+    !value.split(['/', '\\']).any(|part| part == "..")
+}
+
 pub fn list_plugins(config_dir: &Path) -> anyhow::Result<Vec<PluginManifest>> {
     let root = plugins_dir(config_dir);
     if !root.exists() {
@@ -83,11 +96,7 @@ pub fn parse_manifest(text: &str) -> anyhow::Result<PluginManifest> {
     if manifest.title.trim().is_empty() || manifest.title.chars().count() > 80 {
         bail!("plugin title must be 1 to 80 characters");
     }
-    if manifest.entry.trim().is_empty()
-        || manifest.entry.contains('\0')
-        || manifest.entry.starts_with('/')
-        || manifest.entry.split(['/', '\\']).any(|part| part == "..")
-    {
+    if !is_relative_file(&manifest.entry) {
         bail!("plugin entry must be a file inside the plugin directory");
     }
     Ok(manifest)
@@ -131,11 +140,7 @@ fn copy_tree(src: &Path, dst: &Path) -> anyhow::Result<()> {
 
 pub fn plugin_file(config_dir: &Path, id: &str, relative: &str) -> anyhow::Result<PathBuf> {
     validate_plugin_id(id)?;
-    if relative.is_empty()
-        || relative.contains('\0')
-        || relative.starts_with('/')
-        || relative.split(['/', '\\']).any(|part| part == "..")
-    {
+    if !is_relative_file(relative) {
         bail!("plugin file path is invalid");
     }
     let root = plugins_dir(config_dir).join(id);

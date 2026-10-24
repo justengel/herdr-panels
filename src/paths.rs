@@ -1,4 +1,4 @@
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context};
 
@@ -178,13 +178,7 @@ pub fn resolve_content(
     if requested.contains('\0') {
         return Err("invalid path".into());
     }
-    let requested_path = PathBuf::from(requested.replace('/', std::path::MAIN_SEPARATOR_STR));
-    if requested_path
-        .components()
-        .any(|component| matches!(component, Component::ParentDir))
-    {
-        return Err("path must stay inside a content root".into());
-    }
+    let requested_path = content_path(requested)?;
 
     let candidates = if requested_path.is_absolute() {
         vec![requested_path]
@@ -213,6 +207,40 @@ pub fn resolve_content(
         Err("path is outside the configured content roots".into())
     } else {
         Err(format!("file not found: {requested}"))
+    }
+}
+
+fn content_path(requested: &str) -> Result<PathBuf, String> {
+    if requested.split(['/', '\\']).any(|part| part == "..") {
+        return Err("path must stay inside a content root".into());
+    }
+    let native = if cfg!(windows) {
+        PathBuf::from(requested.replace('/', "\\"))
+    } else {
+        PathBuf::from(requested)
+    };
+    if native.is_absolute() {
+        return Ok(native);
+    }
+    let mut path = PathBuf::new();
+    for part in relative_parts(requested) {
+        if part.is_empty() || part == "." {
+            continue;
+        }
+        path.push(part);
+    }
+    if path.as_os_str().is_empty() {
+        Err("empty path".into())
+    } else {
+        Ok(path)
+    }
+}
+
+fn relative_parts(requested: &str) -> Vec<&str> {
+    if cfg!(windows) {
+        requested.split(['/', '\\']).collect()
+    } else {
+        requested.split('/').collect()
     }
 }
 
@@ -352,16 +380,29 @@ mod tests {
 
     #[test]
     fn session_name_comes_from_the_socket_path() {
-        let named =
-            Path::new(r"C:\Users\a\AppData\Roaming\herdr\sessions\webpanels-probe\herdr.sock");
+        let named = PathBuf::from("herdr")
+            .join("sessions")
+            .join("webpanels-probe")
+            .join("herdr.sock");
         assert_eq!(
-            session_name_from_socket(named).as_deref(),
+            session_name_from_socket(&named).as_deref(),
             Some("webpanels-probe")
         );
-        let default_socket = Path::new(r"C:\Users\a\AppData\Roaming\herdr\herdr.sock");
-        assert_eq!(session_name_from_socket(default_socket), None);
-        assert_eq!(session_label(named), "webpanels-probe");
-        assert_eq!(session_label(default_socket), "default");
+        let default_socket = PathBuf::from("herdr").join("herdr.sock");
+        assert_eq!(session_name_from_socket(&default_socket), None);
+        assert_eq!(session_label(&named), "webpanels-probe");
+        assert_eq!(session_label(&default_socket), "default");
+    }
+
+    #[test]
+    fn a_relative_path_uses_slashes_on_every_system() {
+        let root = std::env::temp_dir().join(format!("hwp-rel-{}", std::process::id()));
+        let notes = root.join("notes");
+        std::fs::create_dir_all(&notes).unwrap();
+        std::fs::write(notes.join("welcome.md"), "hi").unwrap();
+        let found = resolve_content(&root, &[], "notes/welcome.md").unwrap();
+        assert_eq!(found.file_name().and_then(|name| name.to_str()), Some("welcome.md"));
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -369,5 +410,7 @@ mod tests {
         let dir = std::env::temp_dir();
         let err = resolve_content(&dir, &[], "notes/../../secret.md").unwrap_err();
         assert!(err.contains("content root"));
+        let escaped = resolve_content(&dir, &[], r"notes\..\secret.md").unwrap_err();
+        assert!(escaped.contains("content root"));
     }
 }

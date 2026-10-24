@@ -115,13 +115,9 @@ pub fn config_path() -> PathBuf {
     if let Some(path) = env::var_os("HERDR_CONFIG_PATH") {
         return PathBuf::from(path);
     }
-    if let Some(appdata) = env::var_os("APPDATA") {
-        return PathBuf::from(appdata).join("herdr").join("config.toml");
-    }
-    if let Some(home) = env::var_os("HOME") {
-        return PathBuf::from(home).join(".config").join("herdr").join("config.toml");
-    }
-    PathBuf::from("herdr").join("config.toml")
+    crate::paths::herdr_config_dir()
+        .unwrap_or_else(|_| PathBuf::from("herdr"))
+        .join("config.toml")
 }
 
 pub fn document() -> Value {

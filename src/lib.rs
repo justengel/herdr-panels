@@ -30,4 +30,4 @@ pub mod terminal;
 pub mod terminal_size;
 pub mod watch;
 
-pub use server::serve;
+pub use server::{build_app, serve};

@@ -1,4 +1,5 @@
 import type { Bootstrap, ChatMessage, LayoutDocument, PanelConfig, RuntimeSnapshot } from "./types";
+import { baseName as pathName, contentSegments } from "./paths";
 
 export interface HerdrField {
   section: string;
@@ -155,9 +156,7 @@ export function wsUrl(path: string): string {
 }
 
 export function contentUrl(path: string, bridge = false): string {
-  const encoded = path
-    .split("/")
-    .filter((part) => part.length > 0)
+  const encoded = contentSegments(path)
     .map((part) => encodeURIComponent(part))
     .join("/");
   return bridge ? `/content/${encoded}?bridge=1` : `/content/${encoded}`;
@@ -173,7 +172,5 @@ export function frameSrc(url: string, proxy: boolean): string {
 }
 
 export function baseName(path: string | null | undefined): string {
-  if (!path) return "";
-  const parts = path.split(/[/\\]/).filter(Boolean);
-  return parts[parts.length - 1] ?? path;
+  return pathName(path);
 }

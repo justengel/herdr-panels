@@ -130,13 +130,13 @@ The server refuses any non-loopback bind. Browser requests that carry a non-loca
 
 Requirements: Rust, Node.js, and a running Herdr (`herdr`, or `herdr server` for a headless session).
 
-```powershell
+```sh
 cargo run -- server
 ```
 
 In another terminal, for UI development:
 
-```powershell
+```sh
 cd web
 npm install
 npm run dev
@@ -146,7 +146,7 @@ Open http://127.0.0.1:5173. The Vite server proxies API and websocket traffic to
 
 To serve the built UI from the Rust process:
 
-```powershell
+```sh
 cd web
 npm install
 npm run build
@@ -158,7 +158,7 @@ Open http://127.0.0.1:4737. `cargo run -- --open` still starts the server, so ol
 
 The server is the long-running viewer. Layout changes are short commands against that process:
 
-```powershell
+```sh
 herdr-web-panels panel list
 herdr-web-panels panel split Notes --direction right --kind html
 herdr-web-panels panel close Board
@@ -195,7 +195,7 @@ The example side-by-side layout targets pane `w1:p1`. If that pane is not in the
 
 ### Named session
 
-```powershell
+```sh
 herdr --session demo server
 herdr --session demo workspace create --label demo
 cargo run -- server --herdr-session demo
@@ -203,7 +203,7 @@ cargo run -- server --herdr-session demo
 
 ## Development checks
 
-```powershell
+```sh
 cargo test
 cd web
 npm run build

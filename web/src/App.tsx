@@ -6,6 +6,7 @@ import {
   addPanelTab,
   assignContent,
   closePanel,
+  closePanelTab,
   defaultPanel,
   findPanel,
   freshPanelId,
@@ -402,15 +403,7 @@ export function App() {
             onRatio={(path, ratio) => edit(setSplitRatio(layout.root, path, ratio))}
             onTracks={(path, columns, rows) => edit(setGridTracks(layout.root, path, columns, rows))}
             onPanel={(id, panel: PanelConfig) => edit(setPanel(layout.root, id, panel))}
-            onRelease={(id, panel, tabTitle) =>
-              edit(
-                mapPanel(layout.root, id, (current) => ({
-                  ...current,
-                  title: tabTitle && tabTitle !== "New tab" ? tabTitle : current.title,
-                  panel,
-                })),
-              )
-            }
+            onCloseTab={(id, tabId) => edit(closePanelTab(layout.root, id, tabId))}
             onFocusPane={(paneId) => {
               void api.focus({ paneId });
               const terminal = listPanels(layout.root).find((panel) => panel.panel.type === "herdr");
