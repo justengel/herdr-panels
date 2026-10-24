@@ -2,5 +2,6 @@
 /web/node_modules
 /web/dist
 /_research
+/.cursor
 *.log
 .DS_Store
