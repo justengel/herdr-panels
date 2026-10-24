@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Session board</title>
+  <style>
+    :root { color-scheme: dark; }
+    body {
+      margin: 0;
+      padding: 16px;
+      background: #14181f;
+      color: #e7e4dc;
+      font: 13px/1.45 "Segoe UI", sans-serif;
+    }
+    h1 { font-size: 16px; margin: 0 0 4px; }
+    .sub { color: #9aa3b2; margin: 0 0 14px; }
+    button, select, input {
+      font: inherit;
+      color: inherit;
+      background: #101114;
+      border: 1px solid #343b46;
+      border-radius: 4px;
+      padding: 6px 8px;
+    }
+    button { cursor: pointer; }
+    button:hover, select:hover, input:hover { border-color: #e2b657; }
+    .row { display: flex; gap: 8px; align-items: center; margin-bottom: 12px; }
+    input { flex: 1; min-width: 0; }
+    ul { list-style: none; padding: 0; margin: 0; display: grid; gap: 8px; }
+    li {
+      padding: 8px 10px;
+      background: #101114;
+      border: 1px solid #2a2f38;
+    }
+    .id { font-family: Consolas, ui-monospace, monospace; }
+    .meta { color: #9aa3b2; }
+    .err { color: #e07a5f; }
+  </style>
+</head>
+<body>
+  <h1>Session board</h1>
+  <p class="sub">A custom HTML panel talking to Herdr through the page bridge.</p>
+  <div class="row">
+    <button id="refresh" type="button">Refresh</button>
+    <span id="status" class="meta">Waiting for the bridge…</span>
+  </div>
+  <ul id="panes"></ul>
+  <form id="send" class="row">
+    <select id="target"></select>
+    <input id="text" placeholder="Send a line to the pane" autocomplete="off">
+    <button type="submit">Send</button>
+  </form>
+  <p id="error" class="err"></p>
+  <script>
+    const status = document.getElementById("status");
+    const list = document.getElementById("panes");
+    const target = document.getElementById("target");
+    const error = document.getElementById("error");
+
+    function fail(err) {
+      error.textContent = err && err.message ? err.message : String(err);
+    }
+
+    async function refresh() {
+      error.textContent = "";
+      if (!window.herdrPanels) {
+        status.textContent = "Open this file inside a Herdr Panels HTML panel.";
+        return;
+      }
+      const runtime = await window.herdrPanels.listPanes();
+      status.textContent = runtime.connected
+        ? "Herdr connected"
+        : "Herdr offline" + (runtime.error ? " — " + runtime.error : "");
+      const selected = target.value;
+      target.replaceChildren();
+      list.replaceChildren();
+      for (const pane of runtime.panes || []) {
+        const option = document.createElement("option");
+        option.value = pane.paneId;
+        option.textContent = pane.paneId;
+        target.append(option);
+        const item = document.createElement("li");
+        const name = pane.agentName || pane.agent || "shell";
+        item.innerHTML =
+          '<div class="id"></div><div class="meta"></div>';
+        item.querySelector(".id").textContent = pane.paneId + " · " + name;
+        item.querySelector(".meta").textContent =
+          (pane.agentStatus || "unknown") + (pane.cwd ? " · " + pane.cwd : "");
+        list.append(item);
+      }
+      if ([...target.options].some((option) => option.value === selected)) {
+        target.value = selected;
+      }
+      if (!runtime.panes || runtime.panes.length === 0) {
+        const item = document.createElement("li");
+        item.textContent = "No panes in this Herdr session.";
+        list.append(item);
+      }
+    }
+
+    document.getElementById("refresh").addEventListener("click", () => {
+      refresh().catch(fail);
+    });
+    document.getElementById("send").addEventListener("submit", (event) => {
+      event.preventDefault();
+      const paneId = target.value;
+      const text = document.getElementById("text").value;
+      if (!paneId || !window.herdrPanels) return;
+      window.herdrPanels.sendText(paneId, text)
+        .then(() => window.herdrPanels.sendKeys(paneId, ["enter"]))
+        .then(() => { document.getElementById("text").value = ""; })
+        .catch(fail);
+    });
+    refresh().catch(fail);
+  </script>
+</body>
+</html>

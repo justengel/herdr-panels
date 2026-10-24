@@ -1,0 +1,33 @@
+[package]
+name = "herdr-web-panels"
+version = "0.1.0"
+edition = "2021"
+description = "Local multi-panel browser client for Herdr"
+license = "UNLICENSED"
+publish = false
+
+[lib]
+name = "herdr_web_panels"
+path = "src/lib.rs"
+
+[[bin]]
+name = "herdr-web-panels"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+axum = { version = "0.8", features = ["macros", "ws"] }
+bytes = "1"
+clap = { version = "4", features = ["derive"] }
+futures-util = "0.3"
+mime_guess = "2"
+notify = "6"
+reqwest = "0.12"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
+tower-http = { version = "0.6", features = ["fs", "set-header"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+url = "2"

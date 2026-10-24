@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Embedded view</title>
+  <style>
+    :root { color-scheme: dark; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      background: #14181f;
+      color: #e7e4dc;
+      font: 15px/1.5 "Segoe UI", sans-serif;
+    }
+    main { width: min(460px, calc(100% - 40px)); }
+    h1 { font-size: 20px; margin: 0 0 8px; }
+    p { margin: 0; color: #b7b1a6; }
+    code { color: #e2b657; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Embedded view</h1>
+    <p>This page is an iframe panel. Point <code>url</code> at a local service and set <code>proxy</code> to true when that service refuses to be framed.</p>
+  </main>
+</body>
+</html>

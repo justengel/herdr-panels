@@ -1,0 +1,28 @@
+{
+  "id": "side-by-side",
+  "title": "Side by side",
+  "description": "A Herdr terminal beside a Markdown note.",
+  "root": {
+    "type": "split",
+    "direction": "row",
+    "ratio": 0.58,
+    "first": {
+      "type": "panel",
+      "id": "term",
+      "title": "Herdr",
+      "panel": {
+        "type": "herdr",
+        "paneId": "w1:p1"
+      }
+    },
+    "second": {
+      "type": "panel",
+      "id": "notes",
+      "title": "Notes",
+      "panel": {
+        "type": "markdown",
+        "path": "notes/welcome.md"
+      }
+    }
+  }
+}

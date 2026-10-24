@@ -1,0 +1,40 @@
+{
+  "id": "studio",
+  "title": "Studio",
+  "description": "Terminal, Markdown, iframe, and a custom HTML panel.",
+  "root": {
+    "type": "grid",
+    "columns": [1.25, 1],
+    "rows": [1.35, 1],
+    "cells": [
+      {
+        "id": "term",
+        "title": "Herdr",
+        "column": 0,
+        "row": 0,
+        "panel": { "type": "herdr", "paneId": "w1:p1" }
+      },
+      {
+        "id": "notes",
+        "title": "Notes",
+        "column": 1,
+        "row": 0,
+        "panel": { "type": "markdown", "path": "notes/welcome.md" }
+      },
+      {
+        "id": "embed",
+        "title": "Embed",
+        "column": 0,
+        "row": 1,
+        "panel": { "type": "iframe", "url": "/content/panels/embed-demo.html" }
+      },
+      {
+        "id": "board",
+        "title": "Session board",
+        "column": 1,
+        "row": 1,
+        "panel": { "type": "html", "path": "panels/session-board.html" }
+      }
+    ]
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "id": "welcome",
+  "title": "Welcome",
+  "entry": "index.html",
+  "description": "A sample view plugin. Replace this directory with your own application."
+}

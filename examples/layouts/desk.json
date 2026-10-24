@@ -1,0 +1,42 @@
+{
+  "id": "desk",
+  "title": "Desk",
+  "description": "A terminal, a note, and an HTML panel.",
+  "root": {
+    "type": "split",
+    "direction": "row",
+    "ratio": 0.62,
+    "first": {
+      "type": "panel",
+      "id": "term",
+      "title": "Herdr",
+      "panel": {
+        "type": "herdr",
+        "paneId": "w1:p1"
+      }
+    },
+    "second": {
+      "type": "split",
+      "direction": "column",
+      "ratio": 0.55,
+      "first": {
+        "type": "panel",
+        "id": "notes",
+        "title": "Notes",
+        "panel": {
+          "type": "markdown",
+          "path": "notes/welcome.md"
+        }
+      },
+      "second": {
+        "type": "panel",
+        "id": "board",
+        "title": "Board",
+        "panel": {
+          "type": "html",
+          "path": "panels/session-board.html"
+        }
+      }
+    }
+  }
+}

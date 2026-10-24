@@ -1,0 +1,98 @@
+import { useEffect, useRef } from "react";
+import bridge from "../../../../assets/panel-bridge.js?raw";
+import { api, contentUrl } from "../../api";
+
+interface Props {
+  path?: string | null;
+  inline?: string | null;
+  title: string;
+  design?: boolean;
+  onPick?: (pick: { tag: string; text: string }) => void;
+}
+
+interface BridgeMessage {
+  source: string;
+  id: number;
+  method: string;
+  params?: Record<string, unknown>;
+}
+
+export function HtmlView({ path, inline, title, design = false, onPick }: Props) {
+  const frameRef = useRef<HTMLIFrameElement>(null);
+  const pickRef = useRef(onPick);
+  pickRef.current = onPick;
+
+  useEffect(() => {
+    const frame = frameRef.current;
+    if (!frame) return;
+    const onMessage = (event: MessageEvent) => {
+      if (event.source !== frame.contentWindow) return;
+      const message = event.data as BridgeMessage & { type?: string; tag?: string; text?: string };
+      if (message?.source === "hwp-panel" && message.type === "pick") {
+        pickRef.current?.({ tag: String(message.tag ?? "element"), text: String(message.text ?? "") });
+        return;
+      }
+      if (!message || message.source !== "hwp-panel" || typeof message.id !== "number") return;
+      void fulfill(message)
+        .then((result) => {
+          frame.contentWindow?.postMessage({ source: "hwp-host", id: message.id, ok: true, result }, "*");
+        })
+        .catch((error: unknown) => {
+          const text = error instanceof Error ? error.message : String(error);
+          frame.contentWindow?.postMessage({ source: "hwp-host", id: message.id, ok: false, error: text }, "*");
+        });
+    };
+    window.addEventListener("message", onMessage);
+    if (path) {
+      frame.src = contentUrl(path, true);
+    } else if (inline) {
+      frame.srcdoc = `<!doctype html><html><head><meta charset="utf-8"><script>${bridge}</script></head><body>${inline}</body></html>`;
+    }
+    return () => window.removeEventListener("message", onMessage);
+  }, [path, inline]);
+
+  useEffect(() => {
+    const frame = frameRef.current;
+    if (!frame) return;
+    const publish = () => {
+      frame.contentWindow?.postMessage({ source: "hwp-host", type: "design", enabled: design }, "*");
+    };
+    frame.addEventListener("load", publish);
+    publish();
+    return () => frame.removeEventListener("load", publish);
+  }, [design, path, inline]);
+
+  return (
+    <iframe
+      ref={frameRef}
+      className="frame"
+      title={title}
+      sandbox="allow-scripts"
+    />
+  );
+}
+
+async function fulfill(message: BridgeMessage): Promise<unknown> {
+  const params = message.params ?? {};
+  switch (message.method) {
+    case "status":
+    case "listPanes":
+      return api.runtime();
+    case "sendText":
+      await api.sendInput({
+        paneId: String(params.paneId ?? ""),
+        text: String(params.text ?? ""),
+      });
+      return { ok: true };
+    case "sendKeys":
+      await api.sendInput({
+        paneId: String(params.paneId ?? ""),
+        keys: Array.isArray(params.keys) ? params.keys.map(String) : [],
+      });
+      return { ok: true };
+    case "readPane":
+      return api.readScreen(String(params.paneId ?? ""), String(params.source ?? "visible"));
+    default:
+      throw new Error(`Unknown bridge method: ${message.method}`);
+  }
+}
