@@ -659,15 +659,21 @@ body.panel-dragging, body.panel-dragging * { cursor: grabbing !important; user-s
   gap: 8px;
 }
 .panel.is-plain { position: relative; }
-.plain-gear {
+.plain-actions {
   position: absolute;
   z-index: 3;
   top: 6px;
   right: 6px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.plain-actions .tab-gear-button,
+.plain-actions .panel-close {
   background: var(--bg-panel);
   border-radius: 4px;
 }
-.panel.is-plain .side-heading { padding-right: 32px; }
+.panel.is-plain .side-heading { padding-right: 62px; }
 
 .file-text {
   margin: 0;
@@ -689,12 +695,21 @@ body.panel-dragging, body.panel-dragging * { cursor: grabbing !important; user-s
 .side-heading {
   display: flex;
   justify-content: space-between;
-  align-items: baseline;
+  align-items: center;
   padding: 10px 12px 4px;
   color: var(--muted);
   font-size: 13px;
 }
-.side-mode { color: #6d7582; font-size: 12px; }
+.side-mode {
+  border: 0;
+  background: transparent;
+  padding: 0;
+  color: #6d7582;
+  font-size: 12px;
+  line-height: inherit;
+  cursor: pointer;
+}
+.side-mode:hover { color: var(--text); }
 .side-list { list-style: none; margin: 0; padding: 0 6px; overflow: auto; flex: 1; min-height: 0; }
 .side-actions {
   display: flex;
@@ -1138,6 +1153,11 @@ body.panel-dragging, body.panel-dragging * { cursor: grabbing !important; user-s
   display: inline-flex;
   align-items: center;
   justify-content: center;
+}
+.tab-gear-button svg {
+  display: block;
+  width: 16px;
+  height: 16px;
 }
 
 .tab-edge-menu {

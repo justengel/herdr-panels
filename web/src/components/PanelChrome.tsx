@@ -134,17 +134,31 @@ export function PanelChrome({
       onClick={onClick}
     >
       {plain ? (
-        <button
-          ref={gearRef}
-          type="button"
-          className="panel-gear tab-gear-button plain-gear"
-          aria-label="Panel settings"
-          aria-expanded={menu !== null}
-          title="Panel settings"
-          onClick={openGear}
-        >
-          <GearIcon />
-        </button>
+        <div className="plain-actions">
+          <button
+            ref={gearRef}
+            type="button"
+            className="panel-gear tab-gear-button"
+            aria-label="Panel settings"
+            aria-expanded={menu !== null}
+            title="Panel settings"
+            onClick={openGear}
+          >
+            <GearIcon />
+          </button>
+          <button
+            type="button"
+            className="panel-close"
+            aria-label={`Close ${title}`}
+            title="Close panel"
+            onClick={(event) => {
+              event.stopPropagation();
+              if (panelId) panelActions.close(panelId);
+            }}
+          >
+            ×
+          </button>
+        </div>
       ) : (
       <header
         className="panel-header"
@@ -296,10 +310,11 @@ export function PanelChrome({
 
 function GearIcon() {
   return (
-    <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+    <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
       <path
         fill="currentColor"
-        d="M6.7 1.2h2.6l.35 1.55c.36.1.7.26 1.01.46l1.45-.62 1.3 2.25-1.1 1.1c.08.34.13.7.13 1.06s-.05.72-.13 1.06l1.1 1.1-1.3 2.25-1.45-.62c-.31.2-.65.36-1.01.46l-.35 1.55H6.7l-.35-1.55a4.4 4.4 0 0 1-1.01-.46l-1.45.62-1.3-2.25 1.1-1.1A4.6 4.6 0 0 1 3.56 8c0-.36.05-.72.13-1.06l-1.1-1.1 1.3-2.25 1.45.62c.31-.2.65-.36 1.01-.46L6.7 1.2zM8 6.15a1.85 1.85 0 1 0 0 3.7 1.85 1.85 0 0 0 0-3.7z"
+        fillRule="evenodd"
+        d="M6.61 3.35 6.99.87 9.01.87 9.39 3.35 10.3 3.73 12.32 2.24 13.76 3.68 12.27 5.7 12.65 6.61 15.13 6.99 15.13 9.01 12.65 9.39 12.27 10.3 13.76 12.32 12.32 13.76 10.3 12.27 9.39 12.65 9.01 15.13 6.99 15.13 6.61 12.65 5.7 12.27 3.68 13.76 2.24 12.32 3.73 10.3 3.35 9.39.87 9.01.87 6.99 3.35 6.61 3.73 5.7 2.24 3.68 3.68 2.24 5.7 3.73ZM8 5.65a2.35 2.35 0 1 1 0 4.7 2.35 2.35 0 1 1 0-4.7Z"
       />
     </svg>
   );

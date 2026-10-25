@@ -23,6 +23,7 @@ interface HostValue {
   applyThemeNow: (name: string) => Promise<void>;
   saveSettings: (settings: Record<string, string | number | boolean>) => Promise<void>;
   saveKeys: (keys: Record<string, string>) => Promise<void>;
+  setAgentOrder: (sort: "spaces" | "priority") => Promise<void>;
 }
 
 const HostContext = createContext<HostValue | null>(null);
@@ -246,6 +247,17 @@ export function HostProvider({
     noticeRef.current("Applied");
   }
 
+  async function setAgentOrder(sort: "spaces" | "priority") {
+    try {
+      const doc = await api.saveHerdrConfig({ settings: { agent_panel_sort: sort } });
+      setConfig(doc);
+      applyTheme(doc.theme);
+    } catch (err) {
+      noticeRef.current(err instanceof Error ? err.message : String(err));
+      throw err;
+    }
+  }
+
   async function saveKeys(keys: Record<string, string>) {
     const doc = await api.saveHerdrConfig({ keys });
     setConfig(doc);
@@ -285,6 +297,7 @@ export function HostProvider({
     applyThemeNow,
     saveSettings,
     saveKeys,
+    setAgentOrder,
   };
 
   return (
