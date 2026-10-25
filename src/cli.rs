@@ -11,7 +11,7 @@ use crate::server::{serve, ServerConfig};
 
 #[derive(Parser, Debug)]
 #[command(
-    name = "herdr-web-panels",
+    name = "herdr-panels",
     version,
     about = "Run the Herdr web viewer"
 )]
@@ -53,7 +53,7 @@ pub async fn execute() -> anyhow::Result<()> {
         }
         Some(other) if other.starts_with('-') => run_server(Args::parse()).await,
         None => run_server(Args::parse()).await,
-        Some(other) => anyhow::bail!("unknown command '{other}'. Run herdr-web-panels --help"),
+        Some(other) => anyhow::bail!("unknown command '{other}'. Run herdr-panels --help"),
     }
 }
 
@@ -61,7 +61,7 @@ async fn run_server(args: Args) -> anyhow::Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
             EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| EnvFilter::new("herdr_web_panels=info")),
+                .unwrap_or_else(|_| EnvFilter::new("herdr_panels=info")),
         )
         .init();
 

@@ -35,9 +35,9 @@ fn ensure_viewer() {
 }
 
 async fn start_viewer() -> Result<(), String> {
-    let config_dir = herdr_web_panels::config::prepare_config_dir(None).map_err(|err| err.to_string())?;
-    let herdr_socket = herdr_web_panels::paths::resolve_herdr_socket(None, None).map_err(|err| err.to_string())?;
-    herdr_web_panels::serve(herdr_web_panels::server::ServerConfig {
+    let config_dir = herdr_panels::config::prepare_config_dir(None).map_err(|err| err.to_string())?;
+    let herdr_socket = herdr_panels::paths::resolve_herdr_socket(None, None).map_err(|err| err.to_string())?;
+    herdr_panels::serve(herdr_panels::server::ServerConfig {
         host: std::net::IpAddr::from([127, 0, 0, 1]),
         port: 4737,
         config_dir,

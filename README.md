@@ -77,7 +77,7 @@ The Design button turns the workspace into an editor:
 <config>/plugins/<id>/index.html
 ```
 
-`plugin.json` has `id`, `title`, and `entry` (default `index.html`). Install one with `herdr-web-panels plugin install <directory>`. The page loads it at `/plugins/<id>`.
+`plugin.json` has `id`, `title`, and `entry` (default `index.html`). Install one with `herdr-panels plugin install <directory>`. The page loads it at `/plugins/<id>`.
 
 ### Agents
 
@@ -163,15 +163,15 @@ Open http://127.0.0.1:4737. `cargo run -- --open` still starts the server, so ol
 The server is the long-running viewer. Layout changes are short commands against that process:
 
 ```sh
-herdr-web-panels panel list
-herdr-web-panels panel split Notes --direction right --kind html
-herdr-web-panels panel close Board
-herdr-web-panels panel resize Notes 0.4
-herdr-web-panels panel move Notes --to Herdr --place below
-herdr-web-panels panel update Chat --title Shell --kind herdr
-herdr-web-panels panel zoom Notes
-herdr-web-panels plugin list
-herdr-web-panels plugin install <directory>
+herdr-panels panel list
+herdr-panels panel split Notes --direction right --kind html
+herdr-panels panel close Board
+herdr-panels panel resize Notes 0.4
+herdr-panels panel move Notes --to Herdr --place below
+herdr-panels panel update Chat --title Shell --kind herdr
+herdr-panels panel zoom Notes
+herdr-panels plugin list
+herdr-panels plugin install <directory>
 ```
 
 `panel` names a viewer panel. A Herdr pane stays a Herdr pane: use `herdr pane` for the daemon, and point a terminal panel at it.
@@ -179,7 +179,7 @@ herdr-web-panels plugin install <directory>
 ### Server flags
 
 ```text
-herdr-web-panels server
+herdr-panels server
 --config <dir>           Use this directory instead of the default config dir
 --herdr-session <name>   Attach to a named Herdr session
 --herdr-socket <path>    Attach to a specific API socket
@@ -190,8 +190,8 @@ herdr-web-panels server
 
 Default config directory:
 
-- Windows: `%APPDATA%\herdr-web-panels`
-- macOS and Linux: `$XDG_CONFIG_HOME/herdr-web-panels` or `~/.config/herdr-web-panels`
+- Windows: `%APPDATA%\herdr-panels`
+- macOS and Linux: `$XDG_CONFIG_HOME/herdr-panels` or `~/.config/herdr-panels`
 
 The first launch copies `examples/` into that directory when it has no layouts. Herdr's own socket is discovered from `HERDR_SOCKET_PATH`, then `HERDR_SESSION` / `--herdr-session`, then the default session socket printed by `herdr status`.
 

@@ -1,12 +1,12 @@
 ---
 name: herdr-panels
 description: >-
-  Create, resize, move, rename, and change the contents of Herdr web panels
+  Create, resize, move, rename, and change the contents of Herdr panels
   over the local agent API. Use when an agent is asked to work with
-  herdr-web-panels, panels, the desk layout, or the local viewer.
+  herdr-panels, herdr-web-panels, panels, the desk layout, or the local viewer.
 ---
 
-# Herdr web panels
+# Herdr panels
 
 These instructions are for any agent on any operating system. Paths in the API are URL paths, panel ids, or paths the user supplies. Nothing here is specific to one machine.
 
@@ -48,7 +48,7 @@ Read the workspace before changing it: `GET /api/agent/workspace`. Each panel ha
 - `{"type":"markdown","path":"notes/welcome.md"}` local Markdown. The address bar shows the file.
 - `{"type":"iframe","url":"http://127.0.0.1:8080/","proxy":false}` browser address. The proxy accepts only loopback URLs. The same address bar can point at a URL or an HTML file.
 - `{"type":"html","path":"panels/session-board.html"}` or `{"type":"html","inline":"<p>Hi</p>"}` a local HTML file shown in the browser panel.
-- `{"type":"plugin","plugin":"my-plugin"}` an installed view. Each plugin is a directory named for its id, with `plugin.json` (`id`, `title`, and optional `entry`). `herdr-web-panels plugin install <directory>` copies one in. Installed plugins are listed in the panel menu under their own divider.
+- `{"type":"plugin","plugin":"my-plugin"}` an installed view. Each plugin is a directory named for its id, with `plugin.json` (`id`, `title`, and optional `entry`). `herdr-panels plugin install <directory>` copies one in. Installed plugins are listed in the panel menu under their own divider.
 - `{"type":"explorer","path":""}` a file explorer. Use an absolute directory path, or an empty path to list the open workspace folders. Clicking a file calls `open`.
 - `{"type":"file","path":"src/main.rs"}` plain text. Prefer `open` instead of building this by hand.
 - `{"type":"chat","paneId":null}` an older local transcript. Run an agent in a Herdr pane instead.
@@ -59,18 +59,18 @@ A panel can also hold tabs. Adding a tab wraps the current panel: the first tab 
 
 ## Commands
 
-`herdr-web-panels server` is the viewer. These talk to the viewer it recorded in `server.json`:
+`herdr-panels server` is the viewer. These talk to the viewer it recorded in `server.json`:
 
-- `herdr-web-panels panel list`
-- `herdr-web-panels panel split <from> --direction right|down [--kind herdr|markdown|html|iframe|plugin]`
-- `herdr-web-panels panel close <panel>`
-- `herdr-web-panels panel resize <panel> <ratio>`
-- `herdr-web-panels panel move <panel> --to <panel> [--place swap|right|below]`
-- `herdr-web-panels panel update <panel> [--title <name>] [--kind herdr|markdown|html|iframe|plugin]`
-- `herdr-web-panels panel zoom [panel]`
-- `herdr-web-panels panel open <file-or-url> [--panel <name>] [--from <name>] [--direction right|down] [--title <name>]`
-- `herdr-web-panels plugin list`
-- `herdr-web-panels plugin install <directory>`
+- `herdr-panels panel list`
+- `herdr-panels panel split <from> --direction right|down [--kind herdr|markdown|html|iframe|plugin]`
+- `herdr-panels panel close <panel>`
+- `herdr-panels panel resize <panel> <ratio>`
+- `herdr-panels panel move <panel> --to <panel> [--place swap|right|below]`
+- `herdr-panels panel update <panel> [--title <name>] [--kind herdr|markdown|html|iframe|plugin]`
+- `herdr-panels panel zoom [panel]`
+- `herdr-panels panel open <file-or-url> [--panel <name>] [--from <name>] [--direction right|down] [--title <name>]`
+- `herdr-panels plugin list`
+- `herdr-panels plugin install <directory>`
 
 Pass `--url http://127.0.0.1:4737` when the viewer is not on the recorded address. Herdr pane commands stay on the `herdr` binary.
 

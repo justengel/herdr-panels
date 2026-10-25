@@ -138,20 +138,31 @@ pub fn herdr_config_dir() -> anyhow::Result<PathBuf> {
 }
 
 pub fn app_config_dir() -> anyhow::Result<PathBuf> {
+    let base = config_home()?;
+    let current = base.join("herdr-panels");
+    let earlier = base.join("herdr-web-panels");
+    if current.exists() || !earlier.exists() {
+        Ok(current)
+    } else {
+        Ok(earlier)
+    }
+}
+
+fn config_home() -> anyhow::Result<PathBuf> {
     #[cfg(windows)]
     {
         let appdata = std::env::var_os("APPDATA").context("APPDATA is not set")?;
-        Ok(PathBuf::from(appdata).join("herdr-web-panels"))
+        Ok(PathBuf::from(appdata))
     }
     #[cfg(not(windows))]
     {
         if let Some(xdg) = std::env::var_os("XDG_CONFIG_HOME") {
             if !xdg.is_empty() {
-                return Ok(PathBuf::from(xdg).join("herdr-web-panels"));
+                return Ok(PathBuf::from(xdg));
             }
         }
         let home = std::env::var_os("HOME").context("HOME is not set")?;
-        Ok(PathBuf::from(home).join(".config").join("herdr-web-panels"))
+        Ok(PathBuf::from(home).join(".config"))
     }
 }
 

@@ -1,5 +1,5 @@
 [package]
-name = "herdr-web-panels"
+name = "herdr-panels"
 version = "0.1.0"
 edition = "2021"
 description = "Local multi-panel browser client for Herdr"
@@ -7,11 +7,11 @@ license = "UNLICENSED"
 publish = false
 
 [lib]
-name = "herdr_web_panels"
+name = "herdr_panels"
 path = "src/lib.rs"
 
 [[bin]]
-name = "herdr-web-panels"
+name = "herdr-panels"
 path = "src/main.rs"
 
 [dependencies]

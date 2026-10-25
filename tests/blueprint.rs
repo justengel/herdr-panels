@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use axum::http::{header, HeaderValue, StatusCode};
 use axum::response::IntoResponse;
 use axum::{routing::get, Router};
-use herdr_web_panels::build_app;
+use herdr_panels::build_app;
 use serde_json::{json, Value};
 use tokio::net::TcpListener;
 
@@ -453,7 +453,7 @@ async fn the_default_herdr_session_cannot_be_closed_from_the_viewer() {
 #[test]
 fn the_default_theme_is_stored_by_leaving_its_name_unset() {
     let original = "onboarding = false\n\n[ui]\nagent_panel_sort = \"spaces\"\n";
-    let chosen = herdr_web_panels::herdr_config::assign(
+    let chosen = herdr_panels::herdr_config::assign(
         original,
         "theme",
         "name",
@@ -463,7 +463,7 @@ fn the_default_theme_is_stored_by_leaving_its_name_unset() {
     assert!(chosen.contains("name = \"tokyo-night\""));
     assert!(chosen.contains("agent_panel_sort = \"spaces\""));
 
-    let restored = herdr_web_panels::herdr_config::assign(&chosen, "theme", "name", None);
+    let restored = herdr_panels::herdr_config::assign(&chosen, "theme", "name", None);
     assert!(!restored.contains("[theme]"));
     assert!(!restored.contains("tokyo-night"));
     assert!(restored.contains("agent_panel_sort = \"spaces\""));

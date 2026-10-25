@@ -8,8 +8,8 @@ Installed plugins are listed in the title-bar menu, under Agents, with a divider
 
 The viewer reads plugins from its config directory:
 
-- Windows: `%APPDATA%\herdr-web-panels\plugins`
-- macOS and Linux: `$XDG_CONFIG_HOME/herdr-web-panels/plugins` or `~/.config/herdr-web-panels/plugins`
+- Windows: `%APPDATA%\herdr-panels\plugins`
+- macOS and Linux: `$XDG_CONFIG_HOME/herdr-panels/plugins` or `~/.config/herdr-panels/plugins`
 
 Each plugin is one subdirectory. The directory name and the `id` in `plugin.json` must match.
 
@@ -43,10 +43,10 @@ Create a directory with `plugin.json` and the page it should show.
 Install a directory into the config folder:
 
 ```text
-herdr-web-panels plugin install <directory>
+herdr-panels plugin install <directory>
 ```
 
-Pass `--replace` to overwrite a plugin that is already installed. `herdr-web-panels plugin list` prints the ones the menu can show.
+Pass `--replace` to overwrite a plugin that is already installed. `herdr-panels plugin list` prints the ones the menu can show.
 
 An agent can turn a panel into that plugin with `{"type":"plugin","plugin":"my-plugin"}`.
 

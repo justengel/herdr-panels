@@ -9,10 +9,10 @@ use crate::plugins;
 
 #[derive(Parser, Debug)]
 #[command(
-    name = "herdr-web-panels",
+    name = "herdr-panels",
     version,
     about = "Herdr viewer with installable HTML panels",
-    long_about = "herdr-web-panels server runs the viewer.\nherdr-web-panels panel and herdr-web-panels plugin talk to that running viewer."
+    long_about = "herdr-panels server runs the viewer.\nherdr-panels panel and herdr-panels plugin talk to that running viewer."
 )]
 struct ClientCli {
     /// Viewer URL. Defaults to the address recorded by the running server.
