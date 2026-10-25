@@ -96,7 +96,10 @@ pub fn session_socket(name: &str) -> anyhow::Result<PathBuf> {
     if !valid_session_name(name) {
         bail!("invalid Herdr session name");
     }
-    let socket = herdr_config_dir()?.join("sessions").join(name).join("herdr.sock");
+    let socket = herdr_config_dir()?
+        .join("sessions")
+        .join(name)
+        .join("herdr.sock");
     if !socket.is_file() {
         bail!("Herdr session {name} is not running");
     }
@@ -412,7 +415,10 @@ mod tests {
         std::fs::create_dir_all(&notes).unwrap();
         std::fs::write(notes.join("welcome.md"), "hi").unwrap();
         let found = resolve_content(&root, &[], "notes/welcome.md").unwrap();
-        assert_eq!(found.file_name().and_then(|name| name.to_str()), Some("welcome.md"));
+        assert_eq!(
+            found.file_name().and_then(|name| name.to_str()),
+            Some("welcome.md")
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 

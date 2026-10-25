@@ -28,16 +28,16 @@ pub async fn handle(
     }
     let roots = crate::server::allowed_roots(&state).await;
     let path = match crate::paths::resolve_content(&state.config_dir, &roots, &requested) {
-            Ok(path) => path,
-            Err(err) => {
-                let status = if err.contains("not found") {
-                    StatusCode::NOT_FOUND
-                } else {
-                    StatusCode::BAD_REQUEST
-                };
-                return (status, err).into_response();
-            }
-        };
+        Ok(path) => path,
+        Err(err) => {
+            let status = if err.contains("not found") {
+                StatusCode::NOT_FOUND
+            } else {
+                StatusCode::BAD_REQUEST
+            };
+            return (status, err).into_response();
+        }
+    };
     let bytes = match tokio::fs::read(&path).await {
         Ok(bytes) if bytes.len() > MAX_FILE => {
             return (StatusCode::PAYLOAD_TOO_LARGE, "file is larger than 8 MB").into_response();

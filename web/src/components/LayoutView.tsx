@@ -358,6 +358,7 @@ function Surface({
             path={panel.path}
             inline={panel.inline}
             title={title || "Browser"}
+            control={panel.control}
             design={design.enabled}
             onPick={({ tag, text }) => pick(tag, text)}
           />
@@ -375,7 +376,12 @@ function Surface({
           />
         ) : null}
         {panel.type === "plugin" ? (
-          <iframe className="frame" title={title || panel.plugin} src={`/plugins/${encodeURIComponent(panel.plugin)}`} />
+          <iframe
+            className="frame"
+            title={title || panel.plugin}
+            sandbox="allow-scripts allow-forms allow-popups"
+            src={`/plugins/${encodeURIComponent(panel.plugin)}`}
+          />
         ) : null}
         {design.enabled && panel.type === "iframe" ? (
           <button type="button" className="design-shield" onClick={() => design.selectPanel(id)} />

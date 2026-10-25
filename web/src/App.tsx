@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { api } from "./api";
+import { api, wsUrl } from "./api";
 import { DesignProvider } from "./design";
 import { highlight, inspectPanel } from "./inspect";
 import {
@@ -142,8 +142,7 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    const proto = window.location.protocol === "https:" ? "wss" : "ws";
-    const socket = new WebSocket(`${proto}://${window.location.host}/ws/agent`);
+    const socket = new WebSocket(wsUrl("/ws/agent"));
     socket.onmessage = (event) => {
       let msg: {
         type?: string;

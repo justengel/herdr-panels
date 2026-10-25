@@ -1,96 +1,161 @@
 ---
 name: herdr-panels
 description: >-
-  Create, resize, move, rename, and change the contents of Herdr panels
-  over the local agent API. Use when an agent is asked to work with
-  herdr-panels, herdr-web-panels, panels, the desk layout, or the local viewer.
+  Open a URL, note, HTML page, or plugin on the Herdr Panels desk and
+  arrange that layout. Resize, move, rename, and change panels, and
+  create or install view plugins. Use when an agent is asked to work
+  with herdr-panels, herdr-web-panels, panels, plugins, a chart or page
+  on the desk, the desk layout, or the local viewer.
 ---
 
 # Herdr panels
 
-These instructions are for any agent on any operating system. Paths in the API are URL paths, panel ids, or paths the user supplies. Nothing here is specific to one machine.
+Prefer `herdr-panels panel` and `herdr-panels plugin`. Those commands attach the viewer token. Use the HTTP API only when a command has no flag for the change. Do not print the token. This skill does not start Herdr and does not speak Herdr's private protocol.
 
-The panels app is a localhost page. It usually listens at `http://127.0.0.1:4737`. If it was started elsewhere, use the address in `server.json` inside the viewer config directory. It attaches to a running Herdr daemon. This skill drives the open workspace. It does not start Herdr and it does not speak Herdr's private protocol.
+The viewer is usually `http://127.0.0.1:4737`. If it was started elsewhere, use the address in `server.json` in the viewer config directory. Run `herdr-panels panel list` before changing the desk. Address a panel by its unique title or its id. Names are compared without case. If two panels share a name, the call fails with `more than one panel has that name`; rename one first.
 
-Address a panel by its unique name (the title) or by its id. Names are compared without case. If two panels share a name, the call fails with `more than one panel has that name`; rename one first. `*` is only valid for `say.to` and means every chat.
+## Arrange the desk
 
-Send JSON in the request body. Build that body with a JSON library so quotation marks stay intact. Any HTTP client works. Python is one portable example:
+```text
+herdr-panels panel list
+herdr-panels panel open https://example.com --from Notes --direction right --title Example
+herdr-panels panel open notes/welcome.md --from Notes --direction down
+herdr-panels panel open panels/charts.html --from Notes --direction right --title Charts
+herdr-panels panel open plugin:welcome --from Notes
+herdr-panels panel move Charts --to Notes --place below
+herdr-panels panel resize Charts 0.4
+```
+
+`open` adds a panel. `--from` is the panel to split. When it is omitted, the new panel is beside the last content panel. `--direction right` places it beside that panel. `--direction down` places it below. `--panel Name` replaces that panel instead of adding one. Do not replace a terminal unless the user named that panel.
+
+What `open` creates:
+
+- An `http` or `https` URL becomes a browser panel.
+- A `.md` file becomes a note.
+- A `.html` file becomes an HTML panel. Use this for a chart or a custom page, such as `panels/charts.html`.
+- `plugin:<id>` becomes that installed plugin.
+- A directory becomes the file explorer.
+- Any other file becomes plain text.
+
+Change a panel that is already open:
+
+```text
+herdr-panels panel update Notes --kind markdown --path notes/welcome.md
+herdr-panels panel update Board --kind html --path panels/session-board.html
+herdr-panels panel update Web --kind iframe --page http://127.0.0.1:8080/
+herdr-panels panel update View --kind plugin --plugin welcome
+herdr-panels panel update Shell --title Terminal --kind herdr --pane w1:p1
+```
+
+`--kind` is `herdr`, `markdown`, `html`, `iframe`, or `plugin`. `--path` is the Markdown or HTML file. `--page` is the browser URL. `--plugin` is the plugin id. `--pane` is the Herdr pane id.
+
+`herdr-panels panel split Notes --direction right --kind html --path panels/charts.html --title Charts` adds a neighbor. `--herdr` is only for a terminal that already has a pane. It also splits that Herdr pane. A failed Herdr split does not save.
+
+`herdr-panels panel close Board` removes a panel. The last panel stays. `herdr-panels panel zoom Charts` fills the page with that panel. `herdr-panels panel zoom` restores the layout. `resize` sets that panel's share of the nearest divider. The server clamps it to 0.12–0.88. `move --place` is `swap`, `right`, or `below`.
+
+Pass `--url http://127.0.0.1:4737` when the viewer is not the one recorded in `server.json`. Herdr pane commands stay on the `herdr` binary. Do not rotate or set the viewer token unless the user asks.
+
+## When the command is not enough
+
+A direct call sends `Authorization: Bearer` and a JSON body built with a JSON library. Read `HERDR_PANELS_TOKEN` when it is set. Otherwise read `auth-token` next to `server.json`. The config directory is `HERDR_PANELS_CONFIG` when that is set. Otherwise it is `%APPDATA%\herdr-panels` on Windows, and `$XDG_CONFIG_HOME/herdr-panels` or `~/.config/herdr-panels` elsewhere. When the new directory is missing and `herdr-web-panels` exists beside it, use the older directory.
 
 ```python
-import json, urllib.request
+import json, os, pathlib, urllib.request
+
+def config_dir():
+    override = os.environ.get("HERDR_PANELS_CONFIG", "").strip()
+    if override:
+        return pathlib.Path(override)
+    if os.name == "nt":
+        base = pathlib.Path(os.environ["APPDATA"])
+    else:
+        xdg = os.environ.get("XDG_CONFIG_HOME", "").strip()
+        base = pathlib.Path(xdg) if xdg else pathlib.Path.home() / ".config"
+    current = base / "herdr-panels"
+    earlier = base / "herdr-web-panels"
+    if current.exists() or not earlier.exists():
+        return current
+    return earlier
+
+def viewer_token():
+    override = os.environ.get("HERDR_PANELS_TOKEN", "").strip()
+    if override:
+        return override
+    return (config_dir() / "auth-token").read_text(encoding="utf-8").strip()
+
 def call(method, path, body=None, base="http://127.0.0.1:4737"):
     data = None if body is None else json.dumps(body).encode()
     req = urllib.request.Request(
         base + path, data=data, method=method,
-        headers={"Content-Type": "application/json"},
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": "Bearer " + viewer_token(),
+        },
     )
     with urllib.request.urlopen(req) as res:
         return json.load(res)
 ```
 
-Read the workspace before changing it: `GET /api/agent/workspace`. Each panel has `id`, `title`, `type`, and `summary`.
+`GET /api/agent/workspace` returns each panel's `id`, `title`, `type`, and `summary`. `*` is only valid for `say.to` and means every chat.
 
-## Layout
-
-- `POST /api/agent/split` `{"panelId","direction":"right"|"down","title?","panel?","herdr?":true}` creates a neighbor. `herdr: true` also calls Herdr `pane.split` and is only valid on a terminal that already has a pane. A failed Herdr split does not save.
-- `POST /api/agent/close` `{"panelId"}` removes a panel. The last panel stays open.
-- `POST /api/agent/resize` `{"panelId","ratio"}` sets that panel's share of the nearest divider. The server clamps `ratio` to 0.12–0.88.
-- `POST /api/agent/move` `{"panelId","target","place":"swap"|"right"|"below"}`. `swap` is the default. `right` and `below` place `panelId` on that side of `target`. A panel cannot move beside itself.
-- `POST /api/agent/open` `{"target","panelId?","from?","direction?":"right"|"down","reuse?":false,"title?"}` opens a file, a directory, or an `http`/`https` URL. `target` is a content path, an absolute path inside an open workspace, or a URL. A Markdown file opens as a note with the path in its address bar. An HTML file opens in the browser panel. Any other file is plain text, a directory is the file explorer, and a URL is a browser panel. Pass `panelId` (name or id) to replace that panel. Omit it to add a panel beside `from`, or beside the last content panel when `from` is omitted. `direction: "right"` is a horizontal split and `"down"` is a vertical split. `reuse: true` updates a note, file, HTML, or browser panel already on that side instead of adding another one. Do not replace a terminal unless the user named that panel.
-- `POST /api/agent/zoom` `{"panelId":null}` fills the page with one panel. `null` restores the layout.
-- `POST /api/agent/update` `{"panelId","title?","panel?"}` renames a panel, replaces what it shows, or both. Keep names unique.
-
-## What a panel can show
+- `POST /api/agent/open` `{"target","panelId?","from?","direction?":"right"|"down","reuse?":false,"title?"}`. `reuse: true` updates a note, file, HTML, or browser panel already on that side instead of adding another one.
+- `POST /api/agent/update` `{"panelId","title?","panel?"}` when the new panel needs a field the command cannot set.
+- `POST /api/agent/split` `{"panelId","direction":"right"|"down","title?","panel?","herdr?":true}`
+- `POST /api/agent/close` `{"panelId"}`
+- `POST /api/agent/resize` `{"panelId","ratio"}`
+- `POST /api/agent/move` `{"panelId","target","place":"swap"|"right"|"below"}`
+- `POST /api/agent/zoom` `{"panelId":null}` fills the page. `null` restores the layout.
 
 `panel` on split or update is one of:
 
-- `{"type":"herdr","paneId":null}` terminal. Set `paneId` to a pane id from the current Herdr session when one is known. The panel mirrors the focused Herdr space: its tabs and the panes inside the focused tab. `paneId` remembers a pane; the page follows the space the viewer is attached to.
-- `{"type":"markdown","path":"notes/welcome.md"}` local Markdown. The address bar shows the file.
-- `{"type":"iframe","url":"http://127.0.0.1:8080/","proxy":false}` browser address. The proxy accepts only loopback URLs. The same address bar can point at a URL or an HTML file.
-- `{"type":"html","path":"panels/session-board.html"}` or `{"type":"html","inline":"<p>Hi</p>"}` a local HTML file shown in the browser panel.
-- `{"type":"plugin","plugin":"my-plugin"}` an installed view. Each plugin is a directory named for its id, with `plugin.json` (`id`, `title`, and optional `entry`). `herdr-panels plugin install <directory>` copies one in. Installed plugins are listed in the panel menu under their own divider.
-- `{"type":"explorer","path":""}` a file explorer. Use an absolute directory path, or an empty path to list the open workspace folders. Clicking a file calls `open`.
-- `{"type":"file","path":"src/main.rs"}` plain text. Prefer `open` instead of building this by hand.
+- `{"type":"herdr","paneId":null}` terminal. Set `paneId` when a pane id is known.
+- `{"type":"markdown","path":"notes/welcome.md"}`
+- `{"type":"iframe","url":"http://127.0.0.1:8080/","proxy":false}` browser. Set `proxy` to true only for a loopback URL that refuses to be framed. The command always leaves `proxy` false.
+- `{"type":"html","path":"panels/session-board.html"}` or `{"type":"html","inline":"<p>Hi</p>"}`. Add `"control": true` only when that panel should type into a Herdr pane. The command cannot set `control`.
+- `{"type":"plugin","plugin":"my-plugin"}`
+- `{"type":"explorer","path":""}` file explorer. An empty path lists the open workspace folders. This is not the `files` spaces list or the `agents` list.
+- `{"type":"file","path":"src/main.rs"}` plain text. Prefer `open`.
 - `{"type":"chat","paneId":null}` an older local transcript. Run an agent in a Herdr pane instead.
 
-The same panel can change type. Updating a note panel with a `herdr` panel turns it into a shell and keeps its name.
+## Create a plugin
 
-A panel can also hold tabs. Adding a tab wraps the current panel: the first tab keeps what it showed, and a blank tab is added. Closing tabs until one remains turns the group back into that remaining panel. Tab groups cannot be nested.
+Copy `examples/plugins/welcome` and change it. A plugin is that directory. Do not add it to the viewer source. The same steps are in `examples/plugins/README.md`.
 
-## Commands
+```json
+{
+  "id": "my-plugin",
+  "title": "My plugin",
+  "entry": "index.html"
+}
+```
 
-`herdr-panels server` is the viewer. These talk to the viewer it recorded in `server.json`:
+The directory name and `id` must match. `id` is 1 to 64 characters of lowercase letters, digits, and hyphens, and it cannot start or end with a hyphen. `title` is the menu label, 1 to 80 characters. `entry` defaults to `index.html` and must be a file inside the directory. CSS, scripts, and images next to the page are served with it.
 
-- `herdr-panels panel list`
-- `herdr-panels panel split <from> --direction right|down [--kind herdr|markdown|html|iframe|plugin]`
-- `herdr-panels panel close <panel>`
-- `herdr-panels panel resize <panel> <ratio>`
-- `herdr-panels panel move <panel> --to <panel> [--place swap|right|below]`
-- `herdr-panels panel update <panel> [--title <name>] [--kind herdr|markdown|html|iframe|plugin]`
-- `herdr-panels panel zoom [panel]`
-- `herdr-panels panel open <file-or-url> [--panel <name>] [--from <name>] [--direction right|down] [--title <name>]`
-- `herdr-panels plugin list`
-- `herdr-panels plugin install <directory>`
+```text
+herdr-panels plugin install <directory>
+herdr-panels plugin list
+herdr-panels panel open plugin:my-plugin --from Notes
+```
 
-Pass `--url http://127.0.0.1:4737` when the viewer is not on the recorded address. Herdr pane commands stay on the `herdr` binary.
+Pass `--replace` to overwrite an installed plugin. The page is sandboxed. It cannot call the viewer API, and it does not get `window.herdrPanels`. That bridge belongs to panels of type `html`. A plugin can talk to another localhost server that it runs itself.
 
 ## Sessions
 
-A session is one running Herdr. `default` is the Herdr client already open on this machine. A named session is a separate Herdr, with its own spaces, tabs, and panes. The page shows one session at a time.
+A session is one running Herdr. `default` is the Herdr client already open on this machine. The page shows one session at a time, so changing it changes the session for every open tab.
 
 - `GET /api/sessions` lists running sessions.
-- `PUT /api/sessions` `{"name"}` attaches the page to a session that is already running.
+- `PUT /api/sessions` `{"name"}` attaches to a session that is already running.
 - `POST /api/sessions` `{"name"}` starts a named session and attaches to it.
-- `POST /api/sessions/rename` `{"name","to"}` renames a named session. That restarts it. `default` cannot be renamed.
-- `POST /api/sessions/close` `{"name"}` stops a named session. `default` cannot be closed from the page, because that is the open Herdr client. If the page was attached to the session it closed, it returns to `default`.
+- `POST /api/sessions/rename` `{"name","to"}` renames a named session and restarts it. `default` cannot be renamed.
+- `POST /api/sessions/close` `{"name"}` stops a named session. `default` cannot be closed from the page.
 
 ## Contents
 
-- `GET /api/agent/panels/{name}?selector=h2&text=workspace` reads text, blocks, and, when the page is open, the live DOM.
+- `GET /api/agent/panels/{name}?selector=h2&text=workspace` reads text and, when the page is open, the live DOM.
 - `POST /api/agent/panels/{name}/select` `{"selector":"h2","text":"workspace"}` outlines a match in the open page.
 - `POST /api/agent/panels/{name}/write` `{"text":"echo hi","keys":["enter"]}` types into a terminal panel.
 - `POST /api/agent/say` `{"to":"Chat","from":"planner","text":"look at the note"}` appends to that chat. `to` may be `*`.
 
 Do not write `exit` into a pane the user is using. That ends the Herdr pane and closes the panel.
 
-`GET /api/agent` lists these routes. A connected browser receives the saved layout over `/ws/agent`; you do not have to edit the page yourself.
+`GET /api/agent` lists these routes. A connected browser receives the saved layout over `/ws/agent`.

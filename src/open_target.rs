@@ -16,7 +16,10 @@ pub enum OpenKind {
     Plugin { id: String },
 }
 
-pub fn classify_target(target: &str, stat: impl Fn(&str) -> Option<FsKind>) -> Result<OpenKind, String> {
+pub fn classify_target(
+    target: &str,
+    stat: impl Fn(&str) -> Option<FsKind>,
+) -> Result<OpenKind, String> {
     let target = target.trim();
     if target.is_empty() {
         return Err("target is empty".into());
@@ -46,10 +49,15 @@ pub fn classify_target(target: &str, stat: impl Fn(&str) -> Option<FsKind>) -> R
     }
 }
 
-pub fn address_target(target: &str, stat: impl Fn(&str) -> Option<FsKind>) -> Result<OpenKind, String> {
+pub fn address_target(
+    target: &str,
+    stat: impl Fn(&str) -> Option<FsKind>,
+) -> Result<OpenKind, String> {
     let kind = classify_target(target, &stat)?;
     match &kind {
-        OpenKind::Markdown { path } | OpenKind::Html { path } | OpenKind::Text { path } if stat(path).is_none() => {
+        OpenKind::Markdown { path } | OpenKind::Html { path } | OpenKind::Text { path }
+            if stat(path).is_none() =>
+        {
             Err(format!("file was not found: {path}"))
         }
         _ => Ok(kind),
@@ -79,9 +87,10 @@ pub fn open_title(kind: &OpenKind) -> String {
     match kind {
         OpenKind::Browser { url, .. } => browser_title(url),
         OpenKind::Plugin { id } => id.clone(),
-        OpenKind::Markdown { path } | OpenKind::Html { path } | OpenKind::Text { path } | OpenKind::Explorer { path } => {
-            file_label(path)
-        }
+        OpenKind::Markdown { path }
+        | OpenKind::Html { path }
+        | OpenKind::Text { path }
+        | OpenKind::Explorer { path } => file_label(path),
     }
 }
 
@@ -120,7 +129,11 @@ fn plugin_target(target: &str) -> Result<Option<String>, String> {
 }
 
 fn web_address(target: &str) -> Option<String> {
-    if target.contains('\\') || target.contains(' ') || target.contains('#') || is_windows_drive(target) {
+    if target.contains('\\')
+        || target.contains(' ')
+        || target.contains('#')
+        || is_windows_drive(target)
+    {
         return None;
     }
     let (without_query, query) = match target.split_once('?') {
@@ -200,7 +213,9 @@ fn is_web_host(host: &str) -> bool {
         !label.is_empty()
             && !label.starts_with('-')
             && !label.ends_with('-')
-            && label.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '-')
+            && label
+                .chars()
+                .all(|ch| ch.is_ascii_alphanumeric() || ch == '-')
     })
 }
 
@@ -286,7 +301,10 @@ fn has_scheme(target: &str) -> bool {
 
 fn is_drive_path(scheme: &str, rest: &str) -> bool {
     scheme.len() == 1
-        && scheme.chars().next().is_some_and(|ch| ch.is_ascii_alphabetic())
+        && scheme
+            .chars()
+            .next()
+            .is_some_and(|ch| ch.is_ascii_alphabetic())
         && (rest.starts_with('/') || rest.starts_with('\\'))
 }
 

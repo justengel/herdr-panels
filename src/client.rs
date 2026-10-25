@@ -12,7 +12,7 @@ use crate::plugins;
     name = "herdr-panels",
     version,
     about = "Herdr viewer with installable HTML panels",
-    long_about = "herdr-panels server runs the viewer.\nherdr-panels panel and herdr-panels plugin talk to that running viewer."
+    long_about = "herdr-panels starts the viewer and opens the desktop window when that program is installed, or a browser tab otherwise.\nherdr-panels server runs the viewer without opening a window.\nherdr-panels desktop opens the desktop window.\nherdr-panels panel, plugin, and token talk to that viewer or its config."
 )]
 struct ClientCli {
     /// Viewer URL. Defaults to the address recorded by the running server.
@@ -40,6 +40,23 @@ enum ClientCommand {
     Plugin {
         #[command(subcommand)]
         command: PluginCommand,
+    },
+    /// Replace the viewer token stored beside server.json
+    Token {
+        #[command(subcommand)]
+        command: TokenCommand,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum TokenCommand {
+    /// Generate a new viewer token. Restart the viewer afterward
+    Rotate,
+    /// Save a token you created. Restart the viewer afterward
+    Set {
+        /// 32 to 256 characters: letters, digits, and - . _ ~ + / =
+        #[arg(allow_hyphen_values = true)]
+        value: String,
     },
 }
 
@@ -142,7 +159,8 @@ pub async fn execute() -> anyhow::Result<()> {
         ClientCommand::Status => status(&config_dir, cli.url).await,
         ClientCommand::Panel { command } => {
             let base = server_url(&config_dir, cli.url)?;
-            panel_command(&base, command).await
+            let token = crate::auth::session_token(&config_dir)?;
+            panel_command(&base, &token, command).await
         }
         ClientCommand::Plugin { command } => match command {
             PluginCommand::List => {
@@ -157,12 +175,36 @@ pub async fn execute() -> anyhow::Result<()> {
                 Ok(())
             }
         },
+        ClientCommand::Token { command } => token_command(&config_dir, command),
     }
+}
+
+fn token_command(config_dir: &std::path::Path, command: TokenCommand) -> anyhow::Result<()> {
+    match command {
+        TokenCommand::Rotate => {
+            crate::auth::rotate(config_dir)?;
+            println!("Rotated the viewer token. Restart the viewer so it picks up the new value, then reload the page.");
+        }
+        TokenCommand::Set { value } => {
+            crate::auth::set_token(config_dir, &value)?;
+            println!("Saved the viewer token. Restart the viewer so it picks up the new value, then reload the page.");
+        }
+    }
+    if std::env::var(crate::auth::ENV)
+        .ok()
+        .is_some_and(|value| !value.trim().is_empty())
+    {
+        println!(
+            "HERDR_PANELS_TOKEN is set, so a viewer started with that variable keeps using it until the variable is unset."
+        );
+    }
+    Ok(())
 }
 
 async fn status(config_dir: &std::path::Path, url: Option<String>) -> anyhow::Result<()> {
     let base = server_url(config_dir, url)?;
-    match call(&base, "GET", "/api/health", None).await {
+    let token = crate::auth::session_token(config_dir)?;
+    match call(&base, &token, "GET", "/api/health", None).await {
         Ok(body) => {
             println!("{base}");
             println!("{body}");
@@ -172,12 +214,17 @@ async fn status(config_dir: &std::path::Path, url: Option<String>) -> anyhow::Re
     }
 }
 
-async fn panel_command(base: &str, command: PanelCommand) -> anyhow::Result<()> {
+async fn panel_command(base: &str, token: &str, command: PanelCommand) -> anyhow::Result<()> {
     match command {
         PanelCommand::List => {
-            let body = call(base, "GET", "/api/agent/workspace", None).await?;
+            let body = call(base, token, "GET", "/api/agent/workspace", None).await?;
             let value: Value = serde_json::from_str(&body)?;
-            for panel in value.get("panels").and_then(Value::as_array).into_iter().flatten() {
+            for panel in value
+                .get("panels")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+            {
                 println!(
                     "{}\t{}\t{}\t{}",
                     panel.get("id").and_then(Value::as_str).unwrap_or(""),
@@ -210,13 +257,14 @@ async fn panel_command(base: &str, command: PanelCommand) -> anyhow::Result<()> 
             if let Some(panel) = panel_config(&kind, path, page, plugin, pane)? {
                 body["panel"] = panel;
             }
-            let response = call(base, "POST", "/api/agent/split", Some(body)).await?;
+            let response = call(base, token, "POST", "/api/agent/split", Some(body)).await?;
             println!("{response}");
             Ok(())
         }
         PanelCommand::Close { panel } => {
             let response = call(
                 base,
+                token,
                 "POST",
                 "/api/agent/close",
                 Some(json!({ "panelId": panel })),
@@ -228,6 +276,7 @@ async fn panel_command(base: &str, command: PanelCommand) -> anyhow::Result<()> 
         PanelCommand::Resize { panel, ratio } => {
             let response = call(
                 base,
+                token,
                 "POST",
                 "/api/agent/resize",
                 Some(json!({ "panelId": panel, "ratio": ratio })),
@@ -239,6 +288,7 @@ async fn panel_command(base: &str, command: PanelCommand) -> anyhow::Result<()> 
         PanelCommand::Move { panel, to, place } => {
             let response = call(
                 base,
+                token,
                 "POST",
                 "/api/agent/move",
                 Some(json!({ "panelId": panel, "target": to, "place": place })),
@@ -264,13 +314,14 @@ async fn panel_command(base: &str, command: PanelCommand) -> anyhow::Result<()> 
                 body["panel"] = panel_config(&kind, path, page, plugin, pane)?
                     .context("panel kind was empty")?;
             }
-            let response = call(base, "POST", "/api/agent/update", Some(body)).await?;
+            let response = call(base, token, "POST", "/api/agent/update", Some(body)).await?;
             println!("{response}");
             Ok(())
         }
         PanelCommand::Zoom { panel } => {
             let response = call(
                 base,
+                token,
                 "POST",
                 "/api/agent/zoom",
                 Some(json!({ "panelId": panel })),
@@ -296,7 +347,7 @@ async fn panel_command(base: &str, command: PanelCommand) -> anyhow::Result<()> 
             if let Some(title) = title {
                 body["title"] = json!(title);
             }
-            let response = call(base, "POST", "/api/agent/open", Some(body)).await?;
+            let response = call(base, token, "POST", "/api/agent/open", Some(body)).await?;
             println!("{response}");
             Ok(())
         }
@@ -312,10 +363,18 @@ fn panel_config(
 ) -> anyhow::Result<Option<Value>> {
     let panel = match kind {
         "herdr" => json!({ "type": "herdr", "paneId": pane }),
-        "markdown" => json!({ "type": "markdown", "path": path.unwrap_or_else(|| "notes/welcome.md".into()) }),
-        "html" => json!({ "type": "html", "path": path.unwrap_or_else(|| "panels/session-board.html".into()) }),
-        "iframe" => json!({ "type": "iframe", "url": page.context("--page is required for an iframe panel")?, "proxy": false }),
-        "plugin" => json!({ "type": "plugin", "plugin": plugin.context("--plugin is required for a plugin panel")? }),
+        "markdown" => {
+            json!({ "type": "markdown", "path": path.unwrap_or_else(|| "notes/welcome.md".into()) })
+        }
+        "html" => {
+            json!({ "type": "html", "path": path.unwrap_or_else(|| "panels/session-board.html".into()) })
+        }
+        "iframe" => {
+            json!({ "type": "iframe", "url": page.context("--page is required for an iframe panel")?, "proxy": false })
+        }
+        "plugin" => {
+            json!({ "type": "plugin", "plugin": plugin.context("--plugin is required for a plugin panel")? })
+        }
         "tabs" => json!({
             "type": "tabs",
             "edge": "top",
@@ -355,13 +414,21 @@ fn server_url(config_dir: &std::path::Path, explicit: Option<String>) -> anyhow:
     Ok("http://127.0.0.1:4737".into())
 }
 
-async fn call(base: &str, method: &str, path: &str, body: Option<Value>) -> anyhow::Result<String> {
+async fn call(
+    base: &str,
+    token: &str,
+    method: &str,
+    path: &str,
+    body: Option<Value>,
+) -> anyhow::Result<String> {
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(20))
         .no_proxy()
         .build()?;
     let url = format!("{base}{path}");
-    let request = client.request(method.parse().unwrap_or(reqwest::Method::GET), &url);
+    let request = client
+        .request(method.parse().unwrap_or(reqwest::Method::GET), &url)
+        .header(reqwest::header::AUTHORIZATION, format!("Bearer {token}"));
     let request = if let Some(body) = body {
         request
             .header(reqwest::header::CONTENT_TYPE, "application/json")
@@ -369,7 +436,10 @@ async fn call(base: &str, method: &str, path: &str, body: Option<Value>) -> anyh
     } else {
         request
     };
-    let response = request.send().await.with_context(|| format!("connecting to {url}"))?;
+    let response = request
+        .send()
+        .await
+        .with_context(|| format!("connecting to {url}"))?;
     let status = response.status();
     let text = response.text().await.unwrap_or_default();
     if !status.is_success() {

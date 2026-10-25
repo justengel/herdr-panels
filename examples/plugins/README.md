@@ -50,4 +50,4 @@ Pass `--replace` to overwrite a plugin that is already installed. `herdr-panels 
 
 An agent can turn a panel into that plugin with `{"type":"plugin","plugin":"my-plugin"}`.
 
-The plugin page is served by the viewer on `http://127.0.0.1:4737`. It can call that same origin, including `/api/agent`, or it can talk to another localhost server that you run yourself. A plugin does not get the `herdrPanels` bridge used by HTML panels. That bridge is for panels whose type is `html`.
+The plugin page is served by the viewer and shown in a sandbox, so it cannot call the viewer API or read the page around it. It can still talk to another localhost server that you run yourself. A plugin does not get the `herdrPanels` bridge used by HTML panels. That bridge is for panels whose type is `html`.

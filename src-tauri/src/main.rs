@@ -43,6 +43,7 @@ async fn start_viewer() -> Result<(), String> {
         config_dir,
         herdr_socket,
         open_browser: false,
+        open_desktop: false,
         url: browser::VIEWER.into(),
     })
     .await

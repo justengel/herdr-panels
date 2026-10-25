@@ -197,15 +197,26 @@ function ConfigFields({
     );
   }
   return (
-    <label>
-      HTML file
-      <input
-        aria-label="HTML path"
-        value={panel.path ?? ""}
-        placeholder="panels/session-board.html"
-        onChange={(event) => onConfig(panelId, { type: "html", path: event.target.value, inline: null })}
-      />
-    </label>
+    <>
+      <label>
+        HTML file
+        <input
+          aria-label="HTML path"
+          value={panel.path ?? ""}
+          placeholder="panels/session-board.html"
+          onChange={(event) => onConfig(panelId, { ...panel, path: event.target.value, inline: null })}
+        />
+      </label>
+      <label>
+        <input
+          type="checkbox"
+          aria-label="Allow typing into Herdr"
+          checked={Boolean(panel.control)}
+          onChange={(event) => onConfig(panelId, { ...panel, control: event.target.checked })}
+        />
+        Allow this panel to type into Herdr
+      </label>
+    </>
   );
 }
 

@@ -50,11 +50,7 @@ pub fn list_children(roots: &[PathBuf], requested: &Path) -> anyhow::Result<Vec<
         let rank = |kind: &str| if kind == "dir" { 0 } else { 1 };
         rank(&left.kind)
             .cmp(&rank(&right.kind))
-            .then_with(|| {
-                left.name
-                    .to_lowercase()
-                    .cmp(&right.name.to_lowercase())
-            })
+            .then_with(|| left.name.to_lowercase().cmp(&right.name.to_lowercase()))
     });
     Ok(entries)
 }
@@ -65,7 +61,10 @@ pub(crate) fn plain_path(path: &Path) -> String {
 }
 
 fn canonicalize_existing(path: &Path) -> anyhow::Result<PathBuf> {
-    if path.components().any(|part| matches!(part, std::path::Component::ParentDir)) {
+    if path
+        .components()
+        .any(|part| matches!(part, std::path::Component::ParentDir))
+    {
         bail!("directory path cannot contain ..");
     }
     fs::canonicalize(path).map_err(|_| anyhow::anyhow!("directory was not found"))
@@ -82,8 +81,12 @@ mod tests {
         fs::create_dir_all(&child).unwrap();
         fs::write(root.join("readme.txt"), "hi").unwrap();
         let listed = list_children(std::slice::from_ref(&root), &root).unwrap();
-        assert!(listed.iter().any(|entry| entry.name == "src" && entry.kind == "dir"));
-        assert!(listed.iter().any(|entry| entry.name == "readme.txt" && entry.kind == "file"));
+        assert!(listed
+            .iter()
+            .any(|entry| entry.name == "src" && entry.kind == "dir"));
+        assert!(listed
+            .iter()
+            .any(|entry| entry.name == "readme.txt" && entry.kind == "file"));
         assert!(list_children(std::slice::from_ref(&root), &std::env::temp_dir()).is_err());
         let _ = fs::remove_dir_all(&root);
     }

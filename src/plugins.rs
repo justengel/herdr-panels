@@ -48,7 +48,8 @@ pub fn validate_plugin_id(id: &str) -> anyhow::Result<()> {
 
 fn is_relative_file(value: &str) -> bool {
     let value = value.trim();
-    if value.is_empty() || value.contains('\0') || value.starts_with('/') || value.starts_with('\\') {
+    if value.is_empty() || value.contains('\0') || value.starts_with('/') || value.starts_with('\\')
+    {
         return false;
     }
     if let Some((prefix, _)) = value.split_once(':') {
@@ -91,7 +92,8 @@ pub fn list_plugins(config_dir: &Path) -> anyhow::Result<Vec<PluginManifest>> {
 }
 
 pub fn parse_manifest(text: &str) -> anyhow::Result<PluginManifest> {
-    let manifest: PluginManifest = serde_json::from_str(text).context("plugin.json is not valid JSON")?;
+    let manifest: PluginManifest =
+        serde_json::from_str(text).context("plugin.json is not valid JSON")?;
     validate_plugin_id(&manifest.id)?;
     if manifest.title.trim().is_empty() || manifest.title.chars().count() > 80 {
         bail!("plugin title must be 1 to 80 characters");
@@ -102,7 +104,11 @@ pub fn parse_manifest(text: &str) -> anyhow::Result<PluginManifest> {
     Ok(manifest)
 }
 
-pub fn install_plugin(config_dir: &Path, source: &Path, replace: bool) -> anyhow::Result<PluginManifest> {
+pub fn install_plugin(
+    config_dir: &Path,
+    source: &Path,
+    replace: bool,
+) -> anyhow::Result<PluginManifest> {
     let manifest_path = source.join("plugin.json");
     let text = fs::read_to_string(&manifest_path)
         .with_context(|| format!("reading {}", manifest_path.display()))?;
@@ -232,10 +238,8 @@ mod tests {
 
     #[test]
     fn manifest_requires_a_safe_id_and_entry() {
-        let manifest = parse_manifest(
-            r#"{"id":"welcome","title":"Welcome","entry":"index.html"}"#,
-        )
-        .unwrap();
+        let manifest =
+            parse_manifest(r#"{"id":"welcome","title":"Welcome","entry":"index.html"}"#).unwrap();
         assert_eq!(manifest.id, "welcome");
         assert!(parse_manifest(r#"{"id":"../x","title":"Bad"}"#).is_err());
         assert!(parse_manifest(r#"{"id":"ok","title":"Ok","entry":"../secret"}"#).is_err());

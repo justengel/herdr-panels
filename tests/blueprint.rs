@@ -7,7 +7,7 @@
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use axum::http::{header, HeaderValue, StatusCode};
+use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::IntoResponse;
 use axum::{routing::get, Router};
 use herdr_panels::build_app;
@@ -16,6 +16,7 @@ use tokio::net::TcpListener;
 
 struct Desk {
     base: String,
+    token: String,
     root: PathBuf,
     workspace: PathBuf,
     http: reqwest::Client,
@@ -85,14 +86,16 @@ async fn desk() -> Desk {
     )
     .unwrap();
 
-    let app = build_app(root.clone(), root.join("missing-herdr.sock")).unwrap();
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
+    let app = build_app(root.clone(), root.join("missing-herdr.sock"), port).unwrap();
+    let token = herdr_panels::auth::session_token(&root).unwrap();
     let server = tokio::spawn(async move {
         axum::serve(listener, app).await.unwrap();
     });
     Desk {
         base: format!("http://127.0.0.1:{port}"),
+        token,
         root,
         workspace,
         http: reqwest::Client::new(),
@@ -102,7 +105,16 @@ async fn desk() -> Desk {
 
 impl Desk {
     async fn call(&self, method: &str, path: &str, body: Option<Value>) -> (StatusCode, Value) {
-        self.call_origin(method, path, body, None).await
+        self.exchange(method, path, body, None, true, &[]).await
+    }
+
+    async fn call_anonymous(
+        &self,
+        method: &str,
+        path: &str,
+        body: Option<Value>,
+    ) -> (StatusCode, Value) {
+        self.exchange(method, path, body, None, false, &[]).await
     }
 
     async fn call_origin(
@@ -112,11 +124,29 @@ impl Desk {
         body: Option<Value>,
         origin: Option<&str>,
     ) -> (StatusCode, Value) {
+        self.exchange(method, path, body, origin, true, &[]).await
+    }
+
+    async fn exchange(
+        &self,
+        method: &str,
+        path: &str,
+        body: Option<Value>,
+        origin: Option<&str>,
+        authenticate: bool,
+        headers: &[(&str, &str)],
+    ) -> (StatusCode, Value) {
         let mut request = self
             .http
             .request(method.parse().unwrap(), format!("{}{path}", self.base));
+        if authenticate {
+            request = request.header("authorization", format!("Bearer {}", self.token));
+        }
         if let Some(origin) = origin {
             request = request.header("origin", origin);
+        }
+        for (name, value) in headers {
+            request = request.header(*name, *value);
         }
         if let Some(body) = body {
             request = request
@@ -155,10 +185,9 @@ async fn local_page(deny_frames: bool) -> (String, tokio::task::JoinHandle<()>) 
                     HeaderValue::from_static("DENY"),
                 );
             }
-            response.headers_mut().insert(
-                header::CONTENT_TYPE,
-                HeaderValue::from_static("text/plain"),
-            );
+            response
+                .headers_mut()
+                .insert(header::CONTENT_TYPE, HeaderValue::from_static("text/plain"));
             response
         }),
     );
@@ -202,13 +231,21 @@ async fn a_panel_can_be_named_and_a_shared_name_cannot_be_used() {
     assert_eq!(workspace["panels"].as_array().unwrap().len(), 2);
 
     let (status, error) = desk
-        .call("POST", "/api/agent/close", Some(json!({"panelId": "Notes"})))
+        .call(
+            "POST",
+            "/api/agent/close",
+            Some(json!({"panelId": "Notes"})),
+        )
         .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(error["error"], "more than one panel has that name");
 
     let (status, by_id) = desk
-        .call("POST", "/api/agent/close", Some(json!({"panelId": "shell"})))
+        .call(
+            "POST",
+            "/api/agent/close",
+            Some(json!({"panelId": "shell"})),
+        )
         .await;
     assert_eq!(status, StatusCode::OK, "{by_id}");
     assert_eq!(by_id["panels"].as_array().unwrap().len(), 1);
@@ -233,20 +270,35 @@ async fn splitting_adds_a_neighbor_and_the_last_panel_stays() {
     assert_eq!(status, StatusCode::OK, "{workspace}");
     let workspace = &workspace["workspace"];
     assert_eq!(workspace["panels"].as_array().unwrap().len(), 3);
-    assert_eq!(desk.panel(workspace, "Beside")["summary"], "https://example.com");
+    assert_eq!(
+        desk.panel(workspace, "Beside")["summary"],
+        "https://example.com"
+    );
 
     let (status, closed) = desk
-        .call("POST", "/api/agent/close", Some(json!({"panelId": "Beside"})))
+        .call(
+            "POST",
+            "/api/agent/close",
+            Some(json!({"panelId": "Beside"})),
+        )
         .await;
     assert_eq!(status, StatusCode::OK, "{closed}");
     assert_eq!(closed["panels"].as_array().unwrap().len(), 2);
 
     let (status, _) = desk
-        .call("POST", "/api/agent/close", Some(json!({"panelId": "Shell"})))
+        .call(
+            "POST",
+            "/api/agent/close",
+            Some(json!({"panelId": "Shell"})),
+        )
         .await;
     assert_eq!(status, StatusCode::OK);
     let (status, refused) = desk
-        .call("POST", "/api/agent/close", Some(json!({"panelId": "Notes"})))
+        .call(
+            "POST",
+            "/api/agent/close",
+            Some(json!({"panelId": "Notes"})),
+        )
         .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(refused["error"], "at least one panel stays open");
@@ -268,8 +320,14 @@ async fn a_divider_stays_inside_the_usable_range() {
     let (status, layout) = desk.call("GET", "/api/layouts/desk", None).await;
     assert_eq!(status, StatusCode::OK);
     let ratio = layout["root"]["ratio"].as_f64().unwrap();
-    assert!((0.12..=0.88).contains(&ratio), "ratio {ratio} left the usable range");
-    assert!((ratio - 0.12).abs() < 0.001, "the second panel was not clamped, ratio {ratio}");
+    assert!(
+        (0.12..=0.88).contains(&ratio),
+        "ratio {ratio} left the usable range"
+    );
+    assert!(
+        (ratio - 0.12).abs() < 0.001,
+        "the second panel was not clamped, ratio {ratio}"
+    );
 }
 
 #[tokio::test]
@@ -341,7 +399,10 @@ async fn the_address_bar_chooses_what_a_panel_shows() {
         .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert!(
-        missing_plugin["error"].as_str().unwrap().contains("not installed"),
+        missing_plugin["error"]
+            .as_str()
+            .unwrap()
+            .contains("not installed"),
         "{missing_plugin}"
     );
 
@@ -354,7 +415,10 @@ async fn the_address_bar_chooses_what_a_panel_shows() {
         .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert!(
-        missing_file["error"].as_str().unwrap().contains("was not found"),
+        missing_file["error"]
+            .as_str()
+            .unwrap()
+            .contains("was not found"),
         "{missing_file}"
     );
     let (_, workspace) = desk.call("GET", "/api/agent/workspace", None).await;
@@ -387,7 +451,11 @@ async fn ordinary_sites_are_not_proxied_and_may_refuse_to_be_framed() {
         .await;
     assert_eq!(status, StatusCode::OK, "{allowed}");
     assert_eq!(allowed["allowed"], true);
-    let port = open_url.trim_start_matches("http://").split('/').next().unwrap();
+    let port = open_url
+        .trim_start_matches("http://")
+        .split('/')
+        .next()
+        .unwrap();
     let (status, proxied) = desk
         .call("GET", &format!("/proxy/http/{port}/page"), None)
         .await;
@@ -397,7 +465,11 @@ async fn ordinary_sites_are_not_proxied_and_may_refuse_to_be_framed() {
 
     let (closed_url, closed_server) = local_page(true).await;
     let (status, framed) = desk
-        .call("GET", &format!("/api/frame?{}", query_url(&closed_url)), None)
+        .call(
+            "GET",
+            &format!("/api/frame?{}", query_url(&closed_url)),
+            None,
+        )
         .await;
     assert_eq!(status, StatusCode::OK, "{framed}");
     assert_eq!(framed["allowed"], false);
@@ -432,7 +504,10 @@ async fn a_tab_group_can_hold_several_panels_and_cannot_contain_another_group() 
     let (status, rejected) = desk.call("PUT", "/api/layouts/desk", Some(grouped)).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert!(
-        rejected["error"].as_str().unwrap().contains("cannot be nested"),
+        rejected["error"]
+            .as_str()
+            .unwrap()
+            .contains("cannot be nested"),
         "{rejected}"
     );
 }
@@ -441,7 +516,11 @@ async fn a_tab_group_can_hold_several_panels_and_cannot_contain_another_group() 
 async fn the_default_herdr_session_cannot_be_closed_from_the_viewer() {
     let desk = desk().await;
     let (status, error) = desk
-        .call("POST", "/api/sessions/close", Some(json!({"name": "default"})))
+        .call(
+            "POST",
+            "/api/sessions/close",
+            Some(json!({"name": "default"})),
+        )
         .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert!(
@@ -470,27 +549,279 @@ fn the_default_theme_is_stored_by_leaving_its_name_unset() {
 }
 
 #[tokio::test]
-async fn only_a_local_page_can_call_the_viewer() {
+async fn the_control_api_requires_the_viewer_token() {
     let desk = desk().await;
+    let token = desk.token.clone();
+    let (status, denied) = desk.call_anonymous("GET", "/api/health", None).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "{denied}");
+    assert!(
+        denied["error"].as_str().unwrap_or("").contains("token"),
+        "{denied}"
+    );
+
     let (status, _) = desk
-        .call_origin(
+        .call_anonymous("GET", &format!("/api/health?token={token}"), None)
+        .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+    let (status, _) = desk
+        .exchange(
+            "GET",
+            "/api/health",
+            None,
+            None,
+            false,
+            &[("authorization", "Bearer aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")],
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+    let (status, health) = desk.call("GET", "/api/health", None).await;
+    assert_eq!(status, StatusCode::OK, "{health}");
+    assert_eq!(health["ok"], true);
+
+    let (status, _) = desk.call_anonymous("GET", "/ws/agent", None).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    let (status, _) = desk
+        .call_anonymous("GET", &format!("/ws/agent?token={token}"), None)
+        .await;
+    assert_ne!(status, StatusCode::UNAUTHORIZED);
+    let (status, _) = desk
+        .call_anonymous(
+            "GET",
+            "/ws/agent?token=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn only_the_viewer_origin_can_call_the_api() {
+    let desk = desk().await;
+    let origin = desk.base.clone();
+    let (status, _) = desk
+        .call_origin("GET", "/api/health", None, Some("https://example.com"))
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let (status, _) = desk
+        .exchange(
             "GET",
             "/api/health",
             None,
             Some("https://example.com"),
+            false,
+            &[],
         )
         .await;
     assert_eq!(status, StatusCode::FORBIDDEN);
+    let (status, _) = desk
+        .call_origin("GET", "/api/health", None, Some("http://127.0.0.1:9"))
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
     let (status, health) = desk
-        .call_origin(
+        .call_origin("GET", "/api/health", None, Some(&origin))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{health}");
+    assert_eq!(health["ok"], true);
+    let (status, dev) = desk
+        .call_origin("GET", "/api/health", None, Some("http://127.0.0.1:5173"))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{dev}");
+    let (status, _) = desk
+        .exchange(
             "GET",
             "/api/health",
             None,
-            Some("http://127.0.0.1:4737"),
+            Some("http://127.0.0.1:5173"),
+            false,
+            &[],
         )
         .await;
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(health["ok"], true);
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    let (status, _) = desk
+        .exchange(
+            "GET",
+            "/",
+            None,
+            Some("null"),
+            false,
+            &[("sec-fetch-dest", "document")],
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn framed_files_load_without_a_token_in_the_url() {
+    let desk = desk().await;
+    let (status, page) = desk
+        .exchange(
+            "GET",
+            "/plugins/welcome/index.html",
+            None,
+            None,
+            false,
+            &[("sec-fetch-site", "same-origin")],
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    assert!(
+        page["raw"].as_str().unwrap_or("").contains("Welcome"),
+        "{page}"
+    );
+
+    let (status, script) = desk
+        .exchange(
+            "GET",
+            "/plugins/welcome/index.html",
+            None,
+            Some("null"),
+            false,
+            &[("sec-fetch-dest", "script")],
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{script}");
+
+    let (status, _) = desk
+        .exchange(
+            "GET",
+            "/plugins/welcome/index.html",
+            None,
+            None,
+            false,
+            &[("sec-fetch-site", "same-site")],
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    let (status, _) = desk
+        .exchange(
+            "GET",
+            "/plugins/welcome/index.html",
+            None,
+            Some("null"),
+            false,
+            &[("sec-fetch-dest", "document")],
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    let (status, _) = desk
+        .exchange(
+            "POST",
+            "/plugins/welcome/index.html",
+            None,
+            None,
+            false,
+            &[("sec-fetch-site", "same-origin")],
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    let (status, _) = desk
+        .exchange(
+            "GET",
+            "/api/health",
+            None,
+            Some("null"),
+            false,
+            &[("sec-fetch-dest", "empty")],
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    let (status, _) = desk
+        .exchange(
+            "GET",
+            "/api/health",
+            None,
+            None,
+            false,
+            &[("sec-fetch-site", "same-origin")],
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+    let (open_url, open_server) = local_page(false).await;
+    let port = open_url
+        .trim_start_matches("http://")
+        .split('/')
+        .next()
+        .unwrap();
+    let (status, proxied) = desk
+        .exchange(
+            "GET",
+            &format!("/proxy/http/{port}/page"),
+            None,
+            None,
+            false,
+            &[("sec-fetch-site", "same-origin")],
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{proxied}");
+    assert_eq!(proxied["raw"], "pong");
+    let (status, _) = desk
+        .exchange(
+            "GET",
+            &format!("/proxy/http/{port}/page"),
+            None,
+            None,
+            false,
+            &[("sec-fetch-site", "same-site")],
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    open_server.abort();
+}
+
+#[tokio::test]
+async fn the_proxy_does_not_forward_viewer_credentials() {
+    let desk = desk().await;
+    let upstream = Router::new().route(
+        "/page",
+        get(|headers: HeaderMap| async move {
+            let body = format!(
+                "cookie={} auth={}",
+                headers.get("cookie").is_some(),
+                headers.get(header::AUTHORIZATION).is_some()
+            );
+            let mut response = (StatusCode::OK, body).into_response();
+            response
+                .headers_mut()
+                .insert(header::SET_COOKIE, HeaderValue::from_static("upstream=1"));
+            response
+                .headers_mut()
+                .insert(header::CONTENT_TYPE, HeaderValue::from_static("text/plain"));
+            response
+        }),
+    );
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        axum::serve(listener, upstream).await.unwrap();
+    });
+    let response = desk
+        .http
+        .get(format!("{}/proxy/http/{addr}/page", desk.base))
+        .header("authorization", format!("Bearer {}", desk.token))
+        .header("cookie", "session=secret")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(response.headers().get(header::SET_COOKIE).is_none());
+    let text = response.text().await.unwrap();
+    assert_eq!(text, "cookie=false auth=false");
+    server.abort();
+}
+
+#[tokio::test]
+async fn the_shell_page_keeps_the_token_out_of_other_origins() {
+    let desk = desk().await;
+    let (status, page) = desk.call_anonymous("GET", "/", None).await;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    if herdr_panels::paths::find_dist_dir().is_some() {
+        let html = page["raw"].as_str().unwrap_or("");
+        assert!(html.contains("__HERDR_PANELS_TOKEN__"), "{html}");
+        assert!(html.contains(&desk.token));
+    }
 }
 
 fn query_url(url: &str) -> String {

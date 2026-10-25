@@ -7,6 +7,7 @@
 //! it is version-locked to one Herdr build.
 
 pub mod agent;
+pub mod auth;
 pub mod chats;
 pub mod cli;
 pub mod client;

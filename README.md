@@ -1,8 +1,42 @@
 # Herdr Panels
 
-A localhost viewer for a running [Herdr](https://herdr.dev) daemon. It shows Herdr panes beside browsers, Markdown, HTML, and installed view plugins. Layouts are JSON files. Drag a panel's grip onto the side of another panel to place it there, or onto the middle to swap. Right-click a title bar to name the panel, change what it shows, add a neighbor, or close it. The result is saved.
+A desk for a running [Herdr](https://herdr.dev) session. Live panes sit beside notes, browsers, HTML, and views you install. Drag a panel's grip onto the side of another panel to place it there, or onto the middle to swap. Right-click a title bar to name the panel or change what it shows. The layout is a JSON file, and edits are saved as you make them.
 
-This project is private.
+An agent can do that arranging for you: open a URL, a note, an HTML page, or a plugin, then place the panels. The instructions it should follow are in [skills/herdr-panels/SKILL.md](skills/herdr-panels/SKILL.md).
+
+![Herdr Panels with a note, charts, and a file list](docs/screenshot.png)
+
+## Install and run
+
+Requirements: Rust, Node.js, and a running Herdr (`herdr`, or `herdr server` for a headless session). These commands are the same on Windows, macOS, and Linux. There is no installer for each OS.
+
+```sh
+cd web
+npm install
+npm run build
+cd ..
+cargo install --path .
+```
+
+`npm install` fetches the packages for the page. `npm run build` writes that page to `web/dist`. Both the browser and the desktop window show that page, so this build is done once. `cargo install` puts `herdr-panels` on your PATH. That program is the server.
+
+```sh
+herdr-panels
+```
+
+This listens on http://127.0.0.1:4737 and opens a browser tab. Opening that address loads the page with its token, so you do not paste one. The first start copies `examples/` into the config directory and writes `auth-token` there.
+
+The desktop window is optional:
+
+```sh
+cargo install --path src-tauri
+```
+
+Run that from the repository root. After it is installed, `herdr-panels` opens the native window instead of a browser tab. `herdr-panels desktop` opens that window directly. The window uses the operating system's web view. Windows uses the WebView2 already on the machine, and macOS uses the system web view. The Linux build needs WebKitGTK. A browser tab can still open http://127.0.0.1:4737 while the window is open. They share the session and the layout.
+
+`herdr-panels server` starts the server and leaves the window and the browser closed. `herdr-panels server --open` opens a browser tab even when the desktop program is installed. A second server on port 4737 will not start. From this checkout, before `herdr-panels` is on your PATH, `cargo run --release` does the same thing.
+
+UI development, server flags, and the short layout commands are in [Setup](#setup).
 
 ## Architecture
 
@@ -70,7 +104,7 @@ The Design button turns the workspace into an editor:
 - Add the selection to a chat when a chat panel is already open.
 - When the selected panel is a Herdr terminal, **Split the Herdr pane too** opens a new pane in the daemon and attaches it to the new panel.
 
-`examples/layouts/desk.json` starts with a terminal, a note, and an HTML panel. A plugin is a directory the viewer can show as its own panel. The guide is `examples/plugins/README.md`, and the same file is copied to `<config>/plugins/README.md`. A plugin is a directory:
+`examples/layouts/desk.json` starts with a terminal, a note, and an HTML panel. A plugin is a directory the viewer can show as its own panel. Copy `examples/plugins/welcome` and follow `examples/plugins/README.md`. That guide is also copied to `<config>/plugins/README.md`. A plugin is a directory:
 
 ```text
 <config>/plugins/<id>/plugin.json
@@ -81,7 +115,7 @@ The Design button turns the workspace into an editor:
 
 ### Agents
 
-Anything on this machine can drive the open workspace over HTTP. The page does not have to perform the edit: a split, close, resize, or panel change is saved and pushed to a connected browser. Reads work with the page closed. A connected page adds the live DOM, computed CSS, and the current terminal screen.
+An agent on this machine can drive the open workspace over HTTP. The calls need the viewer token, which the `herdr-panels` commands attach on their own. The page does not have to perform the edit: a split, close, resize, or panel change is saved and pushed to a connected browser. Reads work with the page closed. A connected page adds the live DOM, computed CSS, and the current terminal screen.
 
 ```text
 GET  /api/agent
@@ -98,7 +132,7 @@ POST /api/agent/panels/{id}/select  {"selector":"h2","text":"workspace"}
 POST /api/agent/say       {"to":"chat"|"*","from":"planner","text":"look at the note"}
 ```
 
-`panelId`, `{id}`, and `say.to` accept a panel id or its unique name, compared without case. `*` still means every chat. A project skill for this API lives at `.cursor/skills/herdr-panels/SKILL.md`.
+`panelId`, `{id}`, and `say.to` accept a panel id or its unique name, compared without case. `*` still means every chat. [The skill](skills/herdr-panels/SKILL.md) is the procedure an agent should follow for these calls.
 
 `ratio` is that panel's share of the nearest divider, from 0.12 to 0.88. `herdr: true` also calls Herdr `pane.split` and binds the new terminal. `move` swaps two panels or places one to the right of or below the other. `say` appends to a chat panel; `to` is a panel id, a unique panel name, or `*` for every chat. A chat linked to a pane also types the message into that pane. `write` types into a terminal panel. `select` outlines the match in the open page. Browser HTML that is loopback or served from `/content` can be fetched directly; a same-origin frame, or a custom HTML panel, also returns the live elements and computed style. The proxy still refuses anything that is not loopback.
 
@@ -115,28 +149,30 @@ Sandboxed panels cannot call the API directly. The injected script provides:
 ```js
 await herdrPanels.listPanes()
 await herdrPanels.status()
+await herdrPanels.readPane("w1:p1")
 await herdrPanels.sendText("w1:p1", "echo hi")
 await herdrPanels.sendKeys("w1:p1", ["enter"])
-await herdrPanels.readPane("w1:p1")
 ```
 
-`examples/panels/session-board.html` is a working panel.
+`sendText` and `sendKeys` run only when that panel's JSON sets `"control": true`. Listing panes and reading a pane stay available. `examples/panels/session-board.html` is a working panel; its Send button needs that flag.
 
 ### Security
 
-The server refuses any non-loopback bind. Browser requests that carry a non-local `Origin` are rejected. The iframe proxy accepts only `localhost`, `127.0.0.1`, and `::1`. HTML panels are local files you chose to load; treat them as trusted.
+The server refuses any non-loopback bind. The first start writes one viewer token to `auth-token` in the config directory and does not print it. On Unix that file is mode `0600`. `/api` and `/ws` require the token. The page receives it in its HTML, sends `Authorization: Bearer` on API calls, and puts it on the websocket URL as `token`. Ordinary HTTP requests ignore a `token` query parameter. `herdr-panels token rotate` replaces the file. `herdr-panels token set <value>` stores a token you created, from 32 to 256 characters. Restart the viewer and reload the page afterward. `HERDR_PANELS_TOKEN` overrides the file for that process and is not written to disk.
+
+A browser `Origin`, when one is present, must be this viewer's own port on `localhost`, `127.0.0.1`, or `::1`, or the Vite dev server on port 5173. The shell page is not served to a `null` origin. Plugin, content, and proxy documents still load in the viewer's own frames without putting the token in those URLs.
+
+The iframe proxy accepts only `localhost`, `127.0.0.1`, and `::1`, and it does not forward `Cookie`, `Authorization`, or `Set-Cookie`. Plugin frames and proxied frames are sandboxed. A remote page keeps its own origin so its cookies still work, and it cannot navigate the viewer window. An HTML panel can type into a pane only when `"control": true`.
 
 ## Setup
 
-Requirements: Rust, Node.js, and a running Herdr (`herdr`, or `herdr server` for a headless session). Build it from this checkout. There is no downloaded executable.
-
-The browser version is the server. `npm run build` in `web/`, then `cargo run --release -- server`, then open http://127.0.0.1:4737.
-
-The desktop window is that same server plus a native shell. After the same web build, run `cargo run --release --manifest-path src-tauri/Cargo.toml`. It uses the operating system's webview, so Windows uses the WebView2 already on the machine. Someone who only wants the browser version never builds `src-tauri`.
+Install and the desktop window are at the top. Once `web/dist` exists, this starts the viewer without opening a window:
 
 ```sh
-cargo run -- server
+herdr-panels server
 ```
+
+From this checkout, `cargo run --release -- server` does the same thing.
 
 In another terminal, for UI development:
 
@@ -146,19 +182,9 @@ npm install
 npm run dev
 ```
 
-Open http://127.0.0.1:5173. The Vite server proxies API and websocket traffic to port 4737.
+Open http://127.0.0.1:5173. The Vite server proxies API, content, plugin, proxy, and websocket traffic to port 4737. Start the viewer first so `auth-token` exists; Vite reads that file, or `HERDR_PANELS_TOKEN` when it is set.
 
-To serve the built UI from the Rust process:
-
-```sh
-cd web
-npm install
-npm run build
-cd ..
-cargo run -- server --open
-```
-
-Open http://127.0.0.1:4737. `cargo run -- --open` still starts the server, so older commands keep working.
+`herdr-panels --open` and `cargo run -- --open` still start the server and open a browser tab.
 
 The server is the long-running viewer. Layout changes are short commands against that process:
 
@@ -172,6 +198,8 @@ herdr-panels panel update Chat --title Shell --kind herdr
 herdr-panels panel zoom Notes
 herdr-panels plugin list
 herdr-panels plugin install <directory>
+herdr-panels token rotate
+herdr-panels token set <value>
 ```
 
 `panel` names a viewer panel. A Herdr pane stays a Herdr pane: use `herdr pane` for the daemon, and point a terminal panel at it.
@@ -193,7 +221,7 @@ Default config directory:
 - Windows: `%APPDATA%\herdr-panels`
 - macOS and Linux: `$XDG_CONFIG_HOME/herdr-panels` or `~/.config/herdr-panels`
 
-The first launch copies `examples/` into that directory when it has no layouts. Herdr's own socket is discovered from `HERDR_SOCKET_PATH`, then `HERDR_SESSION` / `--herdr-session`, then the default session socket printed by `herdr status`.
+The first launch copies `examples/` into that directory when it has no layouts. `HERDR_PANELS_CONFIG` selects that directory when `--config` is omitted, which is how `npm run dev` finds the same place as the viewer. `HERDR_PANELS_TOKEN` overrides `auth-token` for each process that has it set. Herdr's own socket is discovered from `HERDR_SOCKET_PATH`, then `HERDR_SESSION` / `--herdr-session`, then the default session socket printed by `herdr status`.
 
 The example side-by-side layout targets pane `w1:p1`. If that pane is not in the session, right-click the terminal's title bar and choose another pane. The choice is saved into the layout file.
 
@@ -207,13 +235,7 @@ cargo run -- server --herdr-session demo
 
 ## Desktop shell
 
-`src-tauri` opens this same viewer in a native window. A browser panel whose address is `http` or `https` is a child webview laid on that panel's content rectangle, so the site is its own top-level page. Moving a divider sends the new rectangle to the webview. A right-click menu stays on screen and the webview shifts out from under it. The settings dialog, design mode, element selection, and a panel drag hide the webview so those controls can take the pointer. A normal browser tab still uses an iframe.
-
-```sh
-cargo run --manifest-path src-tauri/Cargo.toml
-```
-
-The shell uses the viewer at `http://127.0.0.1:4737`, and starts one when that port is closed.
+`src-tauri` opens this same viewer in a native window. How to start it is in [Install and run](#install-and-run). A browser panel whose address is `http` or `https` is a child webview laid on that panel's content rectangle, so the site is its own top-level page. Moving a divider sends the new rectangle to the webview. A right-click menu stays on screen and the webview shifts out from under it. The settings dialog, design mode, element selection, and a panel drag hide the webview so those controls can take the pointer. A normal browser tab still uses an iframe.
 
 ## Development checks
 
@@ -224,3 +246,7 @@ npm run build
 ```
 
 `cargo test` covers layout parsing, path confinement, key mapping, the loopback proxy, and snapshot geometry. It does not need a running Herdr. A live Herdr is required to exercise a terminal pane.
+
+## License
+
+[MIT](LICENSE)

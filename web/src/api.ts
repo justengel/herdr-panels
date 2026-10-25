@@ -19,6 +19,16 @@ export interface HerdrConfig {
   keys: HerdrField[];
 }
 
+function viewerToken(): string {
+  const value = (window as Window & { __HERDR_PANELS_TOKEN__?: unknown }).__HERDR_PANELS_TOKEN__;
+  return typeof value === "string" ? value : "";
+}
+
+function authHeaders(): Record<string, string> {
+  const token = viewerToken();
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
     ...init,
@@ -26,6 +36,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       Accept: "application/json",
       ...(init?.body ? { "Content-Type": "application/json" } : {}),
       ...init?.headers,
+      ...authHeaders(),
     },
   });
   if (!response.ok) {
@@ -152,7 +163,11 @@ export const api = {
 
 export function wsUrl(path: string): string {
   const protocol = location.protocol === "https:" ? "wss:" : "ws:";
-  return `${protocol}//${location.host}${path}`;
+  const token = viewerToken();
+  const authed = token
+    ? `${path}${path.includes("?") ? "&" : "?"}token=${encodeURIComponent(token)}`
+    : path;
+  return `${protocol}//${location.host}${authed}`;
 }
 
 export function contentUrl(path: string, bridge = false): string {

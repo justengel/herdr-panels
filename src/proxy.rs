@@ -42,14 +42,7 @@ pub async fn handle(
         return text(StatusCode::METHOD_NOT_ALLOWED, "method is not proxied");
     };
     let mut builder = state.http.request(req_method, &upstream);
-    for name in [
-        "accept",
-        "accept-language",
-        "content-type",
-        "cookie",
-        "authorization",
-        "range",
-    ] {
+    for name in ["accept", "accept-language", "content-type", "range"] {
         if let Some(value) = headers.get(name) {
             builder = builder.header(name, value);
         }
@@ -110,9 +103,6 @@ pub async fn handle(
             if let Ok(value) = HeaderValue::from_str(&rewritten) {
                 headers_mut.insert(header::LOCATION, value);
             }
-        }
-        if let Some(set_cookie) = upstream_headers.get(header::SET_COOKIE) {
-            headers_mut.insert(header::SET_COOKIE, set_cookie.clone());
         }
     }
     response

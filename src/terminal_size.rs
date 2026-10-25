@@ -179,7 +179,16 @@ impl PaneControls {
         };
         let generation = replay.lock().await.bump();
         let session = self.session.lock().await.clone();
-        let spawned = spawn_control(session.as_deref(), pane_id, cols, rows, frames, replay, generation).await;
+        let spawned = spawn_control(
+            session.as_deref(),
+            pane_id,
+            cols,
+            rows,
+            frames,
+            replay,
+            generation,
+        )
+        .await;
         let mut map = self.inner.lock().await;
         let Some(slot) = map.get_mut(pane_id) else {
             return spawned.map(|_| ());
@@ -355,7 +364,10 @@ pub fn frame_message(line: &str) -> Option<(String, bool)> {
     let encoded = value.get("bytes").and_then(serde_json::Value::as_str)?;
     let raw = decode_base64(encoded)?;
     let text = String::from_utf8_lossy(&raw);
-    let full = value.get("full").and_then(serde_json::Value::as_bool).unwrap_or(false);
+    let full = value
+        .get("full")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
     Some((
         json!({
             "type": "frame",
@@ -395,9 +407,18 @@ fn decode_base64(input: &str) -> Option<Vec<u8>> {
         }
         let a = value(chunk[0])?;
         let b = value(chunk[1])?;
-        let c = if chunk[2] == b'=' { 0 } else { value(chunk[2])? };
-        let d = if chunk[3] == b'=' { 0 } else { value(chunk[3])? };
-        let packed = (u32::from(a) << 18) | (u32::from(b) << 12) | (u32::from(c) << 6) | u32::from(d);
+        let c = if chunk[2] == b'=' {
+            0
+        } else {
+            value(chunk[2])?
+        };
+        let d = if chunk[3] == b'=' {
+            0
+        } else {
+            value(chunk[3])?
+        };
+        let packed =
+            (u32::from(a) << 18) | (u32::from(b) << 12) | (u32::from(c) << 6) | u32::from(d);
         out.push((packed >> 16) as u8);
         if pad < 2 {
             out.push((packed >> 8) as u8);
@@ -465,7 +486,8 @@ mod tests {
 
     #[test]
     fn frame_message_decodes_ansi() {
-        let line = r#"{"type":"terminal.frame","bytes":"G1sxOzFI","width":80,"height":24,"full":true}"#;
+        let line =
+            r#"{"type":"terminal.frame","bytes":"G1sxOzFI","width":80,"height":24,"full":true}"#;
         let (message, full) = frame_message(line).expect("frame");
         let value: serde_json::Value = serde_json::from_str(&message).unwrap();
         assert!(full);
@@ -488,9 +510,7 @@ mod tests {
             .push(1, true, "full-1".into())
             .expect("same generation");
         replay.push(1, false, "diff".into());
-        let replacement = replay
-            .push(1, true, "full-2".into())
-            .expect("replacement");
+        let replacement = replay.push(1, true, "full-2".into()).expect("replacement");
         assert_eq!(first.seq, 1);
         assert_eq!(replacement.body, "full-2");
         assert_eq!(replay.frames.len(), 1);

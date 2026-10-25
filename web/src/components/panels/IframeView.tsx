@@ -111,5 +111,9 @@ function FramedPage({ url, proxy, title }: { url: string; proxy: boolean; title:
   if (error) return <div className="empty">{error}</div>;
   if (!ready) return <div className="empty">Opening…</div>;
   if (refusal) return <div className="empty">{refusal}</div>;
-  return <iframe className="frame" title={title} src={src} />;
+  const local = proxy || src.startsWith("/");
+  const sandbox = local
+    ? "allow-scripts allow-forms allow-popups"
+    : "allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox allow-same-origin";
+  return <iframe className="frame" title={title} src={src} sandbox={sandbox} />;
 }

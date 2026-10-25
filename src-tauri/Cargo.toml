@@ -3,7 +3,7 @@ name = "herdr-panels-desktop"
 version = "0.1.0"
 edition = "2021"
 description = "Desktop experiment where each browser panel is its own webview"
-license = "UNLICENSED"
+license = "MIT"
 publish = false
 
 [build-dependencies]

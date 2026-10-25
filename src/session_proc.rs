@@ -33,7 +33,8 @@ pub async fn rename_session(from: &str, to: &str) -> Result<PathBuf, String> {
         stop_session(from)?;
         wait_until_gone(&old_socket).await?;
     }
-    std::fs::rename(&source, &dest).map_err(|err| format!("could not rename the session: {err}"))?;
+    std::fs::rename(&source, &dest)
+        .map_err(|err| format!("could not rename the session: {err}"))?;
     spawn_server(to)?;
     let socket = dest.join("herdr.sock");
     wait_for_file(&socket).await?;
@@ -54,9 +55,7 @@ fn socket_for(name: &str) -> Result<PathBuf, String> {
 
 pub async fn close_session(name: &str) -> Result<(), String> {
     if name == "default" {
-        return Err(
-            "the default session is the Herdr client already open on this machine".into(),
-        );
+        return Err("the default session is the Herdr client already open on this machine".into());
     }
     if !paths::valid_session_name(name) {
         return Err("invalid Herdr session name".into());

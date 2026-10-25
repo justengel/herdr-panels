@@ -9,7 +9,10 @@ use crate::store::Settings;
 pub fn prepare_config_dir(flag: Option<PathBuf>) -> anyhow::Result<PathBuf> {
     let dir = match flag {
         Some(path) => path,
-        None => app_config_dir()?,
+        None => match std::env::var_os("HERDR_PANELS_CONFIG") {
+            Some(value) if !value.is_empty() => PathBuf::from(value),
+            _ => app_config_dir()?,
+        },
     };
     fs::create_dir_all(dir.join("layouts"))
         .with_context(|| format!("creating {}", dir.display()))?;

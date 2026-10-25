@@ -114,6 +114,9 @@ pub enum PanelConfig {
         path: Option<String>,
         #[serde(default)]
         inline: Option<String>,
+        /// When set, the panel may type into a Herdr pane. Off unless chosen.
+        #[serde(default, skip_serializing_if = "is_false")]
+        control: bool,
     },
     Plugin {
         plugin: String,
@@ -254,7 +257,9 @@ fn validate_node(node: &LayoutNode, ids: &mut HashSet<String>) -> anyhow::Result
                 }
             }
         }
-        LayoutNode::Panel { id, title, panel, .. } => {
+        LayoutNode::Panel {
+            id, title, panel, ..
+        } => {
             validate_panel_id(id)?;
             if !ids.insert(id.clone()) {
                 bail!("duplicate panel id {id}");
@@ -306,7 +311,7 @@ fn validate_panel(panel: &PanelConfig) -> anyhow::Result<()> {
                 bail!("proxied iframes must target localhost");
             }
         }
-        PanelConfig::Html { path, inline } => match (path, inline) {
+        PanelConfig::Html { path, inline, .. } => match (path, inline) {
             (None, None) => bail!("html panel needs a path or inline markup"),
             (Some(_), Some(_)) => bail!("html panel takes a path or inline markup, not both"),
             (Some(path), None) => validate_relative_or_rooted(path)?,
@@ -318,7 +323,11 @@ fn validate_panel(panel: &PanelConfig) -> anyhow::Result<()> {
         },
         PanelConfig::Plugin { plugin, config } => {
             crate::plugins::validate_plugin_id(plugin)?;
-            if serde_json::to_string(config).map(|text| text.len()).unwrap_or(0) > 32_000 {
+            if serde_json::to_string(config)
+                .map(|text| text.len())
+                .unwrap_or(0)
+                > 32_000
+            {
                 bail!("plugin config is limited to 32 KB");
             }
         }
@@ -342,7 +351,11 @@ fn validate_panel(panel: &PanelConfig) -> anyhow::Result<()> {
                 if tab.title.trim().is_empty() || tab.title.chars().count() > 80 {
                     bail!("tab title must be 1 to 80 characters");
                 }
-                if tab.icon.as_ref().is_some_and(|icon| icon.chars().count() > 8) {
+                if tab
+                    .icon
+                    .as_ref()
+                    .is_some_and(|icon| icon.chars().count() > 8)
+                {
                     bail!("tab icon is too long");
                 }
                 if matches!(tab.panel, PanelConfig::Tabs { .. }) {

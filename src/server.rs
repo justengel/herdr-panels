@@ -1,25 +1,25 @@
 use std::net::SocketAddr;
-use std::path::PathBuf;
+use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
+use axum::body::Body;
 use axum::extract::ws::WebSocketUpgrade;
 use axum::extract::{Query, State};
-use axum::http::{header, HeaderValue, Request, StatusCode};
-use axum::middleware::{from_fn, Next};
+use axum::http::{header, HeaderValue, Method, Request, StatusCode, Uri};
+use axum::middleware::{from_fn_with_state, Next};
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::{any, get, post, put};
 use axum::{Json, Router};
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::{json, Value};
-use tower_http::services::ServeDir;
 
 use crate::agent::AgentHub;
 use crate::herdr::HerdrClient;
 use crate::keys::ClientInput;
 use crate::layout::{is_layout_id, is_pane_id, LayoutDocument};
-use crate::paths::{find_dist_dir, origin_is_local, session_name_from_socket};
+use crate::paths::{find_dist_dir, session_name_from_socket};
 use crate::session::RuntimeCache;
 use crate::store::{self, LayoutSummary, Settings};
 use crate::terminal::screen_source;
@@ -35,6 +35,8 @@ pub struct AppState {
     pub watch: WatchHub,
     pub agent: AgentHub,
     pub controls: PaneControls,
+    pub token: String,
+    pub port: u16,
 }
 
 pub struct ServerConfig {
@@ -43,10 +45,12 @@ pub struct ServerConfig {
     pub config_dir: PathBuf,
     pub herdr_socket: PathBuf,
     pub open_browser: bool,
+    pub open_desktop: bool,
     pub url: String,
 }
 
-pub fn build_app(config_dir: PathBuf, herdr_socket: PathBuf) -> anyhow::Result<Router> {
+pub fn build_app(config_dir: PathBuf, herdr_socket: PathBuf, port: u16) -> anyhow::Result<Router> {
+    let token = crate::auth::session_token(&config_dir)?;
     let settings = store::load_settings(&config_dir)?;
     let mut watch_paths = vec![config_dir.clone()];
     watch_paths.extend(settings.content_roots.iter().cloned());
@@ -65,7 +69,10 @@ pub fn build_app(config_dir: PathBuf, herdr_socket: PathBuf) -> anyhow::Result<R
         watch,
         agent: AgentHub::new(),
         controls: PaneControls::new(session_name_from_socket(&herdr_socket)),
+        token,
+        port,
     };
+    let guard_state = state.clone();
 
     let mut router = Router::new()
         .merge(crate::agent::router())
@@ -78,7 +85,10 @@ pub fn build_app(config_dir: PathBuf, herdr_socket: PathBuf) -> anyhow::Result<R
         .route("/api/tree", get(tree))
         .route("/api/frame", get(frame_policy))
         .route("/api/session/focus", post(focus_session))
-        .route("/api/sessions", get(list_sessions).put(use_session).post(create_session))
+        .route(
+            "/api/sessions",
+            get(list_sessions).put(use_session).post(create_session),
+        )
         .route("/api/sessions/rename", post(rename_session))
         .route("/api/sessions/close", post(close_session))
         .route("/api/plugins", get(list_plugins))
@@ -92,22 +102,26 @@ pub fn build_app(config_dir: PathBuf, herdr_socket: PathBuf) -> anyhow::Result<R
         .route("/ws/watch", get(watch_ws))
         .route("/content/{*path}", get(crate::content::handle))
         .route("/plugins/{*path}", get(crate::plugins::handle))
-        .route("/proxy/{*path}", any(crate::proxy::handle))
-        .with_state(state);
+        .route("/proxy/{*path}", any(crate::proxy::handle));
 
-    router = if let Some(dist) = dist_dir {
-        router.fallback_service(ServeDir::new(dist.as_ref()))
+    router = if dist_dir.is_some() {
+        router.fallback(get(frontend))
     } else {
         router.fallback(get(setup_page))
     };
 
     Ok(router
         .layer(axum::extract::DefaultBodyLimit::max(20 * 1024 * 1024))
-        .layer(from_fn(guard)))
+        .layer(from_fn_with_state(guard_state, guard))
+        .with_state(state))
 }
 
 pub async fn serve(config: ServerConfig) -> anyhow::Result<()> {
-    let app = build_app(config.config_dir.clone(), config.herdr_socket.clone())?;
+    let app = build_app(
+        config.config_dir.clone(),
+        config.herdr_socket.clone(),
+        config.port,
+    )?;
     let addr = SocketAddr::from((config.host, config.port));
     let listener = tokio::net::TcpListener::bind(addr).await?;
     crate::client::record_server(&config.config_dir, &config.url)?;
@@ -119,7 +133,15 @@ pub async fn serve(config: ServerConfig) -> anyhow::Result<()> {
     } else {
         tracing::info!("UI bundle not found; run `npm run dev` in web/ or `npm run build`");
     }
-    if config.open_browser {
+    if config.open_desktop {
+        match crate::cli::spawn_desktop() {
+            Ok(()) => tracing::info!("opened the desktop window"),
+            Err(err) => {
+                tracing::warn!("desktop window: {err:#}");
+                crate::cli::open_browser(&config.url);
+            }
+        }
+    } else if config.open_browser {
         crate::cli::open_browser(&config.url);
     }
 
@@ -131,20 +153,38 @@ pub async fn serve(config: ServerConfig) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn guard(req: Request<axum::body::Body>, next: Next) -> Response {
-    if let Some(origin) = req.headers().get(header::ORIGIN) {
-        match origin.to_str() {
-            Ok(origin) if origin_is_local(origin) => {}
-            _ => {
-                return (
-                    StatusCode::FORBIDDEN,
-                    Json(json!({"error": "origin is not local"})),
-                )
-                    .into_response();
-            }
+async fn guard(State(state): State<AppState>, req: Request<Body>, next: Next) -> Response {
+    let origin = header_text(&req, "origin");
+    if let Some(origin) = origin.as_deref() {
+        if origin != "null" && !crate::auth::origin_allowed(origin, state.port) {
+            return deny(StatusCode::FORBIDDEN, "origin is not allowed");
+        }
+    }
+    let path = req.uri().path().to_string();
+    if is_shell_document(&path) && origin.as_deref() == Some("null") {
+        return deny(StatusCode::FORBIDDEN, "origin is not allowed");
+    }
+    if !is_page_asset(&path) {
+        let presented = presented_token(&req, &path);
+        let ok = presented
+            .as_deref()
+            .is_some_and(|value| crate::auth::tokens_match(&state.token, value));
+        if !ok && !frame_load_allowed(&req, &path) {
+            return deny(StatusCode::UNAUTHORIZED, "viewer token is required");
         }
     }
     let mut response = next.run(req).await;
+    stamp(&mut response);
+    response
+}
+
+fn deny(status: StatusCode, error: &str) -> Response {
+    let mut response = (status, Json(json!({"error": error}))).into_response();
+    stamp(&mut response);
+    response
+}
+
+fn stamp(response: &mut Response) {
     response.headers_mut().insert(
         header::X_CONTENT_TYPE_OPTIONS,
         HeaderValue::from_static("nosniff"),
@@ -153,6 +193,201 @@ async fn guard(req: Request<axum::body::Body>, next: Next) -> Response {
         header::HeaderName::from_static("referrer-policy"),
         HeaderValue::from_static("no-referrer"),
     );
+}
+
+fn header_text(req: &Request<Body>, name: &str) -> Option<String> {
+    req.headers()
+        .get(name)
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn is_shell_document(path: &str) -> bool {
+    path == "/" || path == "/index.html"
+}
+
+fn is_framed_path(path: &str) -> bool {
+    path == "/content"
+        || path.starts_with("/content/")
+        || path == "/plugins"
+        || path.starts_with("/plugins/")
+        || path == "/proxy"
+        || path.starts_with("/proxy/")
+}
+
+fn is_page_asset(path: &str) -> bool {
+    path != "/api"
+        && !path.starts_with("/api/")
+        && path != "/ws"
+        && !path.starts_with("/ws/")
+        && !is_framed_path(path)
+}
+
+fn presented_token(req: &Request<Body>, path: &str) -> Option<String> {
+    if let Some(token) = bearer_token(req) {
+        return Some(token);
+    }
+    if path == "/ws" || path.starts_with("/ws/") {
+        return query_token(req.uri());
+    }
+    None
+}
+
+fn bearer_token(req: &Request<Body>) -> Option<String> {
+    let value = header_text(req, "authorization")?;
+    let (scheme, rest) = value.split_once(' ')?;
+    if !scheme.eq_ignore_ascii_case("bearer") {
+        return None;
+    }
+    let token = rest.trim();
+    if token.is_empty() || token.contains(' ') {
+        return None;
+    }
+    Some(token.to_string())
+}
+
+fn query_token(uri: &Uri) -> Option<String> {
+    let query = uri.query()?;
+    for pair in query.split('&') {
+        let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
+        if percent_decode(key) == "token" {
+            return Some(percent_decode(value));
+        }
+    }
+    None
+}
+
+fn frame_load_allowed(req: &Request<Body>, path: &str) -> bool {
+    if req.method() != Method::GET && req.method() != Method::HEAD {
+        return false;
+    }
+    if !is_framed_path(path) {
+        return false;
+    }
+    let site = header_text(req, "sec-fetch-site");
+    if matches!(site.as_deref(), Some("same-origin") | Some("none")) {
+        return true;
+    }
+    let dest = header_text(req, "sec-fetch-dest");
+    header_text(req, "origin").as_deref() == Some("null")
+        && matches!(
+            dest.as_deref(),
+            Some("script")
+                | Some("style")
+                | Some("image")
+                | Some("font")
+                | Some("empty")
+                | Some("audio")
+                | Some("video")
+                | Some("worker")
+        )
+}
+
+fn percent_decode(input: &str) -> String {
+    let bytes = input.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' && index + 2 < bytes.len() {
+            if let (Some(hi), Some(lo)) = (from_hex(bytes[index + 1]), from_hex(bytes[index + 2])) {
+                out.push((hi << 4) | lo);
+                index += 3;
+                continue;
+            }
+        }
+        out.push(bytes[index]);
+        index += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+fn from_hex(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
+}
+
+async fn frontend(State(state): State<AppState>, uri: Uri) -> Response {
+    let Some(dist) = state.dist_dir.clone() else {
+        return setup_page().await.into_response();
+    };
+    let path = uri.path();
+    if is_shell_document(path) {
+        return match tokio::fs::read_to_string(dist.join("index.html")).await {
+            Ok(html) => html_document(&html, &state.token),
+            Err(_) => (StatusCode::NOT_FOUND, "not found").into_response(),
+        };
+    }
+    if let Some(file) = safe_asset(&dist, path) {
+        return serve_file(file).await;
+    }
+    (StatusCode::NOT_FOUND, "not found").into_response()
+}
+
+fn html_document(html: &str, token: &str) -> Response {
+    let mut response = Response::new(Body::from(inject_token(html, token)));
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("text/html; charset=utf-8"),
+    );
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response
+}
+
+fn inject_token(html: &str, token: &str) -> String {
+    let literal = serde_json::to_string(token).unwrap_or_else(|_| "\"\"".to_string());
+    let tag = format!("<script>window.__HERDR_PANELS_TOKEN__={literal}</script>");
+    match html.find("</head>") {
+        Some(at) => {
+            let mut out = String::with_capacity(html.len() + tag.len());
+            out.push_str(&html[..at]);
+            out.push_str(&tag);
+            out.push_str(&html[at..]);
+            out
+        }
+        None => format!("{tag}{html}"),
+    }
+}
+
+fn safe_asset(dist: &Path, request_path: &str) -> Option<PathBuf> {
+    let decoded = percent_decode(request_path.trim_start_matches('/'));
+    if decoded.is_empty() || decoded.contains('\\') || decoded.contains('\0') {
+        return None;
+    }
+    let relative = Path::new(&decoded);
+    if relative.is_absolute()
+        || relative
+            .components()
+            .any(|component| !matches!(component, Component::Normal(_)))
+    {
+        return None;
+    }
+    let root = dist.canonicalize().ok()?;
+    let file = dist.join(relative).canonicalize().ok()?;
+    if file.is_file() && file.starts_with(&root) {
+        Some(file)
+    } else {
+        None
+    }
+}
+
+async fn serve_file(path: PathBuf) -> Response {
+    let bytes = match tokio::fs::read(&path).await {
+        Ok(bytes) => bytes,
+        Err(_) => return (StatusCode::NOT_FOUND, "not found").into_response(),
+    };
+    let mime = mime_guess::from_path(&path).first_or_octet_stream();
+    let mut response = Response::new(Body::from(bytes));
+    if let Ok(value) = HeaderValue::from_str(mime.as_ref()) {
+        response.headers_mut().insert(header::CONTENT_TYPE, value);
+    }
     response
 }
 
@@ -331,7 +566,12 @@ async fn inspect_frame(state: &AppState, url: &str) -> Option<&'static str> {
         let pairs = response
             .headers()
             .iter()
-            .filter_map(|(key, value)| value.to_str().ok().map(|text| (key.as_str().to_string(), text.to_string())))
+            .filter_map(|(key, value)| {
+                value
+                    .to_str()
+                    .ok()
+                    .map(|text| (key.as_str().to_string(), text.to_string()))
+            })
             .collect::<Vec<_>>();
         let borrowed = pairs
             .iter()
@@ -523,7 +763,10 @@ async fn herdr_action(
         }
         "workspace.rename" => {
             let workspace_id = required(body.workspace_id, "a space")?;
-            let label = required(body.label.filter(|label| !label.trim().is_empty()), "a name")?;
+            let label = required(
+                body.label.filter(|label| !label.trim().is_empty()),
+                "a name",
+            )?;
             client
                 .call(
                     "workspace.rename",
@@ -575,7 +818,9 @@ async fn herdr_action(
         }
         "pane.close" => {
             let pane_id = required(body.pane_id, "a pane")?;
-            client.call("pane.close", json!({ "pane_id": pane_id })).await
+            client
+                .call("pane.close", json!({ "pane_id": pane_id }))
+                .await
         }
         _ => return Err(ApiError::bad("unknown action")),
     };
@@ -821,5 +1066,18 @@ impl ApiError {
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         (self.status, Json(json!({"error": self.message}))).into_response()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_websocket_query_token_is_percent_decoded() {
+        let uri: Uri = "http://127.0.0.1/ws/agent?path=notes%2Fwelcome.md&token=abc%2B%2F%3D"
+            .parse()
+            .unwrap();
+        assert_eq!(query_token(&uri).as_deref(), Some("abc+/="));
     }
 }

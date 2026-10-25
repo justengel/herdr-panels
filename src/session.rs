@@ -201,11 +201,9 @@ pub fn map_snapshot(socket: &str, result: &Value) -> Result<RuntimeSnapshot, Str
                     .get("focused")
                     .and_then(Value::as_bool)
                     .unwrap_or(false),
-                root: workspace
-                    .get("worktree")
-                    .and_then(|worktree| {
-                        text(worktree, "checkout_path").or_else(|| text(worktree, "repo_root"))
-                    }),
+                root: workspace.get("worktree").and_then(|worktree| {
+                    text(worktree, "checkout_path").or_else(|| text(worktree, "repo_root"))
+                }),
             })
         })
         .collect();
@@ -264,10 +262,7 @@ fn tab_view(tab: &Value) -> Option<TabView> {
         tab_id: text(tab, "tab_id")?,
         workspace_id: text(tab, "workspace_id").unwrap_or_default(),
         label: text(tab, "label").unwrap_or_else(|| "1".into()),
-        focused: tab
-            .get("focused")
-            .and_then(Value::as_bool)
-            .unwrap_or(false),
+        focused: tab.get("focused").and_then(Value::as_bool).unwrap_or(false),
     })
 }
 

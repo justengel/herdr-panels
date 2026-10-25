@@ -240,7 +240,12 @@ fn list_item(trimmed: &str) -> Option<&str> {
 
 fn walk(node: &LayoutNode, panels: &mut Vec<PanelInfo>) {
     match node {
-        LayoutNode::Panel { id, title, panel, collapsed } => panels.push(PanelInfo {
+        LayoutNode::Panel {
+            id,
+            title,
+            panel,
+            collapsed,
+        } => panels.push(PanelInfo {
             id: id.clone(),
             title: title.clone(),
             panel: panel.clone(),
@@ -314,8 +319,18 @@ fn try_split(
             }),
             second: Box::new(created),
         }),
-        LayoutNode::Panel { id, title, panel, collapsed } => Err(Box::new(SplitMiss {
-            node: LayoutNode::Panel { id, title, panel, collapsed },
+        LayoutNode::Panel {
+            id,
+            title,
+            panel,
+            collapsed,
+        } => Err(Box::new(SplitMiss {
+            node: LayoutNode::Panel {
+                id,
+                title,
+                panel,
+                collapsed,
+            },
             created,
         })),
         LayoutNode::Split {
@@ -408,9 +423,17 @@ enum Close {
 fn close_rec(node: LayoutNode, id: &str) -> Close {
     match node {
         LayoutNode::Panel { id: panel_id, .. } if panel_id == id => Close::Gone,
-        LayoutNode::Panel { id, title, panel, collapsed } => {
-            Close::Same(LayoutNode::Panel { id, title, panel, collapsed })
-        }
+        LayoutNode::Panel {
+            id,
+            title,
+            panel,
+            collapsed,
+        } => Close::Same(LayoutNode::Panel {
+            id,
+            title,
+            panel,
+            collapsed,
+        }),
         LayoutNode::Split {
             direction,
             ratio,
@@ -528,7 +551,20 @@ fn update_rec(
             },
             true,
         ),
-        LayoutNode::Panel { id, title, panel, collapsed } => (LayoutNode::Panel { id, title, panel, collapsed }, false),
+        LayoutNode::Panel {
+            id,
+            title,
+            panel,
+            collapsed,
+        } => (
+            LayoutNode::Panel {
+                id,
+                title,
+                panel,
+                collapsed,
+            },
+            false,
+        ),
         LayoutNode::Split {
             direction,
             ratio,
@@ -594,7 +630,20 @@ fn update_rec(
 
 fn resize_rec(node: LayoutNode, id: &str, share: f64) -> (LayoutNode, bool) {
     match node {
-        LayoutNode::Panel { id, title, panel, collapsed } => (LayoutNode::Panel { id, title, panel, collapsed }, false),
+        LayoutNode::Panel {
+            id,
+            title,
+            panel,
+            collapsed,
+        } => (
+            LayoutNode::Panel {
+                id,
+                title,
+                panel,
+                collapsed,
+            },
+            false,
+        ),
         LayoutNode::Split {
             direction,
             ratio,
@@ -797,7 +846,12 @@ fn copy_info(info: &PanelInfo) -> PanelInfo {
 
 fn replace_two(node: LayoutNode, source: &PanelInfo, target: &PanelInfo) -> LayoutNode {
     match node {
-        LayoutNode::Panel { id, title, panel, collapsed } => {
+        LayoutNode::Panel {
+            id,
+            title,
+            panel,
+            collapsed,
+        } => {
             let info = if id == source.id {
                 Some(target)
             } else if id == target.id {
@@ -812,7 +866,12 @@ fn replace_two(node: LayoutNode, source: &PanelInfo, target: &PanelInfo) -> Layo
                     panel: info.panel.clone(),
                     collapsed: info.collapsed,
                 },
-                None => LayoutNode::Panel { id, title, panel, collapsed },
+                None => LayoutNode::Panel {
+                    id,
+                    title,
+                    panel,
+                    collapsed,
+                },
             }
         }
         LayoutNode::Split {
@@ -944,7 +1003,12 @@ mod tests {
 
         let moved = move_panel(sample(), "term", "notes", "below").unwrap();
         match moved {
-            LayoutNode::Split { direction, first, second, .. } => {
+            LayoutNode::Split {
+                direction,
+                first,
+                second,
+                ..
+            } => {
                 assert_eq!(direction, Direction::Column);
                 assert!(matches!(first.as_ref(), LayoutNode::Panel { id, .. } if id == "notes"));
                 assert!(matches!(second.as_ref(), LayoutNode::Panel { id, .. } if id == "term"));

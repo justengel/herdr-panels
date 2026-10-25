@@ -330,18 +330,14 @@ async fn open_target(
     } else {
         let anchor = match body.from.as_deref() {
             Some(from) => resolve_key(&doc.root, from)?,
-            None => default_anchor(&doc.root).ok_or_else(|| AgentError::bad("layout has no panels"))?,
+            None => {
+                default_anchor(&doc.root).ok_or_else(|| AgentError::bad("layout has no panels"))?
+            }
         };
         let before = list_panels(&doc.root).len();
-        let (root, panel_id) = layout_ops::open_panel(
-            doc.root,
-            &anchor,
-            direction,
-            panel,
-            Some(title),
-            body.reuse,
-        )
-        .map_err(AgentError::bad)?;
+        let (root, panel_id) =
+            layout_ops::open_panel(doc.root, &anchor, direction, panel, Some(title), body.reuse)
+                .map_err(AgentError::bad)?;
         let created = list_panels(&root).len() > before;
         (root, panel_id, created)
     };
@@ -398,13 +394,18 @@ fn kind_to_panel(kind: &crate::open_target::OpenKind) -> PanelConfig {
             url: url.clone(),
             proxy: *proxy,
         },
-        crate::open_target::OpenKind::Markdown { path } => PanelConfig::Markdown { path: path.clone() },
+        crate::open_target::OpenKind::Markdown { path } => {
+            PanelConfig::Markdown { path: path.clone() }
+        }
         crate::open_target::OpenKind::Html { path } => PanelConfig::Html {
             path: Some(path.clone()),
             inline: None,
+            control: false,
         },
         crate::open_target::OpenKind::Text { path } => PanelConfig::File { path: path.clone() },
-        crate::open_target::OpenKind::Explorer { path } => PanelConfig::Explorer { path: path.clone() },
+        crate::open_target::OpenKind::Explorer { path } => {
+            PanelConfig::Explorer { path: path.clone() }
+        }
         crate::open_target::OpenKind::Plugin { id } => PanelConfig::Plugin {
             plugin: id.clone(),
             config: serde_json::Value::Null,
@@ -423,7 +424,8 @@ async fn resolve_target(
 ) -> Result<Json<Value>, AgentError> {
     let roots = crate::server::allowed_roots(&state).await;
     let located = locate_target(&body.target, &roots);
-    let kind = crate::open_target::address_target(&located, |path| file_kind(path)).map_err(AgentError::bad)?;
+    let kind = crate::open_target::address_target(&located, |path| file_kind(path))
+        .map_err(AgentError::bad)?;
     if let crate::open_target::OpenKind::Plugin { id } = &kind {
         let plugins = crate::plugins::list_plugins(&state.config_dir).map_err(AgentError::bad)?;
         if !plugins.iter().any(|plugin| plugin.id == *id) {
@@ -894,7 +896,10 @@ async fn read_static(
                 .find(|tab| tab.id == *active)
                 .or_else(|| tabs.first());
             match tab {
-                Some(tab) => Ok((format!("{}: {}", tab.title, panel_summary(&tab.panel)), Vec::new())),
+                Some(tab) => Ok((
+                    format!("{}: {}", tab.title, panel_summary(&tab.panel)),
+                    Vec::new(),
+                )),
                 None => Ok(("No tabs".into(), Vec::new())),
             }
         }
@@ -982,7 +987,7 @@ fn panel_summary(panel: &PanelConfig) -> String {
         PanelConfig::Herdr { pane_id, .. } => pane_id.clone().unwrap_or_else(|| "unbound".into()),
         PanelConfig::Markdown { path } => path.clone(),
         PanelConfig::Iframe { url, .. } => url.clone(),
-        PanelConfig::Html { path, inline } => path.clone().unwrap_or_else(|| {
+        PanelConfig::Html { path, inline, .. } => path.clone().unwrap_or_else(|| {
             if inline.is_some() {
                 "inline".into()
             } else {

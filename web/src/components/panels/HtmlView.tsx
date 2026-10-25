@@ -6,6 +6,7 @@ interface Props {
   path?: string | null;
   inline?: string | null;
   title: string;
+  control?: boolean;
   design?: boolean;
   onPick?: (pick: { tag: string; text: string }) => void;
 }
@@ -17,10 +18,12 @@ interface BridgeMessage {
   params?: Record<string, unknown>;
 }
 
-export function HtmlView({ path, inline, title, design = false, onPick }: Props) {
+export function HtmlView({ path, inline, title, control = false, design = false, onPick }: Props) {
   const frameRef = useRef<HTMLIFrameElement>(null);
   const pickRef = useRef(onPick);
+  const controlRef = useRef(control);
   pickRef.current = onPick;
+  controlRef.current = control;
 
   useEffect(() => {
     const frame = frameRef.current;
@@ -33,7 +36,7 @@ export function HtmlView({ path, inline, title, design = false, onPick }: Props)
         return;
       }
       if (!message || message.source !== "hwp-panel" || typeof message.id !== "number") return;
-      void fulfill(message)
+      void fulfill(message, controlRef.current)
         .then((result) => {
           frame.contentWindow?.postMessage({ source: "hwp-host", id: message.id, ok: true, result }, "*");
         })
@@ -72,23 +75,26 @@ export function HtmlView({ path, inline, title, design = false, onPick }: Props)
   );
 }
 
-async function fulfill(message: BridgeMessage): Promise<unknown> {
+async function fulfill(message: BridgeMessage, control: boolean): Promise<unknown> {
   const params = message.params ?? {};
   switch (message.method) {
     case "status":
     case "listPanes":
       return api.runtime();
     case "sendText":
-      await api.sendInput({
-        paneId: String(params.paneId ?? ""),
-        text: String(params.text ?? ""),
-      });
-      return { ok: true };
     case "sendKeys":
-      await api.sendInput({
-        paneId: String(params.paneId ?? ""),
-        keys: Array.isArray(params.keys) ? params.keys.map(String) : [],
-      });
+      if (!control) throw new Error("This panel cannot type into a pane");
+      if (message.method === "sendText") {
+        await api.sendInput({
+          paneId: String(params.paneId ?? ""),
+          text: String(params.text ?? ""),
+        });
+      } else {
+        await api.sendInput({
+          paneId: String(params.paneId ?? ""),
+          keys: Array.isArray(params.keys) ? params.keys.map(String) : [],
+        });
+      }
       return { ok: true };
     case "readPane":
       return api.readScreen(String(params.paneId ?? ""), String(params.source ?? "visible"));

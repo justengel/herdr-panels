@@ -36,11 +36,7 @@ pub async fn drive(
     for frame in backlog {
         seen_generation = frame.generation;
         seen_seq = frame.seq;
-        if sink
-            .send(Message::Text(frame.body.into()))
-            .await
-            .is_err()
-        {
+        if sink.send(Message::Text(frame.body.into())).await.is_err() {
             poller.abort();
             state.controls.release(&pane_id).await;
             return;

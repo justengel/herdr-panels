@@ -87,6 +87,7 @@ export interface HtmlPanel {
   type: "html";
   path?: string | null;
   inline?: string | null;
+  control?: boolean;
 }
 
 export interface PluginPanel {
