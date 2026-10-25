@@ -1,0 +1,18 @@
+[package]
+name = "herdr-panels-desktop"
+version = "0.1.0"
+edition = "2021"
+description = "Desktop experiment where each browser panel is its own webview"
+license = "UNLICENSED"
+publish = false
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+herdr-web-panels = { path = ".." }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tauri = { version = "2", features = ["unstable"] }
+tokio = { version = "1", features = ["net", "rt-multi-thread", "time"] }
+url = "2"

@@ -342,7 +342,13 @@ function Surface({
         ) : null}
         {panel.type === "iframe" ? (
           panel.url ? (
-            <IframeView url={panel.url} proxy={panel.proxy} title={title || "Browser"} />
+            <IframeView
+              url={panel.url}
+              proxy={panel.proxy}
+              title={title || "Browser"}
+              panelId={id}
+              suspended={design.enabled}
+            />
           ) : (
             <div className="empty">Enter a URL, a file, or plugin:id.</div>
           )

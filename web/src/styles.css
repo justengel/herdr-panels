@@ -927,6 +927,10 @@ body.panel-dragging, body.panel-dragging * { cursor: grabbing !important; user-s
   background: white;
 }
 
+.browser-hole {
+  background: var(--bg-panel);
+}
+
 .term-shell {
   position: relative;
   width: 100%;

@@ -128,7 +128,11 @@ The server refuses any non-loopback bind. Browser requests that carry a non-loca
 
 ## Setup
 
-Requirements: Rust, Node.js, and a running Herdr (`herdr`, or `herdr server` for a headless session).
+Requirements: Rust, Node.js, and a running Herdr (`herdr`, or `herdr server` for a headless session). Build it from this checkout. There is no downloaded executable.
+
+The browser version is the server. `npm run build` in `web/`, then `cargo run --release -- server`, then open http://127.0.0.1:4737.
+
+The desktop window is that same server plus a native shell. After the same web build, run `cargo run --release --manifest-path src-tauri/Cargo.toml`. It uses the operating system's webview, so Windows uses the WebView2 already on the machine. Someone who only wants the browser version never builds `src-tauri`.
 
 ```sh
 cargo run -- server
@@ -200,6 +204,16 @@ herdr --session demo server
 herdr --session demo workspace create --label demo
 cargo run -- server --herdr-session demo
 ```
+
+## Desktop shell
+
+`src-tauri` opens this same viewer in a native window. A browser panel whose address is `http` or `https` is a child webview laid on that panel's content rectangle, so the site is its own top-level page. Moving a divider sends the new rectangle to the webview. A right-click menu stays on screen and the webview shifts out from under it. The settings dialog, design mode, element selection, and a panel drag hide the webview so those controls can take the pointer. A normal browser tab still uses an iframe.
+
+```sh
+cargo run --manifest-path src-tauri/Cargo.toml
+```
+
+The shell uses the viewer at `http://127.0.0.1:4737`, and starts one when that port is closed.
 
 ## Development checks
 

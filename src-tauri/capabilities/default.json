@@ -1,0 +1,16 @@
+{
+  "identifier": "desktop-shell",
+  "description": "The local viewer may place browser panels. Remote sites loaded in child webviews are not listed here.",
+  "windows": ["main"],
+  "remote": {
+    "urls": [
+      "http://127.0.0.1:4737/*",
+      "http://localhost:4737/*"
+    ]
+  },
+  "permissions": [
+    "core:default",
+    "allow-place-browser",
+    "allow-close-browser"
+  ]
+}

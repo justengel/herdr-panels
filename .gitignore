@@ -1,4 +1,6 @@
 /target
+/src-tauri/target
+/src-tauri/gen
 /web/node_modules
 /web/dist
 /_research

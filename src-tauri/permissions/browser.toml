@@ -1,0 +1,9 @@
+[[permission]]
+identifier = "allow-place-browser"
+description = "Place or move the child webview for a browser panel."
+commands.allow = ["place_browser"]
+
+[[permission]]
+identifier = "allow-close-browser"
+description = "Close the child webview for a browser panel."
+commands.allow = ["close_browser"]
