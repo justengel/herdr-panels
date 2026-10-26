@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import type { PanelConfig, TabEdge } from "../types";
 import { useDesk } from "../desk";
+import { useKeepMenuOnScreen } from "../menuPlace";
 import { usePanelActions, usePanelDrag } from "../panelActions";
 
 interface Props {
@@ -65,6 +66,11 @@ export function PanelChrome({
   const [menu, setMenu] = useState<{ left?: number; right?: number; top: number } | null>(null);
   const gearRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+  const menuBox = useKeepMenuOnScreen(
+    menuRef,
+    menu !== null,
+    menu ? `${menu.left ?? ""}:${menu.right ?? ""}:${menu.top}` : "",
+  );
   const dragging = Boolean(panelId && drag.draggingId === panelId);
   const classes = ["panel", className, plain ? "is-plain" : "", dragging ? "is-drag-source" : ""]
     .filter(Boolean)
@@ -97,9 +103,7 @@ export function PanelChrome({
     if (!panelId) return;
     event.preventDefault();
     event.stopPropagation();
-    const left = Math.min(event.clientX, window.innerWidth - 220);
-    const top = Math.min(event.clientY, window.innerHeight - 16);
-    setMenu({ left, top });
+    setMenu({ left: event.clientX, top: event.clientY });
   }
 
   function openGear(event: React.MouseEvent) {
@@ -113,7 +117,7 @@ export function PanelChrome({
     if (!rect) return;
     setMenu({
       right: Math.max(8, window.innerWidth - rect.right),
-      top: Math.min(rect.bottom + 4, window.innerHeight - 16),
+      top: rect.bottom + 4,
     });
   }
 
@@ -156,7 +160,7 @@ export function PanelChrome({
               if (panelId) panelActions.close(panelId);
             }}
           >
-            ×
+            <CloseIcon />
           </button>
         </div>
       ) : (
@@ -200,7 +204,7 @@ export function PanelChrome({
               if (panelId) panelActions.close(panelId);
             }}
           >
-            ×
+            <CloseIcon />
           </button>
         </div>
       </header>
@@ -221,12 +225,11 @@ export function PanelChrome({
               className="panel-menu"
               role="menu"
               ref={menuRef}
-              style={{
-                left: menu.left,
-                right: menu.right,
-                top: menu.top,
-                maxHeight: `calc(100vh - ${menu.top + 8}px)`,
-              }}
+              style={
+                menuBox
+                  ? { left: menuBox.left, top: menuBox.top, maxWidth: menuBox.maxWidth, maxHeight: menuBox.maxHeight }
+                  : { left: menu.left, right: menu.right, top: menu.top }
+              }
               onChange={(event) => {
                 if (event.target instanceof HTMLSelectElement) setMenu(null);
               }}
@@ -315,6 +318,20 @@ function GearIcon() {
         fill="currentColor"
         fillRule="evenodd"
         d="M6.61 3.35 6.99.87 9.01.87 9.39 3.35 10.3 3.73 12.32 2.24 13.76 3.68 12.27 5.7 12.65 6.61 15.13 6.99 15.13 9.01 12.65 9.39 12.27 10.3 13.76 12.32 12.32 13.76 10.3 12.27 9.39 12.65 9.01 15.13 6.99 15.13 6.61 12.65 5.7 12.27 3.68 13.76 2.24 12.32 3.73 10.3 3.35 9.39.87 9.01.87 6.99 3.35 6.61 3.73 5.7 2.24 3.68 3.68 2.24 5.7 3.73ZM8 5.65a2.35 2.35 0 1 1 0 4.7 2.35 2.35 0 1 1 0-4.7Z"
+      />
+    </svg>
+  );
+}
+
+function CloseIcon() {
+  return (
+    <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+      <path
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        d="M2.15 2.15 13.85 13.85M13.85 2.15 2.15 13.85"
       />
     </svg>
   );

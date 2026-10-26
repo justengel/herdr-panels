@@ -102,6 +102,10 @@ pub fn origin_allowed(origin: &str, port: u16) -> bool {
     host_ok && (origin_port == port || origin_port == DEV_PORT)
 }
 
+pub(crate) fn random_secret() -> anyhow::Result<String> {
+    generate()
+}
+
 fn generate() -> anyhow::Result<String> {
     let mut bytes = [0u8; 32];
     getrandom::getrandom(&mut bytes)

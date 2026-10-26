@@ -91,6 +91,15 @@
     }
   });
 
+  if (window.__hwpInstallSelect) {
+    window.__hwpInstallSelect({
+      draw: false,
+      send(message) {
+        parent.postMessage(Object.assign({ source: SOURCE }, message), "*");
+      },
+    });
+  }
+
   function find(selector, text) {
     const candidates = "h1,h2,h3,h4,h5,h6,p,li,pre,blockquote,a,button,label,td,th,input,code";
     let nodes = [];

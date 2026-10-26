@@ -7,3 +7,8 @@ commands.allow = ["place_browser"]
 identifier = "allow-close-browser"
 description = "Close the child webview for a browser panel."
 commands.allow = ["close_browser"]
+
+[[permission]]
+identifier = "allow-set-browser-select"
+description = "Turn element selection on or off inside browser panels."
+commands.allow = ["set_browser_select"]

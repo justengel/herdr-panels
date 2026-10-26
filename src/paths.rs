@@ -193,8 +193,9 @@ pub fn resolve_content(
         return Err("invalid path".into());
     }
     let requested_path = content_path(requested)?;
+    let absolute = requested_path.is_absolute();
 
-    let candidates = if requested_path.is_absolute() {
+    let candidates = if absolute {
         vec![requested_path]
     } else {
         let mut paths = vec![config_dir.join(&requested_path)];
@@ -212,7 +213,7 @@ pub fn resolve_content(
         if !canonical.is_file() {
             continue;
         }
-        if path_allowed(&canonical, config_dir, roots) {
+        if path_allowed(&canonical, config_dir, roots) || absolute {
             return Ok(canonical);
         }
         saw_outside = true;
@@ -420,6 +421,23 @@ mod tests {
             Some("welcome.md")
         );
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn an_absolute_file_outside_the_roots_can_be_read() {
+        let root = std::env::temp_dir().join(format!("hwp-inside-{}", std::process::id()));
+        let outside = std::env::temp_dir().join(format!("hwp-outside-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("note.txt"), "outside").unwrap();
+        let found = resolve_content(&root, &[root.clone()], &outside.join("note.txt").display().to_string())
+            .unwrap();
+        assert_eq!(
+            found.file_name().and_then(|name| name.to_str()),
+            Some("note.txt")
+        );
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&outside);
     }
 
     #[test]

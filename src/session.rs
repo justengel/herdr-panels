@@ -42,6 +42,8 @@ pub struct WorkspaceView {
     pub label: String,
     pub focused: bool,
     pub root: Option<String>,
+    pub branch: Option<String>,
+    pub dirty: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -129,8 +131,13 @@ impl RuntimeCache {
 
     async fn fetch(&self) -> RuntimeSnapshot {
         match self.herdr.call("session.snapshot", json!({})).await {
-            Ok(result) => map_snapshot(&self.herdr.logical_socket(), &result)
-                .unwrap_or_else(|err| disconnected(&self.herdr.logical_socket(), err)),
+            Ok(result) => match map_snapshot(&self.herdr.logical_socket(), &result) {
+                Ok(mut snapshot) => {
+                    attach_branches(&mut snapshot).await;
+                    snapshot
+                }
+                Err(err) => disconnected(&self.herdr.logical_socket(), err),
+            },
             Err(err) => disconnected(&self.herdr.logical_socket(), err.to_string()),
         }
     }
@@ -204,6 +211,8 @@ pub fn map_snapshot(socket: &str, result: &Value) -> Result<RuntimeSnapshot, Str
                 root: workspace.get("worktree").and_then(|worktree| {
                     text(worktree, "checkout_path").or_else(|| text(worktree, "repo_root"))
                 }),
+                branch: None,
+                dirty: false,
             })
         })
         .collect();
@@ -302,6 +311,145 @@ fn geometry_for(layouts: &[Value], pane_id: &str) -> Option<PaneRect> {
         }
     }
     None
+}
+
+async fn attach_branches(snapshot: &mut RuntimeSnapshot) {
+    let jobs: Vec<(String, String)> = snapshot
+        .workspaces
+        .iter()
+        .filter_map(|workspace| {
+            workspace_dir(snapshot, workspace).map(|dir| (workspace.workspace_id.clone(), dir))
+        })
+        .collect();
+    if jobs.is_empty() {
+        return;
+    }
+    let faces = tokio::task::spawn_blocking(move || {
+        jobs.into_iter()
+            .map(|(id, dir)| {
+                let (branch, dirty) = git_face(&dir);
+                (id, branch, dirty)
+            })
+            .collect::<Vec<_>>()
+    })
+    .await
+    .unwrap_or_default();
+    for (id, branch, dirty) in faces {
+        if let Some(workspace) = snapshot
+            .workspaces
+            .iter_mut()
+            .find(|workspace| workspace.workspace_id == id)
+        {
+            workspace.branch = branch;
+            workspace.dirty = dirty;
+        }
+    }
+}
+
+fn workspace_dir(snapshot: &RuntimeSnapshot, workspace: &WorkspaceView) -> Option<String> {
+    if let Some(root) = workspace.root.as_ref().filter(|root| !root.is_empty()) {
+        return Some(root.clone());
+    }
+    let mut fallback = None;
+    for pane in snapshot
+        .panes
+        .iter()
+        .filter(|pane| pane.workspace_id == workspace.workspace_id)
+    {
+        let Some(cwd) = pane.cwd.as_ref().filter(|cwd| !cwd.is_empty()) else {
+            continue;
+        };
+        if pane.focused {
+            return Some(cwd.clone());
+        }
+        if fallback.is_none() {
+            fallback = Some(cwd.clone());
+        }
+    }
+    fallback
+}
+
+fn git_face(dir: &str) -> (Option<String>, bool) {
+    let now = Instant::now();
+    if let Ok(cache) = git_cache().lock() {
+        if let Some(hit) = cache
+            .iter()
+            .find(|hit| hit.dir == dir && now.duration_since(hit.at) < Duration::from_secs(5))
+        {
+            return (hit.branch.clone(), hit.dirty);
+        }
+    }
+    let face = git_face_uncached(dir);
+    if let Ok(mut cache) = git_cache().lock() {
+        cache.retain(|hit| hit.dir != dir);
+        if cache.len() > 32 {
+            cache.remove(0);
+        }
+        cache.push(GitFace {
+            at: now,
+            dir: dir.to_string(),
+            branch: face.0.clone(),
+            dirty: face.1,
+        });
+    }
+    face
+}
+
+struct GitFace {
+    at: Instant,
+    dir: String,
+    branch: Option<String>,
+    dirty: bool,
+}
+
+fn git_cache() -> &'static std::sync::Mutex<Vec<GitFace>> {
+    static CACHE: std::sync::OnceLock<std::sync::Mutex<Vec<GitFace>>> = std::sync::OnceLock::new();
+    CACHE.get_or_init(|| std::sync::Mutex::new(Vec::new()))
+}
+
+fn git_face_uncached(dir: &str) -> (Option<String>, bool) {
+    let output = std::process::Command::new("git")
+        .args([
+            "-C",
+            dir,
+            "status",
+            "--porcelain=v1",
+            "-b",
+            "--untracked-files=no",
+        ])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .output();
+    let Ok(output) = output else {
+        return (None, false);
+    };
+    if !output.status.success() {
+        return (None, false);
+    }
+    parse_branch_status(&String::from_utf8_lossy(&output.stdout))
+}
+
+pub(crate) fn parse_branch_status(text: &str) -> (Option<String>, bool) {
+    let mut lines = text.lines();
+    let Some(header) = lines.next() else {
+        return (None, false);
+    };
+    let Some(rest) = header.trim().strip_prefix("## ") else {
+        return (None, false);
+    };
+    let name = if let Some(on) = rest.strip_prefix("No commits yet on ") {
+        on.split([' ', '.']).next().unwrap_or("").trim()
+    } else {
+        rest.split([' ', '.']).next().unwrap_or("").trim()
+    };
+    let branch = if name.is_empty() || name == "HEAD" {
+        Some("detached".to_string())
+    } else {
+        Some(name.to_string())
+    };
+    let dirty = lines.any(|line| !line.trim().is_empty());
+    (branch, dirty)
 }
 
 fn text(value: &Value, key: &str) -> Option<String> {
@@ -403,5 +551,17 @@ mod tests {
         assert!(runtime.tabs[1].focused);
         assert_eq!(runtime.panes[0].x, Some(26));
         assert_eq!(runtime.panes[0].y, Some(1));
+    }
+
+    #[test]
+    fn branch_status_reads_the_name_and_a_dirty_mark() {
+        let (branch, dirty) = parse_branch_status("## master...origin/master\n");
+        assert_eq!(branch.as_deref(), Some("master"));
+        assert!(!dirty);
+        let (branch, dirty) = parse_branch_status("## feature/one...origin/feature/one\n M src/main.rs\n");
+        assert_eq!(branch.as_deref(), Some("feature/one"));
+        assert!(dirty);
+        let (branch, _) = parse_branch_status("## HEAD (no branch)\n");
+        assert_eq!(branch.as_deref(), Some("detached"));
     }
 }

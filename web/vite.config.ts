@@ -68,6 +68,7 @@ export default defineConfig({
     proxy: {
       "/api": proxy(),
       "/content": proxy(),
+      "/gate": proxy(),
       "/plugins": proxy(),
       "/proxy": proxy(),
       "/ws": proxy(true),

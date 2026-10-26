@@ -149,8 +149,17 @@ pub fn plugin_file(config_dir: &Path, id: &str, relative: &str) -> anyhow::Resul
     if !is_relative_file(relative) {
         bail!("plugin file path is invalid");
     }
-    let root = plugins_dir(config_dir).join(id);
-    let path = root.join(relative);
+    let root = plugins_dir(config_dir)
+        .join(id)
+        .canonicalize()
+        .context("plugin was not found")?;
+    let path = root
+        .join(relative)
+        .canonicalize()
+        .context("plugin file was not found")?;
+    if !path.starts_with(&root) {
+        bail!("plugin file path is invalid");
+    }
     if !path.is_file() {
         bail!("plugin file was not found");
     }
@@ -243,5 +252,44 @@ mod tests {
         assert_eq!(manifest.id, "welcome");
         assert!(parse_manifest(r#"{"id":"../x","title":"Bad"}"#).is_err());
         assert!(parse_manifest(r#"{"id":"ok","title":"Ok","entry":"../secret"}"#).is_err());
+    }
+
+    #[test]
+    fn a_plugin_file_cannot_leave_its_directory() {
+        let root = std::env::temp_dir().join(format!("hwp-plugin-escape-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let plugin = root.join("plugins").join("welcome");
+        let outside = root.join("outside");
+        std::fs::create_dir_all(&plugin).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(plugin.join("index.html"), "ok").unwrap();
+        std::fs::write(outside.join("secret.txt"), "secret").unwrap();
+        let link = plugin.join("escape");
+        #[cfg(windows)]
+        {
+            let status = std::process::Command::new("cmd")
+                .args([
+                    "/c",
+                    "mklink",
+                    "/J",
+                    &link.display().to_string(),
+                    &outside.display().to_string(),
+                ])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .expect("creating a junction");
+            assert!(status.success(), "creating a junction");
+        }
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&outside, &link).expect("creating a symlink");
+        let err = plugin_file(&root, "welcome", "escape/secret.txt").unwrap_err();
+        let message = err.to_string();
+        assert!(
+            message.contains("invalid") || message.contains("not found"),
+            "{message}"
+        );
+        assert!(plugin_file(&root, "welcome", "index.html").is_ok());
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

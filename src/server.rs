@@ -3,10 +3,10 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use axum::body::Body;
+use axum::body::{Body, Bytes};
 use axum::extract::ws::WebSocketUpgrade;
-use axum::extract::{Query, State};
-use axum::http::{header, HeaderValue, Method, Request, StatusCode, Uri};
+use axum::extract::{Extension, Query, State};
+use axum::http::{header, HeaderMap, HeaderValue, Method, Request, StatusCode, Uri};
 use axum::middleware::{from_fn_with_state, Next};
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::{any, get, post, put};
@@ -37,6 +37,7 @@ pub struct AppState {
     pub controls: PaneControls,
     pub token: String,
     pub port: u16,
+    pub passes: crate::frame_pass::FramePasses,
 }
 
 pub struct ServerConfig {
@@ -71,6 +72,7 @@ pub fn build_app(config_dir: PathBuf, herdr_socket: PathBuf, port: u16) -> anyho
         controls: PaneControls::new(session_name_from_socket(&herdr_socket)),
         token,
         port,
+        passes: crate::frame_pass::FramePasses::new(),
     };
     let guard_state = state.clone();
 
@@ -84,6 +86,7 @@ pub fn build_app(config_dir: PathBuf, herdr_socket: PathBuf, port: u16) -> anyho
         .route("/api/active", put(set_active))
         .route("/api/tree", get(tree))
         .route("/api/frame", get(frame_policy))
+        .route("/api/frame-pass", post(issue_frame_pass))
         .route("/api/session/focus", post(focus_session))
         .route(
             "/api/sessions",
@@ -102,7 +105,8 @@ pub fn build_app(config_dir: PathBuf, herdr_socket: PathBuf, port: u16) -> anyho
         .route("/ws/watch", get(watch_ws))
         .route("/content/{*path}", get(crate::content::handle))
         .route("/plugins/{*path}", get(crate::plugins::handle))
-        .route("/proxy/{*path}", any(crate::proxy::handle));
+        .route("/proxy/{*path}", any(crate::proxy::handle))
+        .route("/gate/{*path}", any(gate_entry));
 
     router = if dist_dir.is_some() {
         router.fallback(get(frontend))
@@ -164,6 +168,9 @@ async fn guard(State(state): State<AppState>, req: Request<Body>, next: Next) ->
     if is_shell_document(&path) && origin.as_deref() == Some("null") {
         return deny(StatusCode::FORBIDDEN, "origin is not allowed");
     }
+    if path == "/gate" || path.starts_with("/gate/") {
+        return serve_gate(state, req, &path, next).await;
+    }
     if !is_page_asset(&path) {
         let presented = presented_token(&req, &path);
         let ok = presented
@@ -173,6 +180,46 @@ async fn guard(State(state): State<AppState>, req: Request<Body>, next: Next) ->
             return deny(StatusCode::UNAUTHORIZED, "viewer token is required");
         }
     }
+    let mut response = next.run(req).await;
+    stamp(&mut response);
+    response
+}
+
+async fn gate_entry(
+    State(state): State<AppState>,
+    method: Method,
+    uri: Uri,
+    headers: HeaderMap,
+    gate: Option<Extension<crate::frame_pass::ActiveGate>>,
+    body: Bytes,
+) -> Response {
+    if uri.path().starts_with("/content/") && (method == Method::GET || method == Method::HEAD) {
+        return crate::content::handle(State(state), uri).await;
+    }
+    if uri.path().starts_with("/proxy/") {
+        return crate::proxy::handle(State(state), method, uri, headers, gate, body).await;
+    }
+    deny(StatusCode::UNAUTHORIZED, "viewer token is required")
+}
+
+async fn serve_gate(state: AppState, mut req: Request<Body>, path: &str, next: Next) -> Response {
+    let Some(gate) = crate::frame_pass::parse_gate(path) else {
+        return deny(StatusCode::UNAUTHORIZED, "viewer token is required");
+    };
+    if !state.passes.authorize(&gate.secret, &gate.path, req.method()) {
+        return deny(StatusCode::UNAUTHORIZED, "viewer token is required");
+    }
+    let mut rewritten = gate.path;
+    if let Some(query) = req.uri().query() {
+        rewritten.push('?');
+        rewritten.push_str(query);
+    }
+    let Ok(uri) = rewritten.parse::<Uri>() else {
+        return deny(StatusCode::BAD_REQUEST, "path is invalid");
+    };
+    *req.uri_mut() = uri;
+    req.extensions_mut()
+        .insert(crate::frame_pass::ActiveGate { secret: gate.secret });
     let mut response = next.run(req).await;
     stamp(&mut response);
     response
@@ -222,6 +269,8 @@ fn is_page_asset(path: &str) -> bool {
         && !path.starts_with("/api/")
         && path != "/ws"
         && !path.starts_with("/ws/")
+        && path != "/gate"
+        && !path.starts_with("/gate/")
         && !is_framed_path(path)
 }
 
@@ -263,7 +312,7 @@ fn frame_load_allowed(req: &Request<Body>, path: &str) -> bool {
     if req.method() != Method::GET && req.method() != Method::HEAD {
         return false;
     }
-    if !is_framed_path(path) {
+    if path != "/plugins" && !path.starts_with("/plugins/") {
         return false;
     }
     let site = header_text(req, "sec-fetch-site");
@@ -498,12 +547,8 @@ pub async fn allowed_roots(state: &AppState) -> Vec<PathBuf> {
     roots
 }
 
-async fn tree(
-    State(state): State<AppState>,
-    Query(query): Query<TreeQuery>,
-) -> Result<Json<Value>, ApiError> {
-    let roots = allowed_roots(&state).await;
-    let entries = crate::files::list_children(&roots, std::path::Path::new(&query.path))
+async fn tree(Query(query): Query<TreeQuery>) -> Result<Json<Value>, ApiError> {
+    let entries = crate::files::list_children(std::path::Path::new(&query.path))
         .map_err(ApiError::bad)?;
     Ok(Json(json!({ "path": query.path, "entries": entries })))
 }
@@ -529,6 +574,7 @@ async fn frame_policy(
 }
 
 async fn inspect_frame(state: &AppState, url: &str) -> Option<&'static str> {
+    let original = url::Url::parse(url).ok()?;
     let mut current = url.to_string();
     for _ in 0..4 {
         let response = match state
@@ -557,8 +603,8 @@ async fn inspect_frame(state: &AppState, url: &str) -> Option<&'static str> {
             else {
                 return None;
             };
-            if next.scheme() != "http" && next.scheme() != "https" {
-                return None;
+            if next.scheme() != "http" && next.scheme() != "https" || !same_site(&original, &next) {
+                return Some("this site redirected to another host");
             }
             current = next.to_string();
             continue;
@@ -580,6 +626,25 @@ async fn inspect_frame(state: &AppState, url: &str) -> Option<&'static str> {
         return crate::open_target::embedding_refusal(&borrowed);
     }
     None
+}
+
+fn same_site(left: &url::Url, right: &url::Url) -> bool {
+    left.scheme() == right.scheme()
+        && left.host() == right.host()
+        && left.port_or_known_default() == right.port_or_known_default()
+}
+
+#[derive(Deserialize)]
+struct FramePassBody {
+    path: String,
+}
+
+async fn issue_frame_pass(
+    State(state): State<AppState>,
+    Json(body): Json<FramePassBody>,
+) -> Result<Json<Value>, ApiError> {
+    let src = state.passes.issue(&body.path).map_err(ApiError::bad)?;
+    Ok(Json(json!({ "src": src })))
 }
 
 async fn list_sessions() -> Result<Json<Value>, ApiError> {
@@ -716,20 +781,78 @@ async fn list_plugins(State(state): State<AppState>) -> Result<Json<Value>, ApiE
     Ok(Json(json!({ "plugins": plugins })))
 }
 
-async fn herdr_config() -> Json<Value> {
-    Json(crate::herdr_config::document())
+async fn herdr_config(State(state): State<AppState>) -> Json<Value> {
+    let doc = tokio::task::spawn_blocking(crate::herdr_config::document)
+        .await
+        .unwrap_or_else(|_| json!({}));
+    Json(with_integrations(&state, doc).await)
 }
 
 async fn put_herdr_config(
     State(state): State<AppState>,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, ApiError> {
-    let socket = state.runtime.client().logical_socket();
-    let session = crate::paths::session_name_from_socket(std::path::Path::new(&socket));
-    let doc = crate::herdr_config::apply(&body, session.as_deref())
+    if let Some(spec) = body.get("integration") {
+        let target = spec.get("target").and_then(Value::as_str).unwrap_or("");
+        let action = spec.get("action").and_then(Value::as_str).unwrap_or("");
+        if !integration_target(target) {
+            return Err(ApiError::bad("unknown integration"));
+        }
+        let method = match action {
+            "install" => "integration.install",
+            "uninstall" => "integration.uninstall",
+            _ => return Err(ApiError::bad("unknown integration action")),
+        };
+        state
+            .runtime
+            .client()
+            .call(method, json!({ "target": target }))
+            .await
+            .map_err(|err| ApiError::bad(err.to_string()))?;
+    }
+    let touches = body.get("theme").is_some()
+        || body.get("settings").is_some()
+        || body.get("keys").is_some()
+        || body.get("reload").and_then(Value::as_bool).unwrap_or(false);
+    let doc = if touches {
+        let socket = state.runtime.client().logical_socket();
+        let session = crate::paths::session_name_from_socket(std::path::Path::new(&socket));
+        crate::herdr_config::apply(&body, session.as_deref())
+            .await
+            .map_err(ApiError::bad)?
+    } else {
+        tokio::task::spawn_blocking(crate::herdr_config::document)
+            .await
+            .map_err(|_| ApiError::bad("could not read Herdr config"))?
+    };
+    Ok(Json(with_integrations(&state, doc).await))
+}
+
+fn integration_target(target: &str) -> bool {
+    let mut chars = target.chars();
+    matches!(chars.next(), Some(ch) if ch.is_ascii_lowercase())
+        && target.len() <= 40
+        && target
+            .chars()
+            .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '_' || ch == '-')
+}
+
+async fn with_integrations(state: &AppState, mut doc: Value) -> Value {
+    match state
+        .runtime
+        .client()
+        .call("integration.list", json!({}))
         .await
-        .map_err(ApiError::bad)?;
-    Ok(Json(doc))
+    {
+        Ok(result) => {
+            doc["integrations"] = result.get("integrations").cloned().unwrap_or(json!([]));
+        }
+        Err(err) => {
+            doc["integrations"] = json!([]);
+            doc["integrationError"] = json!(err.to_string());
+        }
+    }
+    doc
 }
 
 #[derive(Deserialize)]

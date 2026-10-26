@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { PaneView, WorkspaceView } from "../../types";
 import { useHost } from "../../host";
+import { useKeepMenuOnScreen } from "../../menuPlace";
+import { StatusMark } from "../StatusMark";
 
 const RANK = ["working", "blocked", "idle", "done", "unknown"];
 
@@ -23,10 +25,23 @@ export function FilesView({
   onOpen: (workspaceId: string) => void;
 }) {
   const host = useHost();
+  const symbols = host.config?.settings.find((field) => field.key === "status_indicators")?.value === "symbols";
+  const rows = host.config?.spaceRows?.length
+    ? host.config.spaceRows
+    : [
+        ["state_icon", "workspace"],
+        ["branch", "git_status"],
+      ];
+  const tokens = new Set(rows.flat());
   const menuRef = useRef<HTMLDivElement>(null);
   const seenRename = useRef(0);
   const seenClose = useRef(0);
   const [menu, setMenu] = useState<SpaceMenu | null>(null);
+  const menuBox = useKeepMenuOnScreen(
+    menuRef,
+    menu !== null,
+    menu ? `${menu.kind}:${menu.left ?? ""}:${menu.right ?? ""}:${menu.top ?? ""}:${menu.bottom ?? ""}` : "",
+  );
   const [mode, setMode] = useState<"rename" | "close" | null>(null);
   const [subjectId, setSubjectId] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
@@ -39,6 +54,8 @@ export function FilesView({
             workspaceId: pane.workspaceId,
             label: pane.workspaceId,
             focused: pane.focused,
+            branch: null,
+            dirty: false,
           }));
   const current = spaces.find((space) => space.focused) ?? spaces[0];
   const subject = spaces.find((space) => space.workspaceId === subjectId) ?? current;
@@ -126,8 +143,21 @@ export function FilesView({
                 className={space.focused ? "space-row is-current" : "space-row"}
                 onClick={() => onOpen(space.workspaceId)}
               >
-                <span className={`dot status-${spaceStatus(space, panes)}`} aria-hidden="true" />
-                <span>{space.label}</span>
+                {tokens.has("state_icon") ? (
+                  <StatusMark status={spaceStatus(space, panes)} symbols={symbols} />
+                ) : null}
+                <span className="space-copy">
+                  <span className="space-name">
+                    {space.label}
+                    {tokens.has("state_text") ? <span className="space-state"> {spaceStatus(space, panes)}</span> : null}
+                  </span>
+                  {tokens.has("branch") && space.branch ? (
+                    <span className="space-branch">
+                      {space.branch}
+                      {tokens.has("git_status") && space.dirty ? " *" : ""}
+                    </span>
+                  ) : null}
+                </span>
               </button>
             </li>
           ))}
@@ -200,7 +230,11 @@ export function FilesView({
               className="panel-menu space-menu"
               role="menu"
               ref={menuRef}
-              style={{ left: menu.left, right: menu.right, top: menu.top, bottom: menu.bottom }}
+              style={
+                menuBox
+                  ? { left: menuBox.left, top: menuBox.top, maxWidth: menuBox.maxWidth, maxHeight: menuBox.maxHeight }
+                  : { left: menu.left, right: menu.right, top: menu.top, bottom: menu.bottom }
+              }
             >
               {menu.kind === "host" ? (
                 <>

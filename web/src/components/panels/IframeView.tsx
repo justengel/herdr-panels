@@ -77,39 +77,60 @@ function EmbeddedPage({ panelId, url, suspended }: { panelId: string; url: strin
 function FramedPage({ url, proxy, title }: { url: string; proxy: boolean; title: string }) {
   const [ready, setReady] = useState(false);
   const [refusal, setRefusal] = useState<string | null>(null);
-  let src = url;
-  let error: string | null = null;
-  try {
-    src = frameSrc(url, proxy);
-  } catch {
-    error = "This iframe URL is invalid.";
-  }
+  const [src, setSrc] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let stopped = false;
     setReady(false);
     setRefusal(null);
-    if (!url || url.startsWith("/") || proxy) {
-      setReady(true);
+    setSrc(null);
+    setError(null);
+    let raw: string;
+    try {
+      raw = frameSrc(url, proxy);
+    } catch {
+      setError("This iframe URL is invalid.");
       return;
     }
-    api.frame(url).then(
-      (result) => {
-        if (stopped) return;
-        setRefusal(result.allowed ? null : result.reason || "This site refused to be embedded.");
+    const open = (next: string) => {
+      if (stopped) return;
+      setSrc(next);
+      if (!url || url.startsWith("/") || proxy) {
         setReady(true);
-      },
-      () => {
-        if (!stopped) setReady(true);
-      },
-    );
+        return;
+      }
+      api.frame(url).then(
+        (result) => {
+          if (stopped) return;
+          setRefusal(result.allowed ? null : result.reason || "This site refused to be embedded.");
+          setReady(true);
+        },
+        () => {
+          if (!stopped) setReady(true);
+        },
+      );
+    };
+    if (raw.startsWith("/content/") || raw.startsWith("/proxy/")) {
+      api.framePass(raw).then(
+        (gated) => open(gated),
+        () => {
+          if (!stopped) {
+            setError("This panel could not be opened.");
+            setReady(true);
+          }
+        },
+      );
+    } else {
+      open(raw);
+    }
     return () => {
       stopped = true;
     };
   }, [url, proxy]);
 
   if (error) return <div className="empty">{error}</div>;
-  if (!ready) return <div className="empty">Opening…</div>;
+  if (!ready || !src) return <div className="empty">Opening…</div>;
   if (refusal) return <div className="empty">{refusal}</div>;
   const local = proxy || src.startsWith("/");
   const sandbox = local

@@ -478,6 +478,87 @@ async fn ordinary_sites_are_not_proxied_and_may_refuse_to_be_framed() {
 }
 
 #[tokio::test]
+async fn frame_redirects_stay_on_the_original_host() {
+    let desk = desk().await;
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let home = Router::new()
+        .route(
+            "/page",
+            get(|| async {
+                let mut response = (StatusCode::OK, "pong").into_response();
+                response
+                    .headers_mut()
+                    .insert(header::CONTENT_TYPE, HeaderValue::from_static("text/plain"));
+                response
+            }),
+        )
+        .route(
+            "/go",
+            get(move || async move {
+                let mut response = (StatusCode::FOUND, "").into_response();
+                response.headers_mut().insert(
+                    header::LOCATION,
+                    HeaderValue::from_str(&format!("http://{addr}/page")).unwrap(),
+                );
+                response
+            }),
+        );
+    let home_server = tokio::spawn(async move {
+        axum::serve(listener, home).await.unwrap();
+    });
+    let (status, same) = desk
+        .call(
+            "GET",
+            &format!("/api/frame?{}", query_url(&format!("http://{addr}/go"))),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{same}");
+    assert_eq!(same["allowed"], true, "{same}");
+
+    let (other_url, other_server) = local_page(false).await;
+    let app = Router::new().route(
+        "/leave",
+        get(move || {
+            let other_url = other_url.clone();
+            async move {
+                let mut response = (StatusCode::FOUND, "").into_response();
+                response.headers_mut().insert(
+                    header::LOCATION,
+                    HeaderValue::from_str(&other_url).unwrap(),
+                );
+                response
+            }
+        }),
+    );
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let leave = listener.local_addr().unwrap();
+    let leave_server = tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    let (status, left) = desk
+        .call(
+            "GET",
+            &format!("/api/frame?{}", query_url(&format!("http://{leave}/leave"))),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{left}");
+    assert_eq!(left["allowed"], false, "{left}");
+    assert!(
+        left["reason"]
+            .as_str()
+            .unwrap_or("")
+            .contains("another host"),
+        "{left}"
+    );
+    home_server.abort();
+    other_server.abort();
+    leave_server.abort();
+}
+
+#[tokio::test]
 async fn a_tab_group_can_hold_several_panels_and_cannot_contain_another_group() {
     let desk = desk().await;
     let (status, layout) = desk.call("GET", "/api/layouts/desk", None).await;
@@ -755,8 +836,7 @@ async fn framed_files_load_without_a_token_in_the_url() {
             &[("sec-fetch-site", "same-origin")],
         )
         .await;
-    assert_eq!(status, StatusCode::OK, "{proxied}");
-    assert_eq!(proxied["raw"], "pong");
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "{proxied}");
     let (status, _) = desk
         .exchange(
             "GET",
@@ -769,6 +849,217 @@ async fn framed_files_load_without_a_token_in_the_url() {
         .await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
     open_server.abort();
+}
+
+#[tokio::test]
+async fn content_and_proxy_require_a_credential() {
+    let desk = desk().await;
+    std::fs::write(desk.workspace.join("secret.txt"), "top secret").unwrap();
+    std::fs::create_dir_all(desk.workspace.join("panels")).unwrap();
+    std::fs::write(
+        desk.workspace.join("panels").join("page.html"),
+        "<p>Chart</p>",
+    )
+    .unwrap();
+
+    let (status, open) = desk
+        .exchange(
+            "GET",
+            "/content/notes/welcome.md",
+            None,
+            None,
+            false,
+            &[("sec-fetch-site", "same-origin")],
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "{open}");
+
+    let (status, file) = desk.call("GET", "/content/notes/welcome.md", None).await;
+    assert_eq!(status, StatusCode::OK, "{file}");
+    assert!(file["raw"].as_str().unwrap_or("").contains("Hello"), "{file}");
+
+    let (status, _) = desk
+        .call_anonymous(
+            "POST",
+            "/api/frame-pass",
+            Some(json!({"path": "/content/notes/welcome.md"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+    let (status, minted) = desk
+        .call(
+            "POST",
+            "/api/frame-pass",
+            Some(json!({"path": "/content/panels/page.html?bridge=1"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{minted}");
+    let src = minted["src"].as_str().unwrap().to_string();
+    assert!(src.starts_with("/gate/"), "{src}");
+    assert!(src.contains("/content/panels/page.html?bridge=1"), "{src}");
+    let secret = src
+        .trim_start_matches("/gate/")
+        .split('/')
+        .next()
+        .unwrap()
+        .to_string();
+
+    let (status, page) = desk.call_anonymous("GET", &src, None).await;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    assert!(page["raw"].as_str().unwrap_or("").contains("Chart"), "{page}");
+    assert!(
+        page["raw"].as_str().unwrap_or("").contains("hwp-bridge"),
+        "{page}"
+    );
+
+    let (status, leaked) = desk
+        .call_anonymous(
+            "GET",
+            &format!("/gate/{secret}/content/secret.txt"),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "{leaked}");
+
+    std::fs::write(desk.workspace.join("root.html"), "<p>Root</p>").unwrap();
+    let (status, minted) = desk
+        .call(
+            "POST",
+            "/api/frame-pass",
+            Some(json!({"path": "/content/root.html"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{minted}");
+    let root_src = minted["src"].as_str().unwrap().to_string();
+    let (status, root_page) = desk.call_anonymous("GET", &root_src, None).await;
+    assert_eq!(status, StatusCode::OK, "{root_page}");
+    assert!(
+        root_page["raw"].as_str().unwrap_or("").contains("Root"),
+        "{root_page}"
+    );
+    let (status, _) = desk
+        .call_anonymous(
+            "GET",
+            &root_src.replace("/content/root.html", "/content/secret.txt"),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+    let (status, api) = desk
+        .call_anonymous("GET", &format!("/gate/{secret}/api/health"), None)
+        .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "{api}");
+    let (status, _) = desk
+        .exchange(
+            "GET",
+            "/api/health",
+            None,
+            None,
+            false,
+            &[("authorization", &format!("Bearer {secret}"))],
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+    let (status, posted) = desk
+        .call_anonymous("POST", &format!("/gate/{secret}/content/panels/page.html"), None)
+        .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "{posted}");
+
+    let (status, broad) = desk
+        .call("POST", "/api/frame-pass", Some(json!({"path": "/content/"})))
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{broad}");
+    let (status, foreign) = desk
+        .call(
+            "POST",
+            "/api/frame-pass",
+            Some(json!({"path": "/proxy/http/example.com/page"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{foreign}");
+
+    let (open_url, open_server) = local_page(false).await;
+    let port = open_url
+        .trim_start_matches("http://")
+        .split('/')
+        .next()
+        .unwrap();
+    let (status, bare) = desk
+        .exchange(
+            "GET",
+            &format!("/proxy/http/{port}/page"),
+            None,
+            None,
+            false,
+            &[("sec-fetch-site", "same-origin")],
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "{bare}");
+
+    let (status, minted) = desk
+        .call(
+            "POST",
+            "/api/frame-pass",
+            Some(json!({"path": format!("/proxy/http/{port}/page")})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{minted}");
+    let proxy_src = minted["src"].as_str().unwrap().to_string();
+    let (status, proxied) = desk.call_anonymous("GET", &proxy_src, None).await;
+    assert_eq!(status, StatusCode::OK, "{proxied}");
+    assert_eq!(proxied["raw"], "pong");
+
+    let other = proxy_src.replace(port, "127.0.0.1:1");
+    let (status, _) = desk.call_anonymous("GET", &other, None).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+    let (status, authed) = desk
+        .call("GET", &format!("/proxy/http/{port}/page"), None)
+        .await;
+    assert_eq!(status, StatusCode::OK, "{authed}");
+    assert_eq!(authed["raw"], "pong");
+    open_server.abort();
+
+    let html_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let html_addr = html_listener.local_addr().unwrap();
+    let html_app = Router::new().route(
+        "/page",
+        get(|| async {
+            let mut response = (
+                StatusCode::OK,
+                "<html><head></head><body><img src=\"chart.png\"></body></html>",
+            )
+                .into_response();
+            response.headers_mut().insert(
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("text/html; charset=utf-8"),
+            );
+            response
+        }),
+    );
+    let html_server = tokio::spawn(async move {
+        axum::serve(html_listener, html_app).await.unwrap();
+    });
+    let (status, minted) = desk
+        .call(
+            "POST",
+            "/api/frame-pass",
+            Some(json!({"path": format!("/proxy/http/{html_addr}/page")})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{minted}");
+    let html_src = minted["src"].as_str().unwrap();
+    let (status, html) = desk.call_anonymous("GET", html_src, None).await;
+    assert_eq!(status, StatusCode::OK, "{html}");
+    let raw = html["raw"].as_str().unwrap_or("");
+    assert!(
+        raw.contains(&format!("/gate/")) && raw.contains(&format!("/proxy/http/{html_addr}/")),
+        "{raw}"
+    );
+    html_server.abort();
 }
 
 #[tokio::test]

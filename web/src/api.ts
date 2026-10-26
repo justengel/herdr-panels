@@ -1,14 +1,30 @@
 import type { Bootstrap, ChatMessage, LayoutDocument, PanelConfig, RuntimeSnapshot } from "./types";
 import { baseName as pathName, contentSegments } from "./paths";
 
+export interface HerdrChoice {
+  value: string;
+  detail?: string;
+}
+
 export interface HerdrField {
   section: string;
   key: string;
   group?: string;
+  audience?: "herdr" | "panels" | "both";
   label: string;
-  kind: "bool" | "string" | "int" | "enum";
+  help?: string;
+  kind: "bool" | "string" | "int" | "enum" | "tokens";
   value: string | number | boolean;
   options: string[];
+  choices?: HerdrChoice[];
+}
+
+export interface HerdrIntegration {
+  target: string;
+  label: string;
+  state: string;
+  available: boolean;
+  command?: string;
 }
 
 export interface HerdrConfig {
@@ -17,6 +33,9 @@ export interface HerdrConfig {
   themes: string[];
   settings: HerdrField[];
   keys: HerdrField[];
+  spaceRows?: string[][];
+  integrations?: HerdrIntegration[];
+  integrationError?: string;
 }
 
 function viewerToken(): string {
@@ -123,6 +142,7 @@ export const api = {
     settings?: Record<string, string | number | boolean>;
     keys?: Record<string, string>;
     reload?: boolean;
+    integration?: { target: string; action: "install" | "uninstall" };
   }) =>
     request<HerdrConfig>("/api/herdr/config", {
       method: "PUT",
@@ -147,6 +167,11 @@ export const api = {
     }).then((body) => body.panel),
   frame: (url: string) =>
     request<{ allowed: boolean; reason?: string }>(`/api/frame?url=${encodeURIComponent(url)}`),
+  framePass: (path: string) =>
+    request<{ src: string }>("/api/frame-pass", {
+      method: "POST",
+      body: JSON.stringify({ path }),
+    }).then((body) => body.src),
   open: (body: {
     target: string;
     panelId?: string;

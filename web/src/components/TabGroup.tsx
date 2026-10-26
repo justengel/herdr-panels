@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { blankTab, freshTabId } from "../layoutEdit";
+import { useKeepMenuOnScreen } from "../menuPlace";
 import { baseName } from "../paths";
 import type { PanelConfig, PanelTab, TabsPanel } from "../types";
 
@@ -19,6 +20,7 @@ export function TabGroup({
   const [menu, setMenu] = useState<{ tabId: string; x: number; y: number } | null>(null);
   const [editing, setEditing] = useState<string | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+  const menuBox = useKeepMenuOnScreen(menuRef, menu !== null, menu ? `${menu.tabId}:${menu.x}:${menu.y}` : "");
   const skipRename = useRef(false);
   const vertical = group.edge === "left" || group.edge === "right";
 
@@ -153,7 +155,11 @@ export function TabGroup({
               ref={menuRef}
               className="panel-menu tab-menu"
               role="menu"
-              style={{ left: menu.x, top: menu.y }}
+              style={
+                menuBox
+                  ? { left: menuBox.left, top: menuBox.top, maxWidth: menuBox.maxWidth, maxHeight: menuBox.maxHeight }
+                  : { left: menu.x, top: menu.y }
+              }
             >
               <button
                 type="button"

@@ -1,24 +1,15 @@
 use axum::body::Body;
-use axum::extract::{Query, State};
+use axum::extract::State;
 use axum::http::{header, HeaderValue, Response, StatusCode, Uri};
 use axum::response::IntoResponse;
-use serde::Deserialize;
 
 use crate::server::AppState;
 
+const FRAME_SELECT: &str = include_str!("../assets/frame-select.js");
 const BRIDGE: &str = include_str!("../assets/panel-bridge.js");
 const MAX_FILE: usize = 8 * 1024 * 1024;
 
-#[derive(Deserialize)]
-pub struct ContentQuery {
-    bridge: Option<String>,
-}
-
-pub async fn handle(
-    State(state): State<AppState>,
-    uri: Uri,
-    Query(query): Query<ContentQuery>,
-) -> Response<Body> {
+pub async fn handle(State(state): State<AppState>, uri: Uri) -> Response<Body> {
     let Some(requested) = uri.path().strip_prefix("/content/") else {
         return (StatusCode::NOT_FOUND, "missing content path").into_response();
     };
@@ -46,7 +37,12 @@ pub async fn handle(
         Err(err) => return (StatusCode::NOT_FOUND, err.to_string()).into_response(),
     };
 
-    let inject = query.bridge.as_deref() == Some("1");
+    let inject = uri.query().is_some_and(|query| {
+        query.split('&').any(|pair| {
+            let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
+            percent_decode(key) == "bridge" && percent_decode(value) == "1"
+        })
+    });
     let mime = mime_guess::from_path(&path).first_or_octet_stream();
     let is_html = mime.essence_str() == "text/html"
         || path.extension().and_then(|ext| ext.to_str()) == Some("html");
@@ -82,7 +78,7 @@ pub fn inject_bridge(html: &str) -> String {
     if html.contains("/* hwp-bridge */") {
         return html.to_string();
     }
-    let script = format!("<script>{BRIDGE}</script>");
+    let script = format!("<script>{FRAME_SELECT}\n{BRIDGE}</script>");
     let lower = html.to_ascii_lowercase();
     if let Some(start) = lower.find("<head") {
         if let Some(end) = lower[start..].find('>') {

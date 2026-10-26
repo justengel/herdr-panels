@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { AgentView, PaneView, WorkspaceView } from "../../types";
 import { useHost } from "../../host";
 import { agentSortLabel, nextAgentSort, orderAgents, type AgentSort } from "../../agentOrder";
+import { StatusMark } from "../StatusMark";
 
 interface AgentRow {
   paneId: string;
@@ -23,6 +24,7 @@ export function AgentsView({
   onFocus: (paneId: string) => void;
 }) {
   const host = useHost();
+  const symbols = host.config?.settings.find((field) => field.key === "status_indicators")?.value === "symbols";
   const configured = host.config?.settings.find((field) => field.key === "agent_panel_sort")?.value;
   const stored: AgentSort = configured === "priority" ? "priority" : "spaces";
   const [override, setOverride] = useState<AgentSort | null>(null);
@@ -87,7 +89,7 @@ export function AgentsView({
         {ordered.map((agent) => (
           <li key={agent.paneId}>
             <button type="button" className="agent-row" onClick={() => onFocus(agent.paneId)}>
-              <span className={`dot status-${agent.status}`} aria-hidden="true" />
+              <StatusMark status={agent.status} symbols={symbols} />
               <span className="agent-copy">
                 <span className="agent-name">{agent.title}</span>
                 {agent.kind ? <span className="agent-kind">{agent.kind}</span> : null}

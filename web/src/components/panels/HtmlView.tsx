@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import frameSelect from "../../../../assets/frame-select.js?raw";
 import bridge from "../../../../assets/panel-bridge.js?raw";
 import { api, contentUrl } from "../../api";
 
@@ -46,12 +47,36 @@ export function HtmlView({ path, inline, title, control = false, design = false,
         });
     };
     window.addEventListener("message", onMessage);
+    let cancelled = false;
     if (path) {
-      frame.src = contentUrl(path, true);
+      const target = contentUrl(path, false);
+      void api
+        .framePass(target)
+        .then(async (src) => {
+          const response = await fetch(src);
+          if (!response.ok) throw new Error("The page could not be loaded");
+          return { src, html: await response.text() };
+        })
+        .then(
+          ({ src, html }) => {
+            const node = frameRef.current;
+            if (cancelled || !node) return;
+            node.removeAttribute("src");
+            delete node.dataset.selectBridge;
+            node.srcdoc = pageWithBridge(html, directoryHref(src));
+          },
+          () => {
+            if (!cancelled && frameRef.current) frameRef.current.removeAttribute("src");
+          },
+        );
     } else if (inline) {
-      frame.srcdoc = `<!doctype html><html><head><meta charset="utf-8"><script>${bridge}</script></head><body>${inline}</body></html>`;
+      frame.removeAttribute("src");
+      frame.srcdoc = `<!doctype html><html><head><meta charset="utf-8"><script>${frameSelect}\n${bridge}</script></head><body>${inline}</body></html>`;
     }
-    return () => window.removeEventListener("message", onMessage);
+    return () => {
+      cancelled = true;
+      window.removeEventListener("message", onMessage);
+    };
   }, [path, inline]);
 
   useEffect(() => {
@@ -73,6 +98,27 @@ export function HtmlView({ path, inline, title, control = false, design = false,
       sandbox="allow-scripts"
     />
   );
+}
+
+function directoryHref(src: string): string {
+  const url = new URL(src, window.location.href);
+  url.search = "";
+  url.hash = "";
+  return `${url.origin}${url.pathname.replace(/[^/]*$/, "")}`;
+}
+
+function pageWithBridge(html: string, baseHref: string): string {
+  const base = /<base\b/i.test(html)
+    ? ""
+    : `<base href="${baseHref.replace(/&/g, "&amp;").replace(/"/g, "&quot;")}">`;
+  const script = `<script>${frameSelect}\n${bridge}</script>`;
+  const lower = html.toLowerCase();
+  const start = lower.indexOf("<head");
+  if (start >= 0) {
+    const end = html.indexOf(">", start);
+    if (end >= 0) return `${html.slice(0, end + 1)}${base}${script}${html.slice(end + 1)}`;
+  }
+  return `<!doctype html><html><head><meta charset="utf-8">${base}${script}</head><body>${html}</body></html>`;
 }
 
 async function fulfill(message: BridgeMessage, control: boolean): Promise<unknown> {

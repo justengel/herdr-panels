@@ -1,9 +1,12 @@
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
-use tauri::webview::Webview;
+use tauri::webview::{PageLoadEvent, Webview};
 use tauri::{AppHandle, LogicalPosition, LogicalSize, Manager, State};
 use url::Url;
+
+const FRAME_SELECT: &str = include_str!("../../assets/frame-select.js");
 
 pub const VIEWER: &str = "http://127.0.0.1:4737";
 
@@ -14,10 +17,28 @@ struct Slot {
     shown: bool,
 }
 
-pub struct BrowserHost(Mutex<HashMap<String, Slot>>);
+pub struct BrowserHost {
+    slots: Mutex<HashMap<String, Slot>>,
+    selecting: AtomicBool,
+}
 
 pub fn host() -> BrowserHost {
-    BrowserHost(Mutex::new(HashMap::new()))
+    BrowserHost {
+        slots: Mutex::new(HashMap::new()),
+        selecting: AtomicBool::new(false),
+    }
+}
+
+fn select_boot() -> String {
+    let mut script = String::from(FRAME_SELECT);
+    script.push_str("\nwindow.__hwpInstallSelect({draw:true,send:function(){}});\n");
+    script
+}
+
+fn select_on() -> String {
+    let mut script = select_boot();
+    script.push_str("window.__hwpSetSelect(true);\n");
+    script
 }
 
 pub fn browser_target(label: &str, url: &str) -> Result<Url, String> {
@@ -85,7 +106,7 @@ async fn place_browser(
         "browser {label} at {x:.0},{y:.0} {width:.0}x{height:.0} visible={visible}"
     );
     let target = parsed.as_str().to_string();
-    let mut guard = host.0.lock().map_err(|_| "browser host is locked".to_string())?;
+    let mut guard = host.slots.lock().map_err(|_| "browser host is locked".to_string())?;
     if let Some(slot) = guard.get_mut(&label) {
         if generation < slot.generation {
             return Ok(());
@@ -104,9 +125,21 @@ async fn place_browser(
     let window = app
         .get_window("main")
         .ok_or_else(|| "the desktop window is not open".to_string())?;
+    let boot = select_boot();
     let view = window
         .add_child(
-            tauri::webview::WebviewBuilder::new(&label, tauri::WebviewUrl::External(parsed)),
+            tauri::webview::WebviewBuilder::new(&label, tauri::WebviewUrl::External(parsed))
+                .initialization_script(boot)
+                .on_page_load(|webview, payload| {
+                    if payload.event() != PageLoadEvent::Finished {
+                        return;
+                    }
+                    let host = webview.state::<BrowserHost>();
+                    if !host.selecting.load(Ordering::Relaxed) {
+                        return;
+                    }
+                    let _ = webview.eval(select_on());
+                }),
             LogicalPosition::new(x, y),
             LogicalSize::new(width, height),
         )
@@ -125,7 +158,7 @@ async fn place_browser(
 
 #[tauri::command]
 async fn close_browser(host: State<'_, BrowserHost>, label: String, generation: u64) -> Result<(), String> {
-    let mut guard = host.0.lock().map_err(|_| "browser host is locked".to_string())?;
+    let mut guard = host.slots.lock().map_err(|_| "browser host is locked".to_string())?;
     let Some(slot) = guard.get(&label) else {
         return Ok(());
     };
@@ -136,10 +169,29 @@ async fn close_browser(host: State<'_, BrowserHost>, label: String, generation: 
     slot.view.close().map_err(|err| err.to_string())
 }
 
+#[tauri::command]
+async fn set_browser_select(host: State<'_, BrowserHost>, enabled: bool) -> Result<(), String> {
+    host.selecting.store(enabled, Ordering::Relaxed);
+    let script = if enabled {
+        select_on()
+    } else {
+        "if (window.__hwpSetSelect) window.__hwpSetSelect(false);".to_string()
+    };
+    let guard = host.slots.lock().map_err(|_| "browser host is locked".to_string())?;
+    for slot in guard.values() {
+        let _ = slot.view.eval(script.clone());
+    }
+    Ok(())
+}
+
 pub fn run() {
     tauri::Builder::default()
         .manage(host())
-        .invoke_handler(tauri::generate_handler![place_browser, close_browser])
+        .invoke_handler(tauri::generate_handler![
+            place_browser,
+            close_browser,
+            set_browser_select
+        ])
         .run(tauri::generate_context!())
         .expect("error while running the desktop shell");
 }

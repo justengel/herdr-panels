@@ -876,8 +876,7 @@ async fn read_static(
         PanelConfig::Files => Ok(("spaces".into(), Vec::new())),
         PanelConfig::Agents => Ok(("agents".into(), Vec::new())),
         PanelConfig::Explorer { path } => {
-            let roots = crate::server::allowed_roots(state).await;
-            let listed = crate::files::list_children(&roots, std::path::Path::new(path))
+            let listed = crate::files::list_children(std::path::Path::new(path))
                 .map_err(AgentError::bad)?;
             let text = listed
                 .iter()

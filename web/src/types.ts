@@ -140,6 +140,8 @@ export interface WorkspaceView {
   label: string;
   focused: boolean;
   root?: string | null;
+  branch?: string | null;
+  dirty?: boolean;
 }
 
 export interface TabView {

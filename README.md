@@ -138,9 +138,7 @@ POST /api/agent/say       {"to":"chat"|"*","from":"planner","text":"look at the 
 
 ### Layout JSON
 
-A layout is either a `split` (`direction` is `row` or `column`, `ratio` is the first child's share), a `grid` of weighted tracks and cells, or a `panel`. Files live in `<config>/layouts/<id>.json`. The id and the filename must match. `settings.json` stores `activeLayout` and optional `contentRoots` (extra directories Markdown and HTML panels may read).
-
-Relative content paths resolve under the config directory first, then each content root. `..` is rejected.
+A layout is either a `split` (`direction` is `row` or `column`, `ratio` is the first child's share), a `grid` of weighted tracks and cells, or a `panel`. Files live in `<config>/layouts/<id>.json`. The id and the filename must match. `settings.json` stores `activeLayout` and optional `contentRoots`. Those directories, the open workspace folders, and pane directories are where a relative path is looked up. An absolute path can be any file this user can read. A relative path cannot contain `..`.
 
 ### Custom HTML bridge
 
@@ -160,7 +158,7 @@ await herdrPanels.sendKeys("w1:p1", ["enter"])
 
 The server refuses any non-loopback bind. The first start writes one viewer token to `auth-token` in the config directory and does not print it. On Unix that file is mode `0600`. `/api` and `/ws` require the token. The page receives it in its HTML, sends `Authorization: Bearer` on API calls, and puts it on the websocket URL as `token`. Ordinary HTTP requests ignore a `token` query parameter. `herdr-panels token rotate` replaces the file. `herdr-panels token set <value>` stores a token you created, from 32 to 256 characters. Restart the viewer and reload the page afterward. `HERDR_PANELS_TOKEN` overrides the file for that process and is not written to disk.
 
-A browser `Origin`, when one is present, must be this viewer's own port on `localhost`, `127.0.0.1`, or `::1`, or the Vite dev server on port 5173. The shell page is not served to a `null` origin. Plugin, content, and proxy documents still load in the viewer's own frames without putting the token in those URLs.
+A browser `Origin`, when one is present, must be this viewer's own port on `localhost`, `127.0.0.1`, or `::1`, or the Vite dev server on port 5173. The shell page is not served to a `null` origin. Plugin files load in the viewer's own frames without the token, because those files are the installed plugin. Content files and the loopback proxy require the token. The page mints a separate pass for each content or proxy frame, and the frame address carries that pass so its own images and scripts still load. The pass is not the viewer token. It covers one content directory, or one loopback proxy target, and it cannot call the API. `/api/frame` does not follow a redirect that leaves the site it was asked about.
 
 The iframe proxy accepts only `localhost`, `127.0.0.1`, and `::1`, and it does not forward `Cookie`, `Authorization`, or `Set-Cookie`. Plugin frames and proxied frames are sandboxed. A remote page keeps its own origin so its cookies still work, and it cannot navigate the viewer window. An HTML panel can type into a pane only when `"control": true`.
 
@@ -182,7 +180,7 @@ npm install
 npm run dev
 ```
 
-Open http://127.0.0.1:5173. The Vite server proxies API, content, plugin, proxy, and websocket traffic to port 4737. Start the viewer first so `auth-token` exists; Vite reads that file, or `HERDR_PANELS_TOKEN` when it is set.
+Open http://127.0.0.1:5173. The Vite server proxies API, content, frame, plugin, proxy, and websocket traffic to port 4737. Start the viewer first so `auth-token` exists; Vite reads that file, or `HERDR_PANELS_TOKEN` when it is set.
 
 `herdr-panels --open` and `cargo run -- --open` still start the server and open a browser tab.
 
@@ -235,7 +233,7 @@ cargo run -- server --herdr-session demo
 
 ## Desktop shell
 
-`src-tauri` opens this same viewer in a native window. How to start it is in [Install and run](#install-and-run). A browser panel whose address is `http` or `https` is a child webview laid on that panel's content rectangle, so the site is its own top-level page. Moving a divider sends the new rectangle to the webview. A right-click menu stays on screen and the webview shifts out from under it. The settings dialog, design mode, element selection, and a panel drag hide the webview so those controls can take the pointer. A normal browser tab still uses an iframe.
+`src-tauri` opens this same viewer in a native window. How to start it is in [Install and run](#install-and-run). A browser panel whose address is `http` or `https` is a child webview laid on that panel's content rectangle, so the site is its own top-level page. Moving a divider sends the new rectangle to the webview. A right-click menu stays on screen and the webview shifts out from under it. The settings dialog, design mode, and a panel drag hide the webview so those controls can take the pointer. Element selection stays on the page and runs inside it. A normal browser tab still uses an iframe.
 
 ## Development checks
 

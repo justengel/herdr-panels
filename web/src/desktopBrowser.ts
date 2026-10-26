@@ -79,7 +79,7 @@ function cutAround(box: BrowserBox, obstacle: BrowserBox): BrowserBox | null {
 }
 
 export function menuObstacles(): BrowserBox[] {
-  return [...document.querySelectorAll(".panel-menu")].flatMap((node) => {
+  return [...document.querySelectorAll(".panel-menu, .select-menu")].flatMap((node) => {
     const rect = node.getBoundingClientRect();
     const width = Math.round(rect.width);
     const height = Math.round(rect.height);
@@ -90,8 +90,8 @@ export function menuObstacles(): BrowserBox[] {
 
 export function browserBlocked(): boolean {
   const body = document.body;
-  if (body.classList.contains("is-selecting") || body.classList.contains("panel-dragging")) return true;
-  return document.querySelector(".settings-backdrop, .select-menu") !== null;
+  if (body.classList.contains("panel-dragging")) return true;
+  return document.querySelector(".settings-backdrop") !== null;
 }
 
 let generation = 0;

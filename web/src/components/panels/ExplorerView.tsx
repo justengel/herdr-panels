@@ -39,9 +39,10 @@ export function ExplorerView({
   }, [path, roots, onEnter]);
 
   useEffect(() => setDraft(plainPath(path)), [path]);
+  useEffect(() => setError(null), [path]);
 
   const parent = parentOf(path);
-  const canUp = parent.length > 0 && roots.some((root) => nested(parent, root.path));
+  const canUp = parent.length > 0 && !samePath(parent, path);
 
   return (
     <div className="explorer">
@@ -65,31 +66,34 @@ export function ExplorerView({
           </button>
         </div>
       )}
-      {error ? <div className="empty">{error}</div> : null}
-      <div className="explorer-tree">
-        {path ? (
-          <TreeBranch
-            path={plainPath(path)}
-            name={baseName(path) || plainPath(path)}
-            depth={0}
-            startOpen
-            onOpenFile={onOpenFile}
-            onError={setError}
-          />
-        ) : (
-          roots.map((root) => (
+      {error ? (
+        <div className="empty">{error}</div>
+      ) : (
+        <div className="explorer-tree">
+          {path ? (
             <TreeBranch
-              key={root.path}
-              path={plainPath(root.path)}
-              name={root.label}
+              path={plainPath(path)}
+              name={baseName(path) || plainPath(path)}
               depth={0}
-              startOpen={false}
+              startOpen
               onOpenFile={onOpenFile}
               onError={setError}
             />
-          ))
-        )}
-      </div>
+          ) : (
+            roots.map((root) => (
+              <TreeBranch
+                key={root.path}
+                path={plainPath(root.path)}
+                name={root.label}
+                depth={0}
+                startOpen={false}
+                onOpenFile={onOpenFile}
+                onError={setError}
+              />
+            ))
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -117,6 +121,7 @@ function TreeBranch({
   useEffect(() => {
     if (!open) return;
     let stopped = false;
+    setEntries(null);
     api.tree(path).then(
       (result) => {
         if (!stopped) {
@@ -125,7 +130,10 @@ function TreeBranch({
         }
       },
       (err: unknown) => {
-        if (!stopped) onError(err instanceof Error ? err.message : "Could not read that folder");
+        if (!stopped) {
+          setEntries(null);
+          onError(err instanceof Error ? err.message : "Could not read that folder");
+        }
       },
     );
     return () => {
@@ -205,8 +213,4 @@ function FileIcon() {
 
 function parentOf(path: string): string {
   return parentPath(path);
-}
-
-function nested(path: string, root: string): boolean {
-  return samePath(path, root);
 }

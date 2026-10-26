@@ -1,5 +1,5 @@
 use axum::body::Body;
-use axum::extract::State;
+use axum::extract::{Extension, State};
 use axum::http::{header, HeaderMap, HeaderValue, Method, Response, StatusCode, Uri};
 use serde_json::json;
 
@@ -19,6 +19,7 @@ pub async fn handle(
     method: Method,
     uri: Uri,
     headers: HeaderMap,
+    gate: Option<Extension<crate::frame_pass::ActiveGate>>,
     body: axum::body::Bytes,
 ) -> Response<Body> {
     if !matches!(
@@ -81,7 +82,13 @@ pub async fn handle(
         .and_then(|value| value.to_str().ok())
         .unwrap_or("")
         .to_string();
-    let prefix = format!("/proxy/{}/{}", target.scheme, target.authority);
+    let prefix = match &gate {
+        Some(Extension(gate)) => format!(
+            "/gate/{}/proxy/{}/{}",
+            gate.secret, target.scheme, target.authority
+        ),
+        None => format!("/proxy/{}/{}", target.scheme, target.authority),
+    };
     let origin = format!("{}://{}", target.scheme, target.authority);
     let body_bytes = if content_type.starts_with("text/html") {
         inject_base(&bytes, &prefix, &target.tail)

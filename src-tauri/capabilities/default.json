@@ -11,6 +11,7 @@
   "permissions": [
     "core:default",
     "allow-place-browser",
-    "allow-close-browser"
+    "allow-close-browser",
+    "allow-set-browser-select"
   ]
 }

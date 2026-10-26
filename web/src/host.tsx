@@ -23,6 +23,7 @@ interface HostValue {
   applyThemeNow: (name: string) => Promise<void>;
   saveSettings: (settings: Record<string, string | number | boolean>) => Promise<void>;
   saveKeys: (keys: Record<string, string>) => Promise<void>;
+  setIntegration: (target: string, action: "install" | "uninstall") => Promise<void>;
   setAgentOrder: (sort: "spaces" | "priority") => Promise<void>;
 }
 
@@ -258,6 +259,12 @@ export function HostProvider({
     }
   }
 
+  async function setIntegration(target: string, action: "install" | "uninstall") {
+    const doc = await api.saveHerdrConfig({ integration: { target, action } });
+    setConfig(doc);
+    noticeRef.current(action === "install" ? "Integration installed" : "Integration removed");
+  }
+
   async function saveKeys(keys: Record<string, string>) {
     const doc = await api.saveHerdrConfig({ keys });
     setConfig(doc);
@@ -297,6 +304,7 @@ export function HostProvider({
     applyThemeNow,
     saveSettings,
     saveKeys,
+    setIntegration,
     setAgentOrder,
   };
 
@@ -312,6 +320,7 @@ export function HostProvider({
           onApplyTheme={applyThemeNow}
           onSaveSettings={saveSettings}
           onSaveKeys={saveKeys}
+          onIntegration={setIntegration}
         />
       ) : null}
     </HostContext.Provider>

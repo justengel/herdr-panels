@@ -11,23 +11,13 @@ pub struct TreeEntry {
     pub kind: String,
 }
 
-pub fn list_children(roots: &[PathBuf], requested: &Path) -> anyhow::Result<Vec<TreeEntry>> {
-    if roots.is_empty() {
-        bail!("no open directory");
-    }
+pub fn list_children(requested: &Path) -> anyhow::Result<Vec<TreeEntry>> {
     if requested.as_os_str().is_empty() {
         bail!("directory path is empty");
     }
     let requested = canonicalize_existing(requested)?;
-    let allowed = roots
-        .iter()
-        .filter_map(|root| canonicalize_existing(root).ok())
-        .collect::<Vec<_>>();
-    let inside = allowed
-        .iter()
-        .any(|root| requested == *root || requested.starts_with(root));
-    if !inside {
-        bail!("that directory is outside the open workspaces");
+    if !requested.is_dir() {
+        bail!("directory was not found");
     }
     let mut entries = Vec::new();
     for entry in fs::read_dir(&requested)? {
@@ -61,12 +51,6 @@ pub(crate) fn plain_path(path: &Path) -> String {
 }
 
 fn canonicalize_existing(path: &Path) -> anyhow::Result<PathBuf> {
-    if path
-        .components()
-        .any(|part| matches!(part, std::path::Component::ParentDir))
-    {
-        bail!("directory path cannot contain ..");
-    }
     fs::canonicalize(path).map_err(|_| anyhow::anyhow!("directory was not found"))
 }
 
@@ -75,20 +59,24 @@ mod tests {
     use super::*;
 
     #[test]
-    fn lists_a_workspace_child_and_rejects_its_parent() {
-        let root = std::env::temp_dir().join(format!("hwp-tree-{}", std::process::id()));
-        let child = root.join("src");
-        fs::create_dir_all(&child).unwrap();
+    fn lists_a_directory_and_its_parent() {
+        let parent = std::env::temp_dir().join(format!("hwp-tree-parent-{}", std::process::id()));
+        let root = parent.join("project");
+        fs::create_dir_all(root.join("src")).unwrap();
         fs::write(root.join("readme.txt"), "hi").unwrap();
-        let listed = list_children(std::slice::from_ref(&root), &root).unwrap();
+        let listed = list_children(&root).unwrap();
         assert!(listed
             .iter()
             .any(|entry| entry.name == "src" && entry.kind == "dir"));
         assert!(listed
             .iter()
             .any(|entry| entry.name == "readme.txt" && entry.kind == "file"));
-        assert!(list_children(std::slice::from_ref(&root), &std::env::temp_dir()).is_err());
-        let _ = fs::remove_dir_all(&root);
+        let above = list_children(&parent).unwrap();
+        assert!(above
+            .iter()
+            .any(|entry| entry.name == "project" && entry.kind == "dir"));
+        assert!(list_children(Path::new("")).is_err());
+        let _ = fs::remove_dir_all(&parent);
     }
 
     #[test]

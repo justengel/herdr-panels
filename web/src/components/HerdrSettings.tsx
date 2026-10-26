@@ -1,34 +1,99 @@
-import { useEffect, useState } from "react";
-import type { HerdrConfig, HerdrField } from "../api";
+import { useEffect, useMemo, useState } from "react";
+import type { HerdrConfig, HerdrField, HerdrIntegration } from "../api";
+import { IndicatorSample } from "./StatusMark";
 
-const TABS = [
-  ["theme", "theme"],
-  ["indicators", "indicators"],
-  ["sound", "sound"],
-  ["toasts", "toasts"],
-  ["pane-labels", "pane labels"],
-  ["integrations", "integrations"],
-] as const;
+const ORDER = [
+  "theme",
+  "indicators",
+  "sound",
+  "toasts",
+  "pane-labels",
+  "integrations",
+  "interface",
+  "general",
+  "terminal",
+  "update",
+  "server",
+  "session",
+  "remote",
+  "worktrees",
+  "experimental",
+  "advanced",
+];
 
-const CHOICE: Record<string, string> = {
-  dots: "color dots",
-  symbols: "distinct symbols",
-  off: "off",
-  herdr: "inside herdr",
-  terminal: "via terminal",
-  system: "via system",
-  "top-left": "top left",
-  "top-right": "top right",
-  "bottom-left": "bottom left",
-  "bottom-right": "bottom right",
+const TAB_LABEL: Record<string, string> = {
+  theme: "theme",
+  indicators: "indicators",
+  sound: "sound",
+  toasts: "toasts",
+  "pane-labels": "pane labels",
+  integrations: "integrations",
+  interface: "interface",
+  general: "general",
+  terminal: "shell",
+  update: "updates",
+  server: "server",
+  session: "session",
+  remote: "remote",
+  worktrees: "worktrees",
+  experimental: "experimental",
+  advanced: "advanced",
 };
 
 const BLURB: Record<string, string> = {
-  indicators: "Choose color dots or distinct symbols for each agent state.",
-  sound: "Play sounds when agents change state in the background.",
-  toasts: "Choose where background popup notifications should appear.",
-  "pane-labels": "Show detected agent names in split pane borders.",
-  integrations: "Agents report state directly instead of relying only on process detection. Install integrations from the Herdr client.",
+  theme: "This palette colors Herdr Panels and the Herdr terminal.",
+  indicators: "Spaces and agents in this window use these marks and this order. The Herdr terminal uses them too.",
+  sound: "Herdr plays these when an agent changes state. This window stays quiet.",
+  toasts:
+    "Herdr sends these. Inside Herdr draws them in the terminal. Via terminal asks the terminal Herdr is attached to. Via system is an operating-system notification, so it can appear while this window is open.",
+  "pane-labels":
+    "Space rows are the lines on each space here and in the Herdr terminal. Agent rows are the lines in the Herdr terminal’s agent list.",
+  integrations: "Herdr installs these and receives agent status from them.",
+  terminal: "Herdr uses this when it starts a pane.",
+  update: "Herdr checks for its own updates.",
+  server: "Herdr’s server process.",
+  session: "Herdr restores agent sessions when it starts.",
+  remote: "Herdr’s remote SSH setup.",
+  worktrees: "Where Herdr keeps linked worktrees.",
+  experimental: "Optional Herdr behavior.",
+  advanced: "Herdr’s pane scrollback. This window reads that buffer.",
+};
+
+function audienceLabel(audience?: string): string {
+  if (audience === "both") return "Panels and Herdr";
+  if (audience === "panels") return "Panels";
+  if (audience === "herdr") return "Herdr";
+  return "";
+}
+
+function audienceTip(audience?: string): string {
+  const omitted = "Settings that only change the Herdr terminal are omitted.";
+  if (audience === "both" || audience === "panels") {
+    return `Herdr Panels is this window. Panels and Herdr means this window and the Herdr terminal both use it. ${omitted}`;
+  }
+  return `Herdr is the server that owns panes, agents, and this config. A setting marked Herdr is the server’s. ${omitted}`;
+}
+
+function AudienceMark({ audience }: { audience?: string }) {
+  const label = audienceLabel(audience);
+  if (!label) return null;
+  return (
+    <span className="audience" title={audienceTip(audience)}>
+      {label}
+    </span>
+  );
+}
+
+const CHOICE_LABEL: Record<string, string> = {
+  dots: "Color dots",
+  symbols: "Distinct symbols",
+  herdr: "Inside Herdr",
+  terminal: "Via terminal",
+  system: "Via system",
+  off: "Off",
+  on: "On",
+  true: "On",
+  false: "Off",
 };
 
 export function HerdrSettings({
@@ -38,6 +103,7 @@ export function HerdrSettings({
   onApplyTheme,
   onSaveSettings,
   onSaveKeys,
+  onIntegration,
 }: {
   config: HerdrConfig;
   mode: "settings" | "keybinds";
@@ -45,15 +111,23 @@ export function HerdrSettings({
   onApplyTheme: (name: string) => Promise<void>;
   onSaveSettings: (settings: Record<string, string | number | boolean>) => Promise<void>;
   onSaveKeys: (keys: Record<string, string>) => Promise<void>;
+  onIntegration: (target: string, action: "install" | "uninstall") => Promise<void>;
 }) {
-  const [tab, setTab] = useState<(typeof TABS)[number][0]>("theme");
+  const tabs = useMemo(() => tabsFor(config.settings), [config.settings]);
+  const [tab, setTab] = useState(tabs[0] ?? "theme");
   const [theme, setTheme] = useState(config.theme);
   const [settings, setSettings] = useState(config.settings);
   const [keys, setKeys] = useState(config.keys);
+  const [query, setQuery] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
   useEffect(() => setTheme(config.theme), [config.theme]);
+  useEffect(() => setSettings(config.settings), [config.settings]);
+  useEffect(() => setKeys(config.keys), [config.keys]);
+  useEffect(() => {
+    if (!tabs.includes(tab)) setTab(tabs[0] ?? "theme");
+  }, [tab, tabs]);
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") onClose();
@@ -107,7 +181,33 @@ export function HerdrSettings({
     }
   }
 
+  async function changeIntegration(target: string, action: "install" | "uninstall") {
+    setBusy(true);
+    setError("");
+    try {
+      await onIntegration(target, action);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function edit(field: HerdrField, value: string | number | boolean) {
+    setSettings((current) => current.map((item) => (item.key === field.key ? { ...item, value } : item)));
+  }
+
   const fields = settings.filter((field) => field.group === tab);
+  const shownKeys = keys.filter((field) => {
+    const needle = query.trim().toLowerCase();
+    if (!needle) return true;
+    return (
+      field.label.toLowerCase().includes(needle) ||
+      field.key.toLowerCase().includes(needle) ||
+      String(field.value ?? "").toLowerCase().includes(needle)
+    );
+  });
+  const needsApply = mode === "keybinds" || (tab !== "integrations" && fields.length > 0);
 
   return (
     <div className="settings-backdrop" onMouseDown={onClose}>
@@ -117,18 +217,18 @@ export function HerdrSettings({
         onSubmit={(event) => {
           event.preventDefault();
           if (mode === "keybinds") void saveKeys();
-          else if (tab !== "theme") void saveGroup();
+          else if (needsApply) void saveGroup();
         }}
       >
         <header>
-          <strong>{mode === "keybinds" ? "keybinds" : "settings"}</strong>
+          <strong>{mode === "keybinds" ? "Keybinds" : "Settings"}</strong>
           <button type="button" onClick={onClose}>
-            esc close
+            Close
           </button>
         </header>
         {mode === "settings" ? (
           <div className="settings-tabs" role="tablist">
-            {TABS.map(([id, label]) => (
+            {tabs.map((id) => (
               <button
                 key={id}
                 type="button"
@@ -137,9 +237,29 @@ export function HerdrSettings({
                 className={tab === id ? "on" : undefined}
                 onClick={() => setTab(id)}
               >
-                {label}
+                {TAB_LABEL[id] || id}
               </button>
             ))}
+          </div>
+        ) : (
+          <input
+            className="settings-filter"
+            aria-label="Filter keybinds"
+            placeholder="Filter keybinds"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+          />
+        )}
+        {mode === "keybinds" ? (
+          <p className="settings-note">
+            These shortcuts run in this window. They are saved in Herdr, so a Herdr terminal uses the same keys. Shortcuts that only the terminal uses are omitted.
+          </p>
+        ) : null}
+        {mode === "settings" && BLURB[tab] ? <p className="settings-note">{BLURB[tab]}</p> : null}
+        {mode === "settings" && tab === "theme" ? (
+          <div className="setting-heading">
+            <h3>Theme</h3>
+            <AudienceMark audience="both" />
           </div>
         ) : null}
         {mode === "settings" && tab === "theme" ? (
@@ -160,29 +280,34 @@ export function HerdrSettings({
             ))}
           </div>
         ) : null}
-        {mode === "settings" && tab !== "theme" ? (
-          <section>
-            {BLURB[tab] ? <p className="settings-note">{BLURB[tab]}</p> : null}
-            {fields.map((field) => (
-              <label key={field.key}>
-                <span>{field.label}</span>
-                <FieldControl
-                  field={field}
-                  onChange={(value) =>
-                    setSettings((current) => current.map((item) => (item.key === field.key ? { ...item, value } : item)))
-                  }
-                />
-              </label>
-            ))}
-          </section>
+        {mode === "settings" && tab === "integrations" ? (
+          <>
+            <div className="setting-heading">
+              <h3>Integrations</h3>
+              <AudienceMark audience="herdr" />
+            </div>
+            <IntegrationList items={config.integrations ?? []} error={config.integrationError} busy={busy} onChange={changeIntegration} />
+          </>
         ) : null}
+        {mode === "settings" && tab !== "integrations"
+          ? fields.map((field) => (
+              <div className="setting-block" key={field.key}>
+                <div className="setting-heading">
+                  <h3>{field.label}</h3>
+                  <AudienceMark audience={field.audience} />
+                </div>
+                {field.help ? <p className="settings-note">{field.help}</p> : null}
+                <FieldControl field={field} onChange={(value) => edit(field, value)} />
+              </div>
+            ))
+          : null}
         {mode === "keybinds" ? (
           <section>
-            <p className="settings-note">These are Herdr’s bindings. The prefix works in this page and in a terminal here. Empty clears a binding.</p>
-            {keys.map((field) => (
-              <label key={field.key}>
+            {shownKeys.map((field) => (
+              <label className="setting-line" key={field.key}>
                 <span>{field.label}</span>
                 <input
+                  aria-label={field.label}
                   value={String(field.value ?? "")}
                   spellCheck={false}
                   onChange={(event) =>
@@ -194,20 +319,30 @@ export function HerdrSettings({
           </section>
         ) : null}
         {error ? <p className="settings-error">{error}</p> : null}
-        {mode === "keybinds" || tab !== "theme" ? (
+        {needsApply ? (
           <footer>
+            <span />
             <button type="submit" disabled={busy}>
-              {busy ? "Applying" : "apply"}
+              {busy ? "Applying" : "Apply"}
             </button>
           </footer>
-        ) : (
+        ) : tab === "theme" ? (
           <footer>
-            <span className="settings-note">{busy ? "Applying" : "Click a theme to apply it here and in Herdr."}</span>
+            <span className="settings-note">{busy ? "Applying" : "Choose a theme to apply it here and in Herdr."}</span>
           </footer>
-        )}
+        ) : null}
       </form>
     </div>
   );
+}
+
+function tabsFor(settings: HerdrField[]): string[] {
+  const present = new Set(settings.map((field) => field.group).filter((group): group is string => Boolean(group)));
+  present.add("theme");
+  present.add("integrations");
+  const known = ORDER.filter((id) => present.has(id));
+  const extra = [...present].filter((id) => !ORDER.includes(id)).sort();
+  return [...known, ...extra];
 }
 
 function FieldControl({
@@ -218,29 +353,151 @@ function FieldControl({
   onChange: (value: string | number | boolean) => void;
 }) {
   if (field.kind === "bool") {
-    return <input type="checkbox" checked={field.value === true} onChange={(event) => onChange(event.target.checked)} />;
+    if (field.group === "sound" || field.group === "toasts") {
+      return (
+        <ChoiceList
+          value={field.value === true ? "true" : "false"}
+          options={[
+            { value: "true", label: "On" },
+            { value: "false", label: "Off" },
+          ]}
+          onChange={(value) => onChange(value === "true")}
+        />
+      );
+    }
+    return (
+      <input
+        className="setting-check"
+        type="checkbox"
+        aria-label={field.label}
+        checked={field.value === true}
+        onChange={(event) => onChange(event.target.checked)}
+      />
+    );
   }
   if (field.kind === "enum") {
+    const choices = field.choices?.length ? field.choices : field.options.map((value) => ({ value, detail: undefined }));
+    const options = choices.map((choice) => ({
+      value: choice.value,
+      label: CHOICE_LABEL[choice.value] || choice.value.replaceAll("_", " "),
+      detail: choice.detail || undefined,
+    }));
     return (
-      <select value={String(field.value)} onChange={(event) => onChange(event.target.value)}>
+      <ChoiceList
+        value={String(field.value)}
+        options={options}
+        sample={field.key === "status_indicators"}
+        onChange={onChange}
+      />
+    );
+  }
+  if (field.kind === "tokens") {
+    const selected = new Set(String(field.value ?? "").split(",").filter(Boolean));
+    return (
+      <div className="token-list">
         {field.options.map((option) => (
-          <option key={option} value={option}>
-            {CHOICE[option] || option}
-          </option>
+          <label key={option}>
+            <input
+              type="checkbox"
+              checked={selected.has(option)}
+              onChange={(event) => {
+                const next = new Set(selected);
+                if (event.target.checked) next.add(option);
+                else next.delete(option);
+                onChange(field.options.filter((item) => next.has(item)).join(","));
+              }}
+            />
+            <span>{option.replaceAll("_", " ")}</span>
+          </label>
         ))}
-      </select>
+      </div>
     );
   }
   if (field.kind === "int") {
     return (
       <input
+        className="setting-input"
         type="number"
+        aria-label={field.label}
         value={Number(field.value)}
-        min={1}
-        max={500}
         onChange={(event) => onChange(Number(event.target.value))}
       />
     );
   }
-  return <input value={String(field.value ?? "")} spellCheck={false} onChange={(event) => onChange(event.target.value)} />;
+  return (
+    <input
+      className="setting-input"
+      aria-label={field.label}
+      value={String(field.value ?? "")}
+      spellCheck={false}
+      onChange={(event) => onChange(event.target.value)}
+    />
+  );
+}
+
+function ChoiceList({
+  value,
+  options,
+  sample,
+  onChange,
+}: {
+  value: string;
+  options: { value: string; label: string; detail?: string }[];
+  sample?: boolean;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <div className="choice-list" role="listbox">
+      {options.map((option) => (
+        <button
+          key={option.value}
+          type="button"
+          role="option"
+          aria-selected={option.value === value}
+          className={option.value === value ? "on" : undefined}
+          onClick={() => onChange(option.value)}
+        >
+          <span className="choice-copy">
+            <span>{option.label}</span>
+            {option.detail ? <span className="choice-detail">{option.detail}</span> : null}
+          </span>
+          {sample ? <IndicatorSample symbols={option.value === "symbols"} /> : null}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function IntegrationList({
+  items,
+  error,
+  busy,
+  onChange,
+}: {
+  items: HerdrIntegration[];
+  error?: string;
+  busy: boolean;
+  onChange: (target: string, action: "install" | "uninstall") => void;
+}) {
+  if (error) return <p className="settings-error">{error}</p>;
+  if (items.length === 0) return <p className="settings-note">Herdr reported no integrations.</p>;
+  return (
+    <ul className="integration-list">
+      {items.map((item) => {
+        const installed = item.state === "current" || item.state === "outdated";
+        const status = installed ? (item.state === "outdated" ? "outdated" : "installed") : item.available ? "not installed" : "not found";
+        return (
+          <li key={item.target} className="integration-row">
+            <span>
+              <strong>{item.label || item.target}</strong>
+              <span className="choice-detail">{status}</span>
+            </span>
+            <button type="button" disabled={busy} onClick={() => onChange(item.target, installed ? "uninstall" : "install")}>
+              {installed ? "Remove" : "Install"}
+            </button>
+          </li>
+        );
+      })}
+    </ul>
+  );
 }
