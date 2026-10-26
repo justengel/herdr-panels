@@ -1,8 +1,8 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import type { PanelConfig, TabEdge } from "../types";
-import { useDesk } from "../desk";
-import { useKeepMenuOnScreen } from "../menuPlace";
+import type { MenuEntry } from "../viewMenu";
+import { fitFlyout, useKeepMenuOnScreen, type FlyoutBox } from "../menuPlace";
 import { usePanelActions, usePanelDrag } from "../panelActions";
 
 interface Props {
@@ -21,17 +21,20 @@ interface Props {
   plain?: boolean;
   tabbed?: boolean;
   tabEdge?: TabEdge;
+  addressBar?: boolean;
+  onAddressBar?: (show: boolean) => void;
+  entries?: MenuEntry[];
+  onView?: (id: string) => void;
+  canClose?: boolean;
+  openMenuToken?: number;
+  /** When the menu is dismissed without a choice, e.g. cancel a blank Add panel. */
+  onMenuDismiss?: () => void;
+  allowPin?: boolean;
+  pinLabel?: string;
+  onPin?: () => void;
   onClick?: (event: React.MouseEvent<HTMLElement>) => void;
   children: ReactNode;
 }
-
-const VIEWS: { type: PanelConfig["type"]; label: string }[] = [
-  { type: "explorer", label: "Files" },
-  { type: "herdr", label: "Terminal" },
-  { type: "iframe", label: "Browser" },
-  { type: "files", label: "Spaces" },
-  { type: "agents", label: "Agents" },
-];
 
 const EDGES: { edge: TabEdge; label: string }[] = [
   { edge: "top", label: "Tabs on top" },
@@ -40,11 +43,17 @@ const EDGES: { edge: TabEdge; label: string }[] = [
   { edge: "right", label: "Tabs on right" },
 ];
 
+type FlyoutKind = "layout" | "plugins" | "panes" | "views";
+
+/** Delay before a nested flyout opens on hover (menus typically use ~200–400ms). */
+const FLYOUT_OPEN_MS = 220;
+/** Grace period to cross from the trigger into the flyout without closing. */
+const FLYOUT_CLOSE_MS = 280;
+
 export function PanelChrome({
   title,
   kind,
   panelType,
-  pluginId,
   badge,
   badgeClass,
   subtitle,
@@ -56,35 +65,182 @@ export function PanelChrome({
   plain = false,
   tabbed = false,
   tabEdge = "top",
+  addressBar = false,
+  onAddressBar,
+  entries = [],
+  onView,
+  canClose = true,
+  openMenuToken,
+  onMenuDismiss,
+  allowPin = false,
+  pinLabel = "Pin…",
+  onPin,
   onClick,
   children,
 }: Props) {
   const panelActions = usePanelActions();
   const drag = usePanelDrag();
-  const desk = useDesk();
-  const viewType = panelType === "html" ? "iframe" : panelType;
   const [menu, setMenu] = useState<{ left?: number; right?: number; top: number } | null>(null);
+  const [flyout, setFlyout] = useState<FlyoutKind | null>(null);
+  const [flyoutBox, setFlyoutBox] = useState<FlyoutBox | null>(null);
+  const flyoutAnchor = useRef<DOMRect | null>(null);
+  const flyoutKindRef = useRef<FlyoutKind | null>(null);
+  const openFlyoutTimer = useRef<number | null>(null);
+  const closeFlyoutTimer = useRef<number | null>(null);
+  const choseRef = useRef(false);
+  const onMenuDismissRef = useRef(onMenuDismiss);
+  onMenuDismissRef.current = onMenuDismiss;
   const gearRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+  const flyoutRef = useRef<HTMLDivElement>(null);
+  flyoutKindRef.current = flyout;
   const menuBox = useKeepMenuOnScreen(
     menuRef,
     menu !== null,
     menu ? `${menu.left ?? ""}:${menu.right ?? ""}:${menu.top}` : "",
   );
+
+  function clearFlyoutTimers() {
+    if (openFlyoutTimer.current !== null) {
+      window.clearTimeout(openFlyoutTimer.current);
+      openFlyoutTimer.current = null;
+    }
+    if (closeFlyoutTimer.current !== null) {
+      window.clearTimeout(closeFlyoutTimer.current);
+      closeFlyoutTimer.current = null;
+    }
+  }
+
+  function showFlyout(kind: FlyoutKind, anchor: HTMLElement) {
+    clearFlyoutTimers();
+    const rect = anchor.getBoundingClientRect();
+    flyoutAnchor.current = rect;
+    setFlyoutBox(
+      fitFlyout(rect, { width: 180, height: 160 }, { width: window.innerWidth, height: window.innerHeight }),
+    );
+    setFlyout(kind);
+  }
+
+  function hideFlyout() {
+    clearFlyoutTimers();
+    setFlyout(null);
+    setFlyoutBox(null);
+    flyoutAnchor.current = null;
+  }
+
+  function scheduleOpenFlyout(kind: FlyoutKind, anchor: HTMLElement) {
+    if (closeFlyoutTimer.current !== null) {
+      window.clearTimeout(closeFlyoutTimer.current);
+      closeFlyoutTimer.current = null;
+    }
+    if (flyoutKindRef.current === kind) {
+      if (openFlyoutTimer.current !== null) {
+        window.clearTimeout(openFlyoutTimer.current);
+        openFlyoutTimer.current = null;
+      }
+      return;
+    }
+    if (openFlyoutTimer.current !== null) window.clearTimeout(openFlyoutTimer.current);
+    const delay = flyoutKindRef.current ? 80 : FLYOUT_OPEN_MS;
+    openFlyoutTimer.current = window.setTimeout(() => showFlyout(kind, anchor), delay);
+  }
+
+  function scheduleCloseFlyout() {
+    if (openFlyoutTimer.current !== null) {
+      window.clearTimeout(openFlyoutTimer.current);
+      openFlyoutTimer.current = null;
+    }
+    if (closeFlyoutTimer.current !== null) window.clearTimeout(closeFlyoutTimer.current);
+    closeFlyoutTimer.current = window.setTimeout(() => hideFlyout(), FLYOUT_CLOSE_MS);
+  }
+
+  function cancelCloseFlyout() {
+    if (closeFlyoutTimer.current !== null) {
+      window.clearTimeout(closeFlyoutTimer.current);
+      closeFlyoutTimer.current = null;
+    }
+  }
+
+  /** Click still toggles for keyboard / touch; hover opens after a short delay. */
+  function openFlyout(kind: FlyoutKind, event: React.MouseEvent<HTMLElement>) {
+    clearFlyoutTimers();
+    if (flyoutKindRef.current === kind) {
+      hideFlyout();
+      return;
+    }
+    showFlyout(kind, event.currentTarget);
+  }
+
+  function flyoutTrigger(kind: FlyoutKind) {
+    return {
+      onMouseEnter: (event: React.MouseEvent<HTMLElement>) => scheduleOpenFlyout(kind, event.currentTarget),
+      onMouseLeave: () => scheduleCloseFlyout(),
+      onClick: (event: React.MouseEvent<HTMLElement>) => openFlyout(kind, event),
+      onFocus: (event: React.FocusEvent<HTMLElement>) => scheduleOpenFlyout(kind, event.currentTarget),
+    };
+  }
+
+  useLayoutEffect(() => {
+    if (!flyout || !flyoutRef.current || !flyoutAnchor.current) return;
+    const size = flyoutRef.current.getBoundingClientRect();
+    const next = fitFlyout(
+      flyoutAnchor.current,
+      { width: size.width, height: size.height },
+      { width: window.innerWidth, height: window.innerHeight },
+    );
+    setFlyoutBox((prev) =>
+      prev && prev.left === next.left && prev.top === next.top && prev.maxHeight === next.maxHeight && prev.side === next.side
+        ? prev
+        : next,
+    );
+  }, [flyout]);
   const dragging = Boolean(panelId && drag.draggingId === panelId);
   const classes = ["panel", className, plain ? "is-plain" : "", dragging ? "is-drag-source" : ""]
     .filter(Boolean)
     .join(" ");
+  const viewEntries = entries.filter((entry) => entry.section === "view");
+  const deskEntries = entries.filter((entry) => entry.section === "desk");
+  const pluginEntries = entries.filter((entry) => entry.section === "plugins");
+  const paneEntries = entries.filter((entry) => entry.section === "panes");
+  const moreViewEntries = entries.filter((entry) => entry.section === "views");
+  const showAddress = Boolean(onAddressBar) && panelType !== "herdr" && panelType !== "files" && panelType !== "agents";
+
+  function dismissMenu() {
+    clearFlyoutTimers();
+    setMenu(null);
+    setFlyout(null);
+    setFlyoutBox(null);
+    flyoutAnchor.current = null;
+    if (!choseRef.current) onMenuDismissRef.current?.();
+    choseRef.current = false;
+  }
+
+  useEffect(() => () => clearFlyoutTimers(), []);
+
+  useEffect(() => {
+    if (openMenuToken === undefined || !panelId || !gearRef.current) return;
+    const rect = gearRef.current.getBoundingClientRect();
+    choseRef.current = false;
+    clearFlyoutTimers();
+    setFlyout(null);
+    setFlyoutBox(null);
+    flyoutAnchor.current = null;
+    setMenu({
+      right: Math.max(8, window.innerWidth - rect.right),
+      top: rect.bottom + 4,
+    });
+  }, [openMenuToken, panelId]);
 
   useEffect(() => {
     if (!menu) return;
     const close = (event: PointerEvent) => {
       if (event.target instanceof Node && menuRef.current?.contains(event.target)) return;
       if (event.target instanceof Element && event.target.closest(".panel-gear")) return;
-      setMenu(null);
+      if (event.target instanceof Element && event.target.closest(".panel-menu-flyout")) return;
+      dismissMenu();
     };
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setMenu(null);
+      if (event.key === "Escape") dismissMenu();
     };
     window.addEventListener("pointerdown", close);
     window.addEventListener("keydown", onKey);
@@ -95,7 +251,12 @@ export function PanelChrome({
   }, [menu]);
 
   function run(action: () => void) {
+    choseRef.current = true;
+    clearFlyoutTimers();
     setMenu(null);
+    setFlyout(null);
+    setFlyoutBox(null);
+    flyoutAnchor.current = null;
     action();
   }
 
@@ -103,6 +264,10 @@ export function PanelChrome({
     if (!panelId) return;
     event.preventDefault();
     event.stopPropagation();
+    clearFlyoutTimers();
+    setFlyout(null);
+    setFlyoutBox(null);
+    flyoutAnchor.current = null;
     setMenu({ left: event.clientX, top: event.clientY });
   }
 
@@ -110,11 +275,16 @@ export function PanelChrome({
     event.stopPropagation();
     if (!panelId) return;
     if (menu) {
-      setMenu(null);
+      dismissMenu();
       return;
     }
+    choseRef.current = false;
     const rect = gearRef.current?.getBoundingClientRect();
     if (!rect) return;
+    clearFlyoutTimers();
+    setFlyout(null);
+    setFlyoutBox(null);
+    flyoutAnchor.current = null;
     setMenu({
       right: Math.max(8, window.innerWidth - rect.right),
       top: rect.bottom + 4,
@@ -130,6 +300,12 @@ export function PanelChrome({
     drag.start(panelId, event);
   }
 
+  const menuStyle = menuBox
+    ? { left: menuBox.left, top: menuBox.top, maxWidth: menuBox.maxWidth, maxHeight: menuBox.maxHeight }
+    : menu
+      ? { left: menu.left, right: menu.right, top: menu.top }
+      : undefined;
+
   return (
     <section
       className={classes}
@@ -140,6 +316,13 @@ export function PanelChrome({
       {plain ? (
         <div className="plain-actions">
           <button
+            type="button"
+            className="grip"
+            aria-label="Drag to rearrange"
+            title="Drag onto a side to place this panel, or the middle to swap"
+            onPointerDown={beginDrag}
+          />
+          <button
             ref={gearRef}
             type="button"
             className="panel-gear tab-gear-button"
@@ -150,164 +333,357 @@ export function PanelChrome({
           >
             <GearIcon />
           </button>
-          <button
-            type="button"
-            className="panel-close"
-            aria-label={`Close ${title}`}
-            title="Close panel"
-            onClick={(event) => {
-              event.stopPropagation();
-              if (panelId) panelActions.close(panelId);
-            }}
-          >
-            <CloseIcon />
-          </button>
+          {canClose ? (
+            <button
+              type="button"
+              className="panel-close"
+              aria-label={`Close ${title}`}
+              title="Close panel"
+              onClick={(event) => {
+                event.stopPropagation();
+                if (panelId) panelActions.close(panelId);
+              }}
+            >
+              <CloseIcon />
+            </button>
+          ) : null}
         </div>
       ) : (
-      <header
-        className="panel-header"
-        onContextMenu={openMenu}
-        onPointerDown={beginDrag}
-      >
-        <button
-          type="button"
-          className="grip"
-          aria-label="Drag to rearrange"
-          title="Drag the title bar onto a side to place this panel, or the middle to swap"
-        />
-        <div className="panel-title">
-          <strong>{title}</strong>
-          {subtitle ? <span className="subtitle">{subtitle}</span> : null}
-        </div>
-        {config}
-        <div className="panel-actions">
-          {badge ? <span className={`badge ${badgeClass ?? ""}`}>{badge}</span> : null}
-          {actions}
-          <button
-            ref={gearRef}
-            type="button"
-            className="panel-gear tab-gear-button"
-            aria-label="Panel settings"
-            aria-expanded={menu !== null}
-            title="Panel settings"
-            onClick={openGear}
-          >
-            <GearIcon />
-          </button>
+        <header
+          className="panel-header"
+          onContextMenu={openMenu}
+          onPointerDown={beginDrag}
+        >
           <button
             type="button"
-            className="panel-close"
-            aria-label={`Close ${title}`}
-            title="Close panel"
-            onClick={(event) => {
-              event.stopPropagation();
-              if (panelId) panelActions.close(panelId);
-            }}
-          >
-            <CloseIcon />
-          </button>
-        </div>
-      </header>
+            className="grip"
+            aria-label="Drag to rearrange"
+            title="Drag the title bar onto a side to place this panel, or the middle to swap"
+          />
+          <div className="panel-title">
+            <strong>{title}</strong>
+            {subtitle ? <span className="subtitle">{subtitle}</span> : null}
+          </div>
+          {config}
+          <div className="panel-actions">
+            {badge ? <span className={`badge ${badgeClass ?? ""}`}>{badge}</span> : null}
+            {actions}
+            <button
+              ref={gearRef}
+              type="button"
+              className="panel-gear tab-gear-button"
+              aria-label="Panel settings"
+              aria-expanded={menu !== null}
+              title="Panel settings"
+              onClick={openGear}
+            >
+              <GearIcon />
+            </button>
+            {canClose ? (
+              <button
+                type="button"
+                className="panel-close"
+                aria-label={`Close ${title}`}
+                title="Close panel"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  if (panelId) panelActions.close(panelId);
+                }}
+              >
+                <CloseIcon />
+              </button>
+            ) : null}
+          </div>
+        </header>
       )}
       <div className="panel-body">{children}</div>
       {menu && panelId
         ? createPortal(
             <>
-            <div
-              className="menu-dismiss"
-              onPointerDown={() => setMenu(null)}
-              onContextMenu={(event) => {
-                event.preventDefault();
-                setMenu(null);
-              }}
-            />
-            <div
-              className="panel-menu"
-              role="menu"
-              ref={menuRef}
-              style={
-                menuBox
-                  ? { left: menuBox.left, top: menuBox.top, maxWidth: menuBox.maxWidth, maxHeight: menuBox.maxHeight }
-                  : { left: menu.left, right: menu.right, top: menu.top }
-              }
-              onChange={(event) => {
-                if (event.target instanceof HTMLSelectElement) setMenu(null);
-              }}
-            >
-              <NameField panelId={panelId} title={title} />
-              {contents}
-              <div className="menu-rule" />
-              <button
-                type="button"
-                role="menuitem"
-                title="Side by side"
-                onClick={() => run(() => panelActions.add(panelId, "row"))}
+              <div
+                className="menu-dismiss"
+                onPointerDown={() => dismissMenu()}
+                onContextMenu={(event) => {
+                  event.preventDefault();
+                  dismissMenu();
+                }}
+              />
+              <div
+                className="panel-menu"
+                role="menu"
+                ref={menuRef}
+                style={menuStyle}
               >
-                Split horizontal
-              </button>
-              <button
-                type="button"
-                role="menuitem"
-                title="One above the other"
-                onClick={() => run(() => panelActions.add(panelId, "column"))}
-              >
-                Split vertical
-              </button>
-              <button type="button" role="menuitem" onClick={() => run(() => panelActions.addTab(panelId))}>
-                Add tab
-              </button>
-              {tabbed ? (
-                <>
-                  <div className="menu-rule" />
-                  {EDGES.map((item) => (
+                <NameField panelId={panelId} title={title} />
+                {contents}
+                <div className="menu-rule" />
+                <div className="menu-label">Panel</div>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="menu-flyout-trigger"
+                  aria-haspopup="menu"
+                  aria-expanded={flyout === "layout"}
+                  {...flyoutTrigger("layout")}
+                >
+                  Layout
+                  <span className="menu-chevron">›</span>
+                </button>
+                {showAddress ? (
+                  <button
+                    type="button"
+                    role="menuitemcheckbox"
+                    className="menu-radio"
+                    aria-checked={addressBar}
+                    onMouseEnter={scheduleCloseFlyout}
+                    onClick={() => run(() => onAddressBar?.(!addressBar))}
+                  >
+                    <span className="menu-check">{addressBar ? "✓" : ""}</span>
+                    Address bar
+                  </button>
+                ) : null}
+                {allowPin && onPin ? (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onMouseEnter={scheduleCloseFlyout}
+                    onClick={() => run(() => onPin())}
+                  >
+                    {pinLabel}
+                  </button>
+                ) : null}
+                {tabbed ? (
+                  <>
+                    <div className="menu-rule" />
+                    {EDGES.map((item) => (
+                      <button
+                        key={item.edge}
+                        type="button"
+                        role="menuitemradio"
+                        className="menu-radio"
+                        aria-checked={tabEdge === item.edge}
+                        onMouseEnter={scheduleCloseFlyout}
+                        onClick={() => run(() => panelActions.edge(panelId, item.edge))}
+                      >
+                        <span className="menu-check">{tabEdge === item.edge ? "✓" : ""}</span>
+                        {item.label}
+                      </button>
+                    ))}
+                  </>
+                ) : null}
+
+                {viewEntries.length > 0 ? (
+                  <>
+                    <div className="menu-rule" />
+                    <div className="menu-label">View</div>
+                    {viewEntries.map((entry) =>
+                      entry.submenu ? (
+                        <button
+                          key={entry.id}
+                          type="button"
+                          role="menuitem"
+                          className="menu-flyout-trigger"
+                          aria-haspopup="menu"
+                          aria-expanded={flyout === "views"}
+                          {...flyoutTrigger("views")}
+                        >
+                          {entry.label}
+                          <span className="menu-chevron">›</span>
+                        </button>
+                      ) : (
+                        <MenuRow
+                          key={entry.id}
+                          entry={entry}
+                          onView={onView}
+                          run={run}
+                          onHover={scheduleCloseFlyout}
+                        />
+                      ),
+                    )}
+                  </>
+                ) : null}
+
+                {deskEntries.length > 0 ? (
+                  <>
+                    <div className="menu-rule" />
+                    <div className="menu-label">Desk</div>
+                    {deskEntries.map((entry) =>
+                      entry.submenu ? (
+                        <button
+                          key={entry.id}
+                          type="button"
+                          role="menuitem"
+                          className="menu-flyout-trigger"
+                          aria-haspopup="menu"
+                          aria-expanded={flyout === "panes"}
+                          {...flyoutTrigger("panes")}
+                        >
+                          {entry.label}
+                          <span className="menu-chevron">›</span>
+                        </button>
+                      ) : (
+                        <MenuRow
+                          key={entry.id}
+                          entry={entry}
+                          onView={onView}
+                          run={run}
+                          onHover={scheduleCloseFlyout}
+                        />
+                      ),
+                    )}
+                  </>
+                ) : null}
+
+                {pluginEntries.length > 0 ? (
+                  <>
+                    <div className="menu-rule" />
                     <button
-                      key={item.edge}
                       type="button"
-                      role="menuitemradio"
-                      className="menu-radio"
-                      aria-checked={tabEdge === item.edge}
-                      onClick={() => run(() => panelActions.edge(panelId, item.edge))}
+                      role="menuitem"
+                      className="menu-flyout-trigger"
+                      aria-haspopup="menu"
+                      aria-expanded={flyout === "plugins"}
+                      {...flyoutTrigger("plugins")}
                     >
-                      <span className="menu-check">{tabEdge === item.edge ? "✓" : ""}</span>
-                      {item.label}
+                      Plugins
+                      <span className="menu-chevron">›</span>
                     </button>
-                  ))}
-                </>
-              ) : null}
-              <div className="menu-rule" />
-              {VIEWS.map((item) => (
-                <button
-                  key={item.type}
-                  type="button"
-                  role="menuitem"
-                  aria-checked={viewType === item.type}
-                  onClick={() => run(() => panelActions.use(panelId, item.type))}
-                >
-                  {item.label}
-                </button>
-              ))}
-              {desk.plugins.length > 0 ? <div className="menu-rule" /> : null}
-              {desk.plugins.map((plugin) => (
-                <button
-                  key={plugin.id}
-                  type="button"
-                  role="menuitem"
-                  aria-checked={panelType === "plugin" && pluginId === plugin.id}
-                  onClick={() => run(() => panelActions.use(panelId, "plugin", plugin.id))}
-                >
-                  {plugin.title || plugin.id}
-                </button>
-              ))}
-              <div className="menu-rule" />
-              <button type="button" role="menuitem" onClick={() => run(() => panelActions.close(panelId))}>
-                Close
-              </button>
-            </div>
+                  </>
+                ) : null}
+
+                {canClose ? (
+                  <>
+                    <div className="menu-rule menu-rule-strong" />
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onMouseEnter={scheduleCloseFlyout}
+                      onClick={() => run(() => panelActions.close(panelId))}
+                    >
+                      Close
+                    </button>
+                  </>
+                ) : null}
+
+                {flyout === "layout" ? (
+                  <div
+                    ref={flyoutRef}
+                    className="panel-menu-flyout"
+                    role="menu"
+                    aria-label="Layout"
+                    style={flyoutStyle(flyoutBox)}
+                    onMouseEnter={cancelCloseFlyout}
+                    onMouseLeave={scheduleCloseFlyout}
+                  >
+                    <button
+                      type="button"
+                      role="menuitem"
+                      title="Side by side"
+                      onClick={() => run(() => panelActions.add(panelId, "row"))}
+                    >
+                      Split horizontal
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      title="One above the other"
+                      onClick={() => run(() => panelActions.add(panelId, "column"))}
+                    >
+                      Split vertical
+                    </button>
+                    <button type="button" role="menuitem" onClick={() => run(() => panelActions.addTab(panelId))}>
+                      Add tab
+                    </button>
+                  </div>
+                ) : null}
+                {flyout === "plugins" ? (
+                  <div
+                    ref={flyoutRef}
+                    className="panel-menu-flyout"
+                    role="menu"
+                    aria-label="Plugins"
+                    style={flyoutStyle(flyoutBox)}
+                    onMouseEnter={cancelCloseFlyout}
+                    onMouseLeave={scheduleCloseFlyout}
+                  >
+                    {pluginEntries.map((entry) => (
+                      <MenuRow key={entry.id} entry={entry} onView={onView} run={run} />
+                    ))}
+                  </div>
+                ) : null}
+                {flyout === "panes" ? (
+                  <div
+                    ref={flyoutRef}
+                    className="panel-menu-flyout"
+                    role="menu"
+                    aria-label="Panes"
+                    style={flyoutStyle(flyoutBox)}
+                    onMouseEnter={cancelCloseFlyout}
+                    onMouseLeave={scheduleCloseFlyout}
+                  >
+                    {paneEntries.map((entry) => (
+                      <MenuRow key={entry.id} entry={entry} onView={onView} run={run} />
+                    ))}
+                  </div>
+                ) : null}
+                {flyout === "views" ? (
+                  <div
+                    ref={flyoutRef}
+                    className="panel-menu-flyout"
+                    role="menu"
+                    aria-label="More views"
+                    style={flyoutStyle(flyoutBox)}
+                    onMouseEnter={cancelCloseFlyout}
+                    onMouseLeave={scheduleCloseFlyout}
+                  >
+                    {moreViewEntries.map((entry) => (
+                      <MenuRow key={entry.id} entry={entry} onView={onView} run={run} />
+                    ))}
+                  </div>
+                ) : null}
+              </div>
             </>,
             document.body,
           )
         : null}
     </section>
+  );
+}
+
+function flyoutStyle(box: FlyoutBox | null): CSSProperties | undefined {
+  if (!box) return undefined;
+  return {
+    position: "fixed",
+    left: box.left,
+    top: box.top,
+    maxHeight: box.maxHeight,
+    overflow: "auto",
+  };
+}
+
+function MenuRow({
+  entry,
+  onView,
+  run,
+  onHover,
+}: {
+  entry: MenuEntry;
+  onView?: (id: string) => void;
+  run: (action: () => void) => void;
+  onHover?: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      role="menuitemradio"
+      className="menu-radio"
+      aria-checked={entry.checked}
+      onMouseEnter={onHover}
+      onClick={() => run(() => onView?.(entry.id))}
+    >
+      <span className="menu-check">{entry.checked ? "✓" : ""}</span>
+      {entry.label}
+    </button>
   );
 }
 

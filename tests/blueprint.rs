@@ -524,10 +524,9 @@ async fn frame_redirects_stay_on_the_original_host() {
             let other_url = other_url.clone();
             async move {
                 let mut response = (StatusCode::FOUND, "").into_response();
-                response.headers_mut().insert(
-                    header::LOCATION,
-                    HeaderValue::from_str(&other_url).unwrap(),
-                );
+                response
+                    .headers_mut()
+                    .insert(header::LOCATION, HeaderValue::from_str(&other_url).unwrap());
                 response
             }
         }),
@@ -876,7 +875,10 @@ async fn content_and_proxy_require_a_credential() {
 
     let (status, file) = desk.call("GET", "/content/notes/welcome.md", None).await;
     assert_eq!(status, StatusCode::OK, "{file}");
-    assert!(file["raw"].as_str().unwrap_or("").contains("Hello"), "{file}");
+    assert!(
+        file["raw"].as_str().unwrap_or("").contains("Hello"),
+        "{file}"
+    );
 
     let (status, _) = desk
         .call_anonymous(
@@ -907,18 +909,17 @@ async fn content_and_proxy_require_a_credential() {
 
     let (status, page) = desk.call_anonymous("GET", &src, None).await;
     assert_eq!(status, StatusCode::OK, "{page}");
-    assert!(page["raw"].as_str().unwrap_or("").contains("Chart"), "{page}");
+    assert!(
+        page["raw"].as_str().unwrap_or("").contains("Chart"),
+        "{page}"
+    );
     assert!(
         page["raw"].as_str().unwrap_or("").contains("hwp-bridge"),
         "{page}"
     );
 
     let (status, leaked) = desk
-        .call_anonymous(
-            "GET",
-            &format!("/gate/{secret}/content/secret.txt"),
-            None,
-        )
+        .call_anonymous("GET", &format!("/gate/{secret}/content/secret.txt"), None)
         .await;
     assert_eq!(status, StatusCode::UNAUTHORIZED, "{leaked}");
 
@@ -964,12 +965,20 @@ async fn content_and_proxy_require_a_credential() {
     assert_eq!(status, StatusCode::UNAUTHORIZED);
 
     let (status, posted) = desk
-        .call_anonymous("POST", &format!("/gate/{secret}/content/panels/page.html"), None)
+        .call_anonymous(
+            "POST",
+            &format!("/gate/{secret}/content/panels/page.html"),
+            None,
+        )
         .await;
     assert_eq!(status, StatusCode::UNAUTHORIZED, "{posted}");
 
     let (status, broad) = desk
-        .call("POST", "/api/frame-pass", Some(json!({"path": "/content/"})))
+        .call(
+            "POST",
+            "/api/frame-pass",
+            Some(json!({"path": "/content/"})),
+        )
         .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{broad}");
     let (status, foreign) = desk

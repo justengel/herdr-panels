@@ -1,6 +1,8 @@
 {
   "id": "welcome",
   "title": "Welcome",
+  "apiVersion": 1,
+  "version": "0.1.0",
   "entry": "index.html",
   "description": "A sample view plugin. Replace this directory with your own application."
 }

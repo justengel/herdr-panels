@@ -938,6 +938,7 @@ mod tests {
             Direction::Row,
             PanelConfig::File {
                 path: "src/main.rs".into(),
+                address_bar: None,
             },
             Some("main.rs".into()),
             true,
@@ -957,6 +958,8 @@ mod tests {
             Direction::Row,
             PanelConfig::Markdown {
                 path: "a.md".into(),
+                address_bar: None,
+                raw: false,
             },
             Some("a.md".into()),
             true,

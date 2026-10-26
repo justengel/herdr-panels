@@ -88,7 +88,7 @@ Every panel title bar shows that panel's name, and the close button sits at the 
 
 - Drag the grip onto another panel. The panel follows the pointer, and a preview opens on the left, right, top, or bottom to show where it will land. The middle of the panel swaps the two.
 - Right-click the title bar to name the panel. That name is how an agent addresses it.
-- The same menu changes the view (terminal, browser, Markdown, HTML, or plugin) and edits the pane, file, URL, or plugin id for the current view.
+- The same menu keeps the open file or URL and chooses a viewer for it: Markdown, Browser, Text, or Files. Terminal, Spaces, and Agents sit in their own section. A plugin is another viewer when it says which files it opens, or its own panel when it does not.
 - Add a panel to the right or below. **Add panel** in the top bar splits a new terminal to the right of the selected one. Those new panels stay local until Design mode is asked to split the Herdr pane too.
 - × closes the panel. The last panel stays.
 - Typing `exit` in a shell closes that panel after Herdr drops the pane. A panel pointed at a pane that was already gone stays open so you can pick another pane.
@@ -111,7 +111,7 @@ The Design button turns the workspace into an editor:
 <config>/plugins/<id>/index.html
 ```
 
-`plugin.json` has `id`, `title`, and `entry` (default `index.html`). Install one with `herdr-panels plugin install <directory>`. The page loads it at `/plugins/<id>`.
+`plugin.json` has `id`, `title`, and `entry` (default `index.html`). `views` says which addresses a plugin can open, so it can sit beside Markdown or Text for that file. Leave `views` out and the plugin is its own panel. `addressBar` shows that bar, lets `modify` change it, or uses `replace` so the plugin can draw its own. The panel gear can show or hide the bar. Install one with `herdr-panels plugin install <directory>`. The page loads it at `/plugins/<id>`. See `examples/plugins/README.md`.
 
 ### Agents
 

@@ -110,7 +110,10 @@ export function PanelActionsProvider({
         moved = true;
         const section = sectionOf(id);
         origin = section ? clientRect(section) : { left: ev.clientX, top: ev.clientY, width: 240, height: 120 };
-        title = section?.querySelector(".panel-title strong")?.textContent?.trim() || "Panel";
+        title =
+          section?.querySelector(".panel-title strong")?.textContent?.trim() ||
+          section?.querySelector(".side-heading")?.textContent?.trim().split("\n")[0] ||
+          "Panel";
         setDraggingId(id);
         document.body.classList.add("panel-dragging");
         setLive({

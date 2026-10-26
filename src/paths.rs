@@ -430,8 +430,12 @@ mod tests {
         std::fs::create_dir_all(&root).unwrap();
         std::fs::create_dir_all(&outside).unwrap();
         std::fs::write(outside.join("note.txt"), "outside").unwrap();
-        let found = resolve_content(&root, &[root.clone()], &outside.join("note.txt").display().to_string())
-            .unwrap();
+        let found = resolve_content(
+            &root,
+            &[root.clone()],
+            &outside.join("note.txt").display().to_string(),
+        )
+        .unwrap();
         assert_eq!(
             found.file_name().and_then(|name| name.to_str()),
             Some("note.txt")

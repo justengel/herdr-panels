@@ -196,6 +196,8 @@ function ConfigFields({
       </label>
     );
   }
+  if (panel.type === "blank") return null;
+  if (panel.type !== "html") return null;
   return (
     <>
       <label>

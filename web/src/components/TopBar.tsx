@@ -1,8 +1,12 @@
 import { useState } from "react";
+import type { HerdrCtlStatus } from "../api";
+import { herdrStatusView, type HerdrStatusAction } from "../herdrStatus";
 import type { RuntimeSnapshot } from "../types";
 
 interface Props {
   runtime: RuntimeSnapshot | null;
+  herdrCtl: HerdrCtlStatus | null;
+  herdrBusy: boolean;
   notice: string | null;
   zoomed: boolean;
   sessions: string[];
@@ -12,11 +16,15 @@ interface Props {
   onRenameSession: (name: string) => void;
   onCloseSession: () => void;
   onSelect: () => void;
+  onAddPanel: () => void;
   onExitZoom: () => void;
+  onHerdrAction: (action: HerdrStatusAction) => void;
 }
 
 export function TopBar({
   runtime,
+  herdrCtl,
+  herdrBusy,
   notice,
   zoomed,
   sessions,
@@ -26,15 +34,25 @@ export function TopBar({
   onRenameSession,
   onCloseSession,
   onSelect,
+  onAddPanel,
   onExitZoom,
+  onHerdrAction,
 }: Props) {
-  const connected = runtime?.connected === true;
-  const label = connected ? `Herdr ${runtime?.version ?? ""}`.trim() : "Herdr offline";
+  const status = herdrStatusView(runtime, herdrCtl);
   const session = runtime?.session || "default";
   const choices = sessions.includes(session) ? sessions : [session, ...sessions];
   const [mode, setMode] = useState<"create" | "rename" | "close" | null>(null);
   const [draft, setDraft] = useState("");
   const renameLocked = mode === "rename" && session === "default";
+  const statusLabel = herdrBusy
+    ? status.action === "start"
+      ? "Starting Herdr…"
+      : status.action === "update"
+        ? "Updating Herdr…"
+        : status.action === "restart"
+          ? "Restarting Herdr…"
+          : "Working…"
+    : status.label;
   return (
     <header className="topbar">
       <div className="brand">
@@ -141,10 +159,26 @@ export function TopBar({
       >
         Select
       </button>
-      <span className={`status ${connected ? "live" : "down"}`} title={runtime?.error ?? runtime?.socket ?? ""}>
-        <span className="dot" />
-        {label}
-      </span>
+      <button type="button" className="quiet" title="Insert a panel and choose what it shows" onClick={onAddPanel}>
+        Add panel
+      </button>
+      {status.action ? (
+        <button
+          type="button"
+          className={`status status-action ${status.tone}`}
+          title={status.title}
+          disabled={herdrBusy}
+          onClick={() => onHerdrAction(status.action!)}
+        >
+          <span className="dot" />
+          {statusLabel}
+        </button>
+      ) : (
+        <span className={`status ${status.tone}`} title={status.title}>
+          <span className="dot" />
+          {statusLabel}
+        </span>
+      )}
     </header>
   );
 }

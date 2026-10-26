@@ -63,7 +63,12 @@ export type PanelConfig =
   | ExplorerPanel
   | FilePanel
   | TabsPanel
-  | ChatPanel;
+  | ChatPanel
+  | BlankPanel;
+
+export interface BlankPanel {
+  type: "blank";
+}
 
 export interface HerdrPanel {
   type: "herdr";
@@ -75,12 +80,15 @@ export interface HerdrPanel {
 export interface MarkdownPanel {
   type: "markdown";
   path: string;
+  addressBar?: boolean;
+  raw?: boolean;
 }
 
 export interface IframePanel {
   type: "iframe";
   url: string;
   proxy?: boolean;
+  addressBar?: boolean;
 }
 
 export interface HtmlPanel {
@@ -88,12 +96,19 @@ export interface HtmlPanel {
   path?: string | null;
   inline?: string | null;
   control?: boolean;
+  addressBar?: boolean;
+  raw?: boolean;
 }
 
 export interface PluginPanel {
   type: "plugin";
   plugin: string;
+  view?: string;
+  path?: string;
+  url?: string;
+  directory?: boolean;
   config?: Record<string, unknown>;
+  addressBar?: boolean;
 }
 
 export interface FilesPanel {
@@ -107,11 +122,15 @@ export interface AgentsPanel {
 export interface ExplorerPanel {
   type: "explorer";
   path: string;
+  /** File still selected in this explorer; address bar and View menu use it. */
+  focus?: string;
+  addressBar?: boolean;
 }
 
 export interface FilePanel {
   type: "file";
   path: string;
+  addressBar?: boolean;
 }
 
 export type TabEdge = "top" | "bottom" | "left" | "right";

@@ -60,6 +60,19 @@ describe("a panel becomes a tab group only while it has more than one tab", () =
     });
   });
 
+  it("retitles a plain panel when Spaces or Agents is assigned", () => {
+    expect(assignContent(note, "notes", { type: "files" }, true)).toMatchObject({
+      id: "notes",
+      title: "Spaces",
+      panel: { type: "files" },
+    });
+    expect(assignContent(note, "notes", { type: "agents" }, true)).toMatchObject({
+      id: "notes",
+      title: "Agents",
+      panel: { type: "agents" },
+    });
+  });
+
   it("opens a saved one-tab group as a single panel", () => {
     const loaded = normalizeLayout({
       type: "panel",

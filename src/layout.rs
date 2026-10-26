@@ -103,11 +103,26 @@ pub enum PanelConfig {
     },
     Markdown {
         path: String,
+        #[serde(
+            default,
+            rename = "addressBar",
+            skip_serializing_if = "Option::is_none"
+        )]
+        address_bar: Option<bool>,
+        /// Show the file text instead of the rendered note.
+        #[serde(default, skip_serializing_if = "is_false")]
+        raw: bool,
     },
     Iframe {
         url: String,
         #[serde(default)]
         proxy: bool,
+        #[serde(
+            default,
+            rename = "addressBar",
+            skip_serializing_if = "Option::is_none"
+        )]
+        address_bar: Option<bool>,
     },
     Html {
         #[serde(default)]
@@ -117,20 +132,62 @@ pub enum PanelConfig {
         /// When set, the panel may type into a Herdr pane. Off unless chosen.
         #[serde(default, skip_serializing_if = "is_false")]
         control: bool,
+        #[serde(
+            default,
+            rename = "addressBar",
+            skip_serializing_if = "Option::is_none"
+        )]
+        address_bar: Option<bool>,
+        /// Show the file text instead of the rendered page.
+        #[serde(default, skip_serializing_if = "is_false")]
+        raw: bool,
     },
     Plugin {
         plugin: String,
         #[serde(default)]
         config: serde_json::Value,
+        /// Which declared view is showing. Empty means the plugin's own panel.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        view: Option<String>,
+        /// File or directory this view is showing.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        path: Option<String>,
+        /// Page this view is showing.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        url: Option<String>,
+        /// The path is a directory.
+        #[serde(default, skip_serializing_if = "is_false")]
+        directory: bool,
+        #[serde(
+            default,
+            rename = "addressBar",
+            skip_serializing_if = "Option::is_none"
+        )]
+        address_bar: Option<bool>,
     },
     Files,
     Agents,
     Explorer {
         #[serde(default)]
         path: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        focus: Option<String>,
+        #[serde(
+            default,
+            rename = "addressBar",
+            skip_serializing_if = "Option::is_none"
+        )]
+        address_bar: Option<bool>,
     },
+    Blank,
     File {
         path: String,
+        #[serde(
+            default,
+            rename = "addressBar",
+            skip_serializing_if = "Option::is_none"
+        )]
+        address_bar: Option<bool>,
     },
     Tabs {
         #[serde(default)]
@@ -289,8 +346,8 @@ fn validate_panel(panel: &PanelConfig) -> anyhow::Result<()> {
                 }
             }
         }
-        PanelConfig::Markdown { path } => validate_relative_or_rooted(path)?,
-        PanelConfig::Iframe { url, proxy } => {
+        PanelConfig::Markdown { path, .. } => validate_relative_or_rooted(path)?,
+        PanelConfig::Iframe { url, proxy, .. } => {
             if url.is_empty() {
                 if *proxy {
                     bail!("proxy is only for absolute loopback URLs");
@@ -321,8 +378,29 @@ fn validate_panel(panel: &PanelConfig) -> anyhow::Result<()> {
                 }
             }
         },
-        PanelConfig::Plugin { plugin, config } => {
+        PanelConfig::Plugin {
+            plugin,
+            config,
+            view,
+            path,
+            url,
+            ..
+        } => {
             crate::plugins::validate_plugin_id(plugin)?;
+            if let Some(view) = view.as_deref().filter(|view| !view.is_empty()) {
+                crate::plugins::validate_plugin_id(view).context("plugin view")?;
+            }
+            if let Some(path) = path.as_deref().filter(|path| !path.is_empty()) {
+                validate_relative_or_rooted(path)?;
+            }
+            if let Some(url) = url.as_deref().filter(|url| !url.is_empty()) {
+                if !(url.starts_with('/') && !url.starts_with("//")) {
+                    let parsed = url::Url::parse(url).context("plugin url is invalid")?;
+                    if parsed.scheme() != "http" && parsed.scheme() != "https" {
+                        bail!("plugin url must be http, https, or a root-relative path");
+                    }
+                }
+            }
             if serde_json::to_string(config)
                 .map(|text| text.len())
                 .unwrap_or(0)
@@ -331,13 +409,18 @@ fn validate_panel(panel: &PanelConfig) -> anyhow::Result<()> {
                 bail!("plugin config is limited to 32 KB");
             }
         }
-        PanelConfig::Files | PanelConfig::Agents => {}
-        PanelConfig::Explorer { path } => {
+        PanelConfig::Files | PanelConfig::Agents | PanelConfig::Blank => {}
+        PanelConfig::Explorer { path, focus, .. } => {
             if !path.is_empty() {
                 validate_relative_or_rooted(path)?;
             }
+            if let Some(focus) = focus {
+                if !focus.is_empty() {
+                    validate_relative_or_rooted(focus)?;
+                }
+            }
         }
-        PanelConfig::File { path } => validate_relative_or_rooted(path)?,
+        PanelConfig::File { path, .. } => validate_relative_or_rooted(path)?,
         PanelConfig::Tabs { active, tabs, .. } => {
             if tabs.is_empty() || tabs.len() > 24 {
                 bail!("a tab group needs 1 to 24 tabs");
@@ -528,5 +611,82 @@ mod tests {
             r#"{"type": "tabs", "tabs": [{"id": "inner", "title": "Inner", "panel": {"type": "iframe", "url": "https://example.com"}}]}"#,
         );
         assert!(LayoutDocument::parse(&nested).is_err());
+    }
+
+    #[test]
+    fn a_panel_remembers_whether_its_address_bar_is_shown() {
+        let text = r#"{
+          "id": "bar",
+          "title": "Bar",
+          "root": {
+            "type": "panel",
+            "id": "files",
+            "panel": {"type": "explorer", "path": "C:/work", "addressBar": false}
+          }
+        }"#;
+        let doc = LayoutDocument::parse(text).unwrap();
+        let saved = serde_json::to_value(&doc).unwrap();
+        assert_eq!(saved["root"]["panel"]["addressBar"], false);
+
+        let again = LayoutDocument::parse(&serde_json::to_string(&doc).unwrap()).unwrap();
+        match again.root {
+            LayoutNode::Panel { panel, .. } => match panel {
+                PanelConfig::Explorer {
+                    path, address_bar, ..
+                } => {
+                    assert_eq!(path, "C:/work");
+                    assert_eq!(address_bar, Some(false));
+                }
+                other => panic!("expected explorer, got {other:?}"),
+            },
+            other => panic!("expected panel, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_rendered_file_can_be_shown_as_raw_text() {
+        let text = r#"{
+          "id": "bar",
+          "title": "Bar",
+          "root": {
+            "type": "panel",
+            "id": "notes",
+            "panel": {"type": "markdown", "path": "notes/a.md", "raw": true}
+          }
+        }"#;
+        let doc = LayoutDocument::parse(text).unwrap();
+        let saved = serde_json::to_value(&doc).unwrap();
+        assert_eq!(saved["root"]["panel"]["raw"], true);
+
+        let plain = r#"{
+          "id": "bar",
+          "title": "Bar",
+          "root": {
+            "type": "panel",
+            "id": "page",
+            "panel": {"type": "html", "path": "panels/charts.html"}
+          }
+        }"#;
+        let doc = LayoutDocument::parse(plain).unwrap();
+        let saved = serde_json::to_value(&doc).unwrap();
+        assert!(saved["root"]["panel"].get("raw").is_none());
+    }
+
+    #[test]
+    fn a_plugin_view_keeps_the_file_it_opened() {
+        let text = r#"{
+          "id": "bar",
+          "title": "Bar",
+          "root": {
+            "type": "panel",
+            "id": "notes",
+            "panel": {"type": "plugin", "plugin": "vim", "view": "edit", "path": "notes/a.md"}
+          }
+        }"#;
+        let doc = LayoutDocument::parse(text).unwrap();
+        let saved = serde_json::to_value(&doc).unwrap();
+        assert_eq!(saved["root"]["panel"]["view"], "edit");
+        assert_eq!(saved["root"]["panel"]["path"], "notes/a.md");
+        assert!(saved["root"]["panel"].get("directory").is_none());
     }
 }

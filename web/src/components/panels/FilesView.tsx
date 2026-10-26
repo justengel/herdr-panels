@@ -132,7 +132,6 @@ export function FilesView({
         openMenu(event, workspaceId);
       }}
     >
-      <div className="side-heading">spaces</div>
       {spaces.length === 0 ? <div className="side-list" /> : (
         <ul className="side-list">
           {spaces.map((space) => (

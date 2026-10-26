@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { api, wsUrl } from "./api";
+import { api, wsUrl, type HerdrCtlStatus } from "./api";
+import type { HerdrStatusAction } from "./herdrStatus";
 import { DesignProvider } from "./design";
 import { highlight, inspectPanel } from "./inspect";
 import {
@@ -28,9 +29,24 @@ import { TopBar } from "./components/TopBar";
 import { DesignBar } from "./components/DesignBar";
 import { ElementSelect } from "./components/ElementSelect";
 import { HostProvider } from "./host";
+import { applyAddressBarChoices, readAddressBarChoices } from "./addressBar";
+import { applyRawChoices, readRawChoices } from "./rawText";
+import { applyPluginSubjects, readPluginSubjects } from "./viewMenu";
+import {
+  bindTerminalPane,
+  layoutForSpace,
+  loadSpaceLayout,
+  markWorkspaceFocused,
+  preferPendingSpace,
+  saveSpaceLayout,
+  seedSpaceLayout,
+  writeSpaceMap,
+} from "./spaceLayout";
 
 function present(doc: LayoutDocument): LayoutDocument {
-  return { ...doc, root: normalizeLayout(doc.root) };
+  const rooted = applyAddressBarChoices(normalizeLayout(doc.root), doc.id, readAddressBarChoices());
+  const raw = applyRawChoices(rooted, doc.id, readRawChoices());
+  return { ...doc, root: applyPluginSubjects(raw, doc.id, readPluginSubjects()) };
 }
 
 export function App() {
@@ -48,9 +64,20 @@ export function App() {
   const [sessions, setSessions] = useState<string[]>([]);
   const [plugins, setPlugins] = useState<PluginInfo[]>([]);
   const [selecting, setSelecting] = useState(false);
+  const [openMenuId, setOpenMenuId] = useState<string | null>(null);
+  const [openMenuToken, setOpenMenuToken] = useState(0);
+  const [herdrCtl, setHerdrCtl] = useState<HerdrCtlStatus | null>(null);
+  const [herdrBusy, setHerdrBusy] = useState(false);
   const saveRef = useRef(0);
   const noticeRef = useRef(0);
   const followed = useRef<string | null>(null);
+  const spaceRef = useRef<string | null>(null);
+  /** While set, ignore runtime focus that still points at the previous space. */
+  const pendingSpaceRef = useRef<string | null>(null);
+  const layoutRef = useRef<LayoutDocument | null>(null);
+  const runtimeRef = useRef<RuntimeSnapshot | null>(null);
+  layoutRef.current = layout;
+  runtimeRef.current = runtime;
 
   useEffect(() => {
     let stopped = false;
@@ -73,11 +100,20 @@ export function App() {
       .catch((err: unknown) => {
         if (!stopped) setError(err instanceof Error ? err.message : String(err));
       });
+    const refreshCtl = () => {
+      void api.herdrCtl().then(
+        (next) => {
+          if (!stopped) setHerdrCtl(next);
+        },
+        () => undefined,
+      );
+    };
+    refreshCtl();
     const poll = window.setInterval(() => {
       api
         .runtime()
         .then((next) => {
-          if (!stopped) setRuntime(next);
+          if (!stopped) setRuntime(preferPendingSpace(next, pendingSpaceRef.current));
         })
         .catch(() => {
           if (!stopped) {
@@ -89,34 +125,104 @@ export function App() {
           }
         });
     }, 2000);
+    const ctlPoll = window.setInterval(refreshCtl, 60_000);
     return () => {
       stopped = true;
       window.clearInterval(poll);
+      window.clearInterval(ctlPoll);
       window.clearTimeout(saveRef.current);
       window.clearTimeout(noticeRef.current);
     };
   }, []);
 
-  const remember = useCallback(
-    (next: LayoutDocument) => {
-      setLayout(next);
-      window.clearTimeout(saveRef.current);
-      setNotice("Saving");
-      saveRef.current = window.setTimeout(() => {
-        api
-          .saveLayout(next)
-          .then(() => {
-            setNotice("Saved");
-            window.clearTimeout(noticeRef.current);
-            noticeRef.current = window.setTimeout(() => setNotice(null), 1200);
-          })
-          .catch((err: unknown) => {
-            setNotice(err instanceof Error ? err.message : "Save failed");
-          });
-      }, 250);
+  const remember = useCallback((next: LayoutDocument) => {
+    setLayout(next);
+    if (spaceRef.current) saveSpaceLayout(spaceRef.current, next.root);
+    window.clearTimeout(saveRef.current);
+    setNotice("Saving");
+    saveRef.current = window.setTimeout(() => {
+      api
+        .saveLayout(next)
+        .then(() => {
+          setNotice("Saved");
+          window.clearTimeout(noticeRef.current);
+          noticeRef.current = window.setTimeout(() => setNotice(null), 1200);
+        })
+        .catch((err: unknown) => {
+          setNotice(err instanceof Error ? err.message : "Save failed");
+        });
+    }, 250);
+  }, []);
+
+  /** Swap the desk for a space without waiting on Herdr or a layout save. */
+  const showSpaceLayout = useCallback((doc: LayoutDocument, root: LayoutDocument["root"]) => {
+    setLayout({ ...doc, root: normalizeLayout(root) });
+    setSelectedId(null);
+    setOpenMenuId(null);
+  }, []);
+
+  /** Instant desk swap; Herdr focus runs in the background. */
+  const switchSpace = useCallback(
+    (workspaceId: string) => {
+      const doc = layoutRef.current;
+      if (!doc || !workspaceId) return;
+      const snapshot = runtimeRef.current;
+      const panes = snapshot?.panes ?? [];
+      const inSpace = panes.filter((pane) => pane.workspaceId === workspaceId);
+      const pane = inSpace.find((item) => item.focused) ?? inSpace[0] ?? null;
+
+      if (spaceRef.current !== workspaceId) {
+        if (spaceRef.current) saveSpaceLayout(spaceRef.current, doc.root);
+        pendingSpaceRef.current = workspaceId;
+        spaceRef.current = workspaceId;
+        writeSpaceMap(workspaceId);
+        const root = bindTerminalPane(
+          layoutForSpace(workspaceId, seedSpaceLayout()),
+          pane?.paneId ?? null,
+        );
+        showSpaceLayout(doc, root);
+        if (snapshot) setRuntime(markWorkspaceFocused(snapshot, workspaceId, pane?.paneId ?? null));
+      } else {
+        pendingSpaceRef.current = workspaceId;
+      }
+
+      // Fire-and-forget: waiting on Herdr (or a stale cached runtime) used to snap the
+      // desk back to the previous space. Pending clears once focus is confirmed.
+      void (pane ? api.focus({ paneId: pane.paneId }) : api.focus({ workspaceId })).catch(
+        () => undefined,
+      );
     },
-    [],
+    [showSpaceLayout],
   );
+
+  const focusedSpaceId =
+    runtime?.focusedWorkspaceId ||
+    runtime?.workspaces.find((item) => item.focused)?.workspaceId ||
+    null;
+
+  useEffect(() => {
+    const doc = layoutRef.current;
+    if (!doc || !focusedSpaceId) return;
+    if (pendingSpaceRef.current) {
+      if (pendingSpaceRef.current === focusedSpaceId) pendingSpaceRef.current = null;
+      return;
+    }
+    if (spaceRef.current === null) {
+      spaceRef.current = focusedSpaceId;
+      writeSpaceMap(focusedSpaceId);
+      if (!loadSpaceLayout(focusedSpaceId)) {
+        saveSpaceLayout(focusedSpaceId, doc.root);
+        return;
+      }
+      showSpaceLayout(doc, layoutForSpace(focusedSpaceId, doc.root));
+      return;
+    }
+    if (spaceRef.current === focusedSpaceId) return;
+    saveSpaceLayout(spaceRef.current, doc.root);
+    spaceRef.current = focusedSpaceId;
+    writeSpaceMap(focusedSpaceId);
+    showSpaceLayout(doc, layoutForSpace(focusedSpaceId, seedSpaceLayout()));
+  }, [focusedSpaceId, showSpaceLayout]);
 
   useEffect(() => {
     if (!layout || !runtime?.connected) return;
@@ -159,7 +265,9 @@ export function App() {
       }
       if (msg.type === "layout" && msg.layout) {
         window.clearTimeout(saveRef.current);
-        setLayout(present(msg.layout));
+        const next = present(msg.layout);
+        setLayout(next);
+        if (spaceRef.current) saveSpaceLayout(spaceRef.current, next.root);
         setNotice("Updated by an agent");
         window.clearTimeout(noticeRef.current);
         noticeRef.current = window.setTimeout(() => setNotice(null), 1600);
@@ -235,6 +343,36 @@ export function App() {
     remember({ ...layout!, root: rootNext });
   }
 
+  function runHerdrAction(action: HerdrStatusAction) {
+    if (herdrBusy) return;
+    setHerdrBusy(true);
+    setNotice(
+      action === "start" ? "Starting Herdr…" : action === "update" ? "Updating Herdr…" : "Restarting Herdr…",
+    );
+    void api
+      .herdrCtlAction(action)
+      .then((next) => {
+        if (next.runtime) setRuntime(next.runtime);
+        if (next.ctl) setHerdrCtl(next.ctl);
+        else void api.herdrCtl().then(setHerdrCtl, () => undefined);
+        setError(null);
+        setNotice(
+          action === "start"
+            ? "Herdr started"
+            : action === "update"
+              ? next.message?.split("\n")[0] || "Herdr updated"
+              : "Herdr restarted",
+        );
+        window.clearTimeout(noticeRef.current);
+        noticeRef.current = window.setTimeout(() => setNotice(null), 2400);
+      })
+      .catch((err: unknown) => {
+        setError(err instanceof Error ? err.message : String(err));
+        setNotice(null);
+      })
+      .finally(() => setHerdrBusy(false));
+  }
+
   async function split(id: string, direction: "row" | "column", herdrSplit = splitHerdr) {
     const current = findPanel(layout!.root, id);
     let paneId: string | null = null;
@@ -279,7 +417,27 @@ export function App() {
     }
     edit(next);
     setSelectedId(listPanels(next)[0]?.id ?? null);
+    if (openMenuId === id) setOpenMenuId(null);
     if (zoomedId === id) setZoomedId(null);
+  }
+
+  function addPanel() {
+    const from =
+      (selectedId && findPanel(layout!.root, selectedId)?.id) ||
+      listPanels(layout!.root).at(-1)?.id;
+    if (!from) return;
+    const panelId = freshPanelId(layout!.root);
+    edit(
+      splitPanel(layout!.root, from, "row", {
+        type: "panel",
+        id: panelId,
+        title: null,
+        panel: { type: "blank" },
+      }),
+    );
+    setSelectedId(panelId);
+    setOpenMenuId(panelId);
+    setOpenMenuToken((token) => token + 1);
   }
 
   function addToChat(chatId: string, attachment: Attachment) {
@@ -313,20 +471,24 @@ export function App() {
       >
       <HostProvider
         runtime={runtime}
-        onRuntime={setRuntime}
+        onRuntime={(next) => setRuntime(preferPendingSpace(next, pendingSpaceRef.current))}
         onNotice={(message) => {
           setNotice(message);
           window.clearTimeout(noticeRef.current);
           noticeRef.current = window.setTimeout(() => setNotice(null), 2400);
         }}
+        onSwitchSpace={switchSpace}
       >
       <div className="app">
         <TopBar
           runtime={runtime}
+          herdrCtl={herdrCtl}
+          herdrBusy={herdrBusy}
           notice={notice}
           zoomed={Boolean(zoomedId)}
           sessions={sessions}
           selecting={selecting}
+          onHerdrAction={runHerdrAction}
           onSession={(name) => {
             void api.useSession(name).then(
               (next) => {
@@ -376,6 +538,7 @@ export function App() {
             );
           }}
           onSelect={() => setSelecting((current) => !current)}
+          onAddPanel={addPanel}
           onExitZoom={() => setZoomedId(null)}
         />
         {error ? <div className="banner">{error}</div> : null}
@@ -393,6 +556,9 @@ export function App() {
           >
           <LayoutView
             node={root}
+            root={layout.root}
+            openMenuId={openMenuId}
+            openMenuToken={openMenuToken}
             panes={runtime?.panes ?? []}
             workspaces={runtime?.workspaces ?? []}
             agents={runtime?.agents ?? []}
@@ -401,8 +567,11 @@ export function App() {
             onConsume={consume}
             onRatio={(path, ratio) => edit(setSplitRatio(layout.root, path, ratio))}
             onTracks={(path, columns, rows) => edit(setGridTracks(layout.root, path, columns, rows))}
-            onPanel={(id, panel: PanelConfig) => edit(setPanel(layout.root, id, panel))}
+            onPanel={(id, panel: PanelConfig, retitle) =>
+              edit(assignContent(layout.root, id, panel, retitle === true))
+            }
             onCloseTab={(id, tabId) => edit(closePanelTab(layout.root, id, tabId))}
+            onOpenSpace={switchSpace}
             onFocusPane={(paneId) => {
               void api.focus({ paneId });
               const terminal = listPanels(layout.root).find((panel) => panel.panel.type === "herdr");

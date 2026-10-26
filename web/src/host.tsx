@@ -39,11 +39,14 @@ export function HostProvider({
   runtime,
   onRuntime,
   onNotice,
+  onSwitchSpace,
   children,
 }: {
   runtime: RuntimeSnapshot | null;
   onRuntime: (runtime: RuntimeSnapshot) => void;
   onNotice: (message: string) => void;
+  /** Instant local space swap; used instead of awaiting Herdr focus. */
+  onSwitchSpace?: (workspaceId: string) => void;
   children: ReactNode;
 }) {
   const [config, setConfig] = useState<HerdrConfig | null>(null);
@@ -56,10 +59,12 @@ export function HostProvider({
   const runtimeRef = useRef(runtime);
   const noticeRef = useRef(onNotice);
   const runtimeCb = useRef(onRuntime);
+  const switchSpaceCb = useRef(onSwitchSpace);
   configRef.current = config;
   runtimeRef.current = runtime;
   noticeRef.current = onNotice;
   runtimeCb.current = onRuntime;
+  switchSpaceCb.current = onSwitchSpace;
 
   useEffect(() => {
     void api
@@ -102,14 +107,20 @@ export function HostProvider({
           action === "next_workspace" ? 1 : -1,
         );
         if (id) {
-          await api.focus({ workspaceId: id });
-          await refresh();
+          if (switchSpaceCb.current) switchSpaceCb.current(id);
+          else {
+            await api.focus({ workspaceId: id });
+            await refresh();
+          }
         }
       } else if (action === "switch_workspace" && index) {
         const space = spaces[index - 1];
         if (space) {
-          await api.focus({ workspaceId: space.workspaceId });
-          await refresh();
+          if (switchSpaceCb.current) switchSpaceCb.current(space.workspaceId);
+          else {
+            await api.focus({ workspaceId: space.workspaceId });
+            await refresh();
+          }
         }
       } else if (action === "new_tab") {
         await api.herdrAction({ action: "tab.create", workspaceId });

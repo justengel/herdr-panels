@@ -393,22 +393,37 @@ fn kind_to_panel(kind: &crate::open_target::OpenKind) -> PanelConfig {
         crate::open_target::OpenKind::Browser { url, proxy } => PanelConfig::Iframe {
             url: url.clone(),
             proxy: *proxy,
+            address_bar: None,
         },
-        crate::open_target::OpenKind::Markdown { path } => {
-            PanelConfig::Markdown { path: path.clone() }
-        }
+        crate::open_target::OpenKind::Markdown { path } => PanelConfig::Markdown {
+            path: path.clone(),
+            address_bar: None,
+            raw: false,
+        },
         crate::open_target::OpenKind::Html { path } => PanelConfig::Html {
             path: Some(path.clone()),
             inline: None,
             control: false,
+            address_bar: None,
+            raw: false,
         },
-        crate::open_target::OpenKind::Text { path } => PanelConfig::File { path: path.clone() },
-        crate::open_target::OpenKind::Explorer { path } => {
-            PanelConfig::Explorer { path: path.clone() }
-        }
+        crate::open_target::OpenKind::Text { path } => PanelConfig::File {
+            path: path.clone(),
+            address_bar: None,
+        },
+        crate::open_target::OpenKind::Explorer { path } => PanelConfig::Explorer {
+            path: path.clone(),
+            focus: None,
+            address_bar: None,
+        },
         crate::open_target::OpenKind::Plugin { id } => PanelConfig::Plugin {
             plugin: id.clone(),
             config: serde_json::Value::Null,
+            view: None,
+            path: None,
+            url: None,
+            directory: false,
+            address_bar: None,
         },
     }
 }
@@ -838,7 +853,7 @@ async fn read_static(
             Ok((truncate(&screen.text, 48_000), Vec::new()))
         }
         PanelConfig::Herdr { pane_id: None, .. } => Ok(("No pane selected".into(), Vec::new())),
-        PanelConfig::Markdown { path } => {
+        PanelConfig::Markdown { path, .. } => {
             let text = read_content(state, path).await?;
             let blocks = layout_ops::markdown_blocks(&text)
                 .into_iter()
@@ -875,9 +890,10 @@ async fn read_static(
         PanelConfig::Plugin { plugin, .. } => Ok((format!("plugin {plugin}"), Vec::new())),
         PanelConfig::Files => Ok(("spaces".into(), Vec::new())),
         PanelConfig::Agents => Ok(("agents".into(), Vec::new())),
-        PanelConfig::Explorer { path } => {
-            let listed = crate::files::list_children(std::path::Path::new(path))
-                .map_err(AgentError::bad)?;
+        PanelConfig::Blank => Ok(("blank".into(), Vec::new())),
+        PanelConfig::Explorer { path, .. } => {
+            let listed =
+                crate::files::list_children(std::path::Path::new(path)).map_err(AgentError::bad)?;
             let text = listed
                 .iter()
                 .map(|entry| format!("{}\t{}", entry.kind, entry.path))
@@ -885,7 +901,7 @@ async fn read_static(
                 .join("\n");
             Ok((truncate(&text, 48_000), Vec::new()))
         }
-        PanelConfig::File { path } => {
+        PanelConfig::File { path, .. } => {
             let text = read_content(state, path).await?;
             Ok((truncate(&text, 48_000), Vec::new()))
         }
@@ -978,13 +994,14 @@ fn panel_type(panel: &PanelConfig) -> &'static str {
         PanelConfig::File { .. } => "file",
         PanelConfig::Tabs { .. } => "tabs",
         PanelConfig::Chat { .. } => "chat",
+        PanelConfig::Blank => "blank",
     }
 }
 
 fn panel_summary(panel: &PanelConfig) -> String {
     match panel {
         PanelConfig::Herdr { pane_id, .. } => pane_id.clone().unwrap_or_else(|| "unbound".into()),
-        PanelConfig::Markdown { path } => path.clone(),
+        PanelConfig::Markdown { path, .. } => path.clone(),
         PanelConfig::Iframe { url, .. } => url.clone(),
         PanelConfig::Html { path, inline, .. } => path.clone().unwrap_or_else(|| {
             if inline.is_some() {
@@ -996,8 +1013,8 @@ fn panel_summary(panel: &PanelConfig) -> String {
         PanelConfig::Plugin { plugin, .. } => plugin.clone(),
         PanelConfig::Files => "spaces".into(),
         PanelConfig::Agents => "agents".into(),
-        PanelConfig::Explorer { path } => path.clone(),
-        PanelConfig::File { path } => path.clone(),
+        PanelConfig::Explorer { path, focus, .. } => focus.clone().unwrap_or_else(|| path.clone()),
+        PanelConfig::File { path, .. } => path.clone(),
         PanelConfig::Tabs { tabs, active, .. } => tabs
             .iter()
             .find(|tab| tab.id == *active)
@@ -1005,6 +1022,7 @@ fn panel_summary(panel: &PanelConfig) -> String {
             .map(|tab| tab.title.clone())
             .unwrap_or_else(|| "tabs".into()),
         PanelConfig::Chat { pane_id } => pane_id.clone().unwrap_or_else(|| "local".into()),
+        PanelConfig::Blank => "blank".into(),
     }
 }
 
@@ -1021,6 +1039,7 @@ fn default_title(panel: &PanelConfig) -> &'static str {
         PanelConfig::File { .. } => "File",
         PanelConfig::Tabs { .. } => "Tabs",
         PanelConfig::Chat { .. } => "Chat",
+        PanelConfig::Blank => "",
     }
 }
 

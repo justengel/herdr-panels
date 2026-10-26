@@ -1,5 +1,13 @@
-import { useEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { api, baseName } from "../../api";
+import {
+  cachedEntries,
+  explorerMemory,
+  folderOpen,
+  rememberEntries,
+  rememberFolder,
+  type TreeEntry,
+} from "../../explorerMemory";
 import { parentPath, plainPath, samePath } from "../../paths";
 
 interface Root {
@@ -7,27 +15,50 @@ interface Root {
   label: string;
 }
 
-interface Entry {
-  name: string;
-  path: string;
-  kind: "dir" | "file";
-}
-
 export function ExplorerView({
+  panelId,
   path,
+  focus,
   roots,
   onEnter,
   onOpenFile,
   showAddress = true,
 }: {
+  panelId: string;
   path: string;
+  focus?: string;
   roots: Root[];
   onEnter: (path: string) => void;
   onOpenFile: (path: string) => void | Promise<unknown>;
   showAddress?: boolean;
 }) {
+  const memory = explorerMemory(panelId);
+  const treeRef = useRef<HTMLDivElement>(null);
+  const restored = useRef(false);
   const [draft, setDraft] = useState(path);
   const [error, setError] = useState<string | null>(null);
+
+  useLayoutEffect(() => {
+    restored.current = false;
+  }, [panelId]);
+
+  useLayoutEffect(() => {
+    const node = treeRef.current;
+    if (!node || restored.current) return;
+    if (memory.scroll > 0 && node.scrollHeight <= node.clientHeight) return;
+    node.scrollTop = memory.scroll;
+    restored.current = true;
+  });
+
+  useEffect(() => {
+    const node = treeRef.current;
+    if (!node) return;
+    const onScroll = () => {
+      memory.scroll = node.scrollTop;
+    };
+    node.addEventListener("scroll", onScroll, { passive: true });
+    return () => node.removeEventListener("scroll", onScroll);
+  }, [memory]);
 
   useEffect(() => {
     const cleaned = plainPath(path);
@@ -59,23 +90,19 @@ export function ExplorerView({
           </button>
           <input aria-label="Folder" value={draft} onChange={(event) => setDraft(event.target.value)} />
         </form>
-      ) : (
-        <div className="explorer-up">
-          <button type="button" aria-label="Up" disabled={!canUp} onClick={() => onEnter(parent)}>
-            ↑
-          </button>
-        </div>
-      )}
+      ) : null}
       {error ? (
         <div className="empty">{error}</div>
       ) : (
-        <div className="explorer-tree">
+        <div className="explorer-tree" ref={treeRef}>
           {path ? (
             <TreeBranch
+              panelId={panelId}
               path={plainPath(path)}
               name={baseName(path) || plainPath(path)}
               depth={0}
               startOpen
+              focus={focus}
               onOpenFile={onOpenFile}
               onError={setError}
             />
@@ -83,10 +110,12 @@ export function ExplorerView({
             roots.map((root) => (
               <TreeBranch
                 key={root.path}
+                panelId={panelId}
                 path={plainPath(root.path)}
                 name={root.label}
                 depth={0}
-                startOpen={false}
+                startOpen={Boolean(focus && samePath(focus, root.path))}
+                focus={focus}
                 onOpenFile={onOpenFile}
                 onError={setError}
               />
@@ -99,35 +128,50 @@ export function ExplorerView({
 }
 
 function TreeBranch({
+  panelId,
   path,
   name,
   depth,
   startOpen,
+  focus,
   onOpenFile,
   onError,
 }: {
+  panelId: string;
   path: string;
   name: string;
   depth: number;
   startOpen: boolean;
+  focus?: string;
   onOpenFile: (path: string) => void | Promise<unknown>;
   onError: (message: string | null) => void;
 }) {
-  const [open, setOpen] = useState(startOpen);
-  const [entries, setEntries] = useState<Entry[] | null>(null);
+  const memory = explorerMemory(panelId);
+  const forceOpen = Boolean(focus && samePath(focus, path) && !samePath(path, focus));
+  const [open, setOpen] = useState(() => folderOpen(memory, path, startOpen || forceOpen));
+  const [entries, setEntries] = useState<TreeEntry[] | null>(() => cachedEntries(memory, path) ?? null);
+  const openRef = useRef(open);
+  const pathRef = useRef(path);
+  openRef.current = open;
 
-  useEffect(() => setOpen(startOpen), [startOpen, path]);
+  useEffect(() => {
+    rememberFolder(memory, pathRef.current, openRef.current);
+    pathRef.current = path;
+    setOpen(folderOpen(memory, path, startOpen || forceOpen));
+    setEntries(cachedEntries(memory, path) ?? null);
+  }, [memory, path, startOpen, forceOpen]);
 
   useEffect(() => {
     if (!open) return;
     let stopped = false;
-    setEntries(null);
+    if (!cachedEntries(memory, path)) setEntries(null);
     api.tree(path).then(
       (result) => {
-        if (!stopped) {
-          setEntries(result.entries.map((entry) => ({ ...entry, path: plainPath(entry.path) })));
-          onError(null);
-        }
+        if (stopped) return;
+        const next = result.entries.map((entry) => ({ ...entry, path: plainPath(entry.path) }));
+        rememberEntries(memory, path, next);
+        setEntries(next);
+        onError(null);
       },
       (err: unknown) => {
         if (!stopped) {
@@ -139,7 +183,15 @@ function TreeBranch({
     return () => {
       stopped = true;
     };
-  }, [open, path, onError]);
+  }, [open, path, onError, memory]);
+
+  function toggle() {
+    setOpen((current) => {
+      const next = !current;
+      rememberFolder(memory, path, next);
+      return next;
+    });
+  }
 
   return (
     <div>
@@ -148,7 +200,7 @@ function TreeBranch({
         className="tree-row"
         style={{ paddingLeft: 8 + depth * 14 }}
         aria-expanded={open}
-        onClick={() => setOpen((current) => !current)}
+        onClick={toggle}
       >
         <span className={open ? "tree-chevron open" : "tree-chevron"} />
         <FolderIcon />
@@ -160,10 +212,12 @@ function TreeBranch({
             entry.kind === "dir" ? (
               <TreeBranch
                 key={entry.path}
+                panelId={panelId}
                 path={entry.path}
                 name={entry.name}
                 depth={depth + 1}
                 startOpen={false}
+                focus={focus}
                 onOpenFile={onOpenFile}
                 onError={onError}
               />
@@ -171,7 +225,7 @@ function TreeBranch({
               <button
                 key={entry.path}
                 type="button"
-                className="tree-row"
+                className={`tree-row${focus && samePath(entry.path, focus) ? " is-selected" : ""}`}
                 style={{ paddingLeft: 8 + (depth + 1) * 14 }}
                 onClick={() => {
                   void Promise.resolve(onOpenFile(entry.path)).catch((err: unknown) => {

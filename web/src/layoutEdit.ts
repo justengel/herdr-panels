@@ -1,3 +1,4 @@
+import { titleFromPanel } from "./openTitle";
 import type { GridCell, LayoutNode, PanelConfig, PanelNode, PanelTab, TabEdge } from "./types";
 
 function clamp(value: number, min: number, max: number): number {
@@ -30,8 +31,12 @@ export function normalizeLayout(node: LayoutNode): LayoutNode {
       panel = only.panel;
       if (only.title && only.title !== "New tab") title = only.title;
     }
-    if (panel.type === "files" && (!title || title === "Directories")) title = "spaces";
-    if (panel.type === "agents" && (!title || title === "Agents")) title = "agents";
+    if (panel.type === "files" && (!title || title === "Directories" || title === "spaces" || title === "Panel")) {
+      title = "Spaces";
+    }
+    if (panel.type === "agents" && (!title || title === "agents" || title === "Panel")) {
+      title = "Agents";
+    }
     return { type: "panel", id: node.id, title: title ?? null, panel };
   }
   return {
@@ -124,23 +129,36 @@ export function contentLabel(panel: PanelConfig): string {
   switch (panel.type) {
     case "herdr":
       return "Terminal";
-    case "iframe":
-    case "html":
-      return "Browser";
+    case "iframe": {
+      const host = titleFromPanel(panel);
+      return host || "Browser";
+    }
+    case "html": {
+      const name = titleFromPanel(panel);
+      return name || "Browser";
+    }
     case "files":
       return "Spaces";
     case "agents":
       return "Agents";
-    case "explorer":
-      return "Files";
-    case "markdown":
-      return "Notes";
-    case "file":
-      return "File";
+    case "explorer": {
+      const name = titleFromPanel(panel);
+      return name || "Files";
+    }
+    case "markdown": {
+      const name = titleFromPanel(panel);
+      return name || "Notes";
+    }
+    case "file": {
+      const name = titleFromPanel(panel);
+      return name || "File";
+    }
     case "plugin":
       return panel.plugin || "Plugin";
     case "chat":
       return "Chat";
+    case "blank":
+      return "";
     case "tabs":
       return "Tabs";
   }
@@ -190,15 +208,22 @@ export function closePanelTab(node: LayoutNode, panelId: string, tabId: string):
 
 export function assignContent(node: LayoutNode, id: string, panel: PanelConfig, retitle = false): LayoutNode {
   const current = findPanel(node, id);
-  if (!current || current.panel.type !== "tabs") return setPanel(node, id, panel);
-  const group = current.panel;
-  const activeId = group.tabs.some((tab) => tab.id === group.active) ? group.active : group.tabs[0]?.id;
-  return setPanel(node, id, {
-    ...group,
-    tabs: group.tabs.map((tab) =>
-      tab.id === activeId ? { ...tab, panel, title: retitle ? contentLabel(panel) : tab.title } : tab,
-    ),
-  });
+  if (!current) return node;
+  if (current.panel.type === "tabs") {
+    const group = current.panel;
+    const activeId = group.tabs.some((tab) => tab.id === group.active) ? group.active : group.tabs[0]?.id;
+    return setPanel(node, id, {
+      ...group,
+      tabs: group.tabs.map((tab) =>
+        tab.id === activeId ? { ...tab, panel, title: retitle ? contentLabel(panel) : tab.title } : tab,
+      ),
+    });
+  }
+  return mapPanel(node, id, (item) => ({
+    ...item,
+    panel,
+    title: retitle ? contentLabel(panel) : item.title,
+  }));
 }
 
 export function setTabEdge(node: LayoutNode, id: string, edge: TabEdge): LayoutNode {
@@ -426,6 +451,8 @@ export function defaultPanel(type: PanelConfig["type"]): PanelConfig {
       };
     case "chat":
       return { type: "chat", paneId: null };
+    case "blank":
+      return { type: "blank" };
     default:
       return { type: "herdr", paneId: null };
   }
@@ -444,9 +471,9 @@ export function panelKind(panel: PanelConfig): string {
     case "plugin":
       return "Plugin";
     case "files":
-      return "spaces";
+      return "Spaces";
     case "agents":
-      return "agents";
+      return "Agents";
     case "explorer":
       return "Files";
     case "file":
@@ -455,6 +482,8 @@ export function panelKind(panel: PanelConfig): string {
       return "Tabs";
     case "chat":
       return "Chat";
+    case "blank":
+      return "";
   }
 }
 
@@ -475,6 +504,8 @@ export function panelSummary(panel: PanelNode): string {
       return "spaces";
     case "agents":
       return "agents";
+    case "blank":
+      return "Choose a view";
     case "explorer":
       return config.path || "Choose a folder";
     case "file":
@@ -504,11 +535,11 @@ export function ensureSidebar(root: LayoutNode): LayoutNode {
   const agents = panels.find((panel) => panel.panel.type === "agents");
   let next = root;
   if (files && !agents) {
-    next = splitPanel(next, files.id, "column", builtinPanel(unusedId(next, "agents"), "agents", { type: "agents" }));
+    next = splitPanel(next, files.id, "column", builtinPanel(unusedId(next, "agents"), "Agents", { type: "agents" }));
   } else if (!files && agents) {
     const id = unusedId(next, "spaces");
     next = swapPanels(
-      splitPanel(next, agents.id, "column", builtinPanel(id, "spaces", { type: "files" })),
+      splitPanel(next, agents.id, "column", builtinPanel(id, "Spaces", { type: "files" })),
       agents.id,
       id,
     );
@@ -519,8 +550,8 @@ export function ensureSidebar(root: LayoutNode): LayoutNode {
       type: "split",
       direction: "column",
       ratio: 0.62,
-      first: builtinPanel(filesId, "spaces", { type: "files" }),
-      second: builtinPanel(agentsId, "agents", { type: "agents" }),
+      first: builtinPanel(filesId, "Spaces", { type: "files" }),
+      second: builtinPanel(agentsId, "Agents", { type: "agents" }),
     };
     next = { type: "split", direction: "row", ratio: 0.22, first: sidebar, second: next };
   }

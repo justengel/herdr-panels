@@ -6,13 +6,94 @@ use axum::body::Body;
 use axum::extract::State;
 use axum::http::{header, HeaderValue, Response, StatusCode, Uri};
 use axum::response::IntoResponse;
+use serde::de::{self, Deserializer};
 use serde::{Deserialize, Serialize};
 
 use crate::server::AppState;
 
 const MAX_FILE: usize = 8 * 1024 * 1024;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AddressBar {
+    pub show: bool,
+    pub modify: bool,
+    pub replace: bool,
+}
+
+impl Default for AddressBar {
+    fn default() -> Self {
+        Self {
+            show: true,
+            modify: false,
+            replace: false,
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for AddressBar {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = serde_json::Value::deserialize(deserializer)?;
+        match value {
+            serde_json::Value::Bool(show) => Ok(AddressBar {
+                show,
+                modify: false,
+                replace: false,
+            }),
+            serde_json::Value::Object(map) => {
+                let replace = match map.get("replace") {
+                    Some(serde_json::Value::Bool(replace)) => *replace,
+                    Some(_) => {
+                        return Err(de::Error::custom("addressBar.replace must be a boolean"))
+                    }
+                    None => false,
+                };
+                let show = match map.get("show") {
+                    Some(serde_json::Value::Bool(show)) => *show && !replace,
+                    Some(_) => return Err(de::Error::custom("addressBar.show must be a boolean")),
+                    None => !replace,
+                };
+                let modify = match map.get("modify") {
+                    Some(serde_json::Value::Bool(modify)) => *modify,
+                    Some(_) => {
+                        return Err(de::Error::custom("addressBar.modify must be a boolean"))
+                    }
+                    None => false,
+                };
+                Ok(AddressBar {
+                    show,
+                    modify,
+                    replace,
+                })
+            }
+            _ => Err(de::Error::custom(
+                "addressBar must be a boolean or an object",
+            )),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ViewOpen {
+    File,
+    Markdown,
+    Html,
+    Directory,
+    Url,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct PluginView {
+    pub id: String,
+    pub title: String,
+    pub opens: Vec<ViewOpen>,
+}
+
+/// Host plugin API. Bump when open/config messages or opens kinds change incompatibly.
+pub const PLUGIN_API_VERSION: u32 = 1;
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct PluginManifest {
     pub id: String,
     pub title: String,
@@ -20,10 +101,48 @@ pub struct PluginManifest {
     pub entry: String,
     #[serde(default)]
     pub description: Option<String>,
+    #[serde(default = "default_api_version", rename = "apiVersion")]
+    pub api_version: u32,
+    #[serde(default)]
+    pub version: Option<String>,
+    #[serde(default, rename = "addressBar")]
+    pub address_bar: AddressBar,
+    pub views: Vec<PluginView>,
+}
+
+#[derive(Deserialize)]
+struct ManifestDraft {
+    id: String,
+    title: String,
+    #[serde(default = "default_entry")]
+    entry: String,
+    #[serde(default)]
+    description: Option<String>,
+    #[serde(default = "default_api_version", rename = "apiVersion")]
+    api_version: u32,
+    #[serde(default)]
+    version: Option<String>,
+    #[serde(default, rename = "addressBar")]
+    address_bar: AddressBar,
+    views: Option<Vec<ViewDraft>>,
+}
+
+#[derive(Deserialize)]
+struct ViewDraft {
+    #[serde(default)]
+    id: String,
+    #[serde(default)]
+    title: String,
+    #[serde(default)]
+    opens: Vec<String>,
 }
 
 fn default_entry() -> String {
     "index.html".into()
+}
+
+fn default_api_version() -> u32 {
+    PLUGIN_API_VERSION
 }
 
 pub fn plugins_dir(config_dir: &Path) -> PathBuf {
@@ -92,16 +211,103 @@ pub fn list_plugins(config_dir: &Path) -> anyhow::Result<Vec<PluginManifest>> {
 }
 
 pub fn parse_manifest(text: &str) -> anyhow::Result<PluginManifest> {
-    let manifest: PluginManifest =
+    let draft: ManifestDraft =
         serde_json::from_str(text).context("plugin.json is not valid JSON")?;
-    validate_plugin_id(&manifest.id)?;
-    if manifest.title.trim().is_empty() || manifest.title.chars().count() > 80 {
+    validate_plugin_id(&draft.id)?;
+    if draft.title.trim().is_empty() || draft.title.chars().count() > 80 {
         bail!("plugin title must be 1 to 80 characters");
     }
-    if !is_relative_file(&manifest.entry) {
+    if !is_relative_file(&draft.entry) {
         bail!("plugin entry must be a file inside the plugin directory");
     }
-    Ok(manifest)
+    if draft.api_version != PLUGIN_API_VERSION {
+        bail!(
+            "plugin {} needs apiVersion {}; desk is {}",
+            draft.id,
+            draft.api_version,
+            PLUGIN_API_VERSION
+        );
+    }
+    if draft
+        .version
+        .as_ref()
+        .is_some_and(|value| value.chars().count() > 32)
+    {
+        bail!("plugin version is limited to 32 characters");
+    }
+    let views = normalize_views(&draft.id, &draft.title, draft.views)?;
+    Ok(PluginManifest {
+        id: draft.id,
+        title: draft.title,
+        entry: draft.entry,
+        description: draft.description,
+        api_version: draft.api_version,
+        version: draft.version,
+        address_bar: draft.address_bar,
+        views,
+    })
+}
+
+fn normalize_views(
+    plugin_id: &str,
+    plugin_title: &str,
+    views: Option<Vec<ViewDraft>>,
+) -> anyhow::Result<Vec<PluginView>> {
+    let Some(views) = views else {
+        return Ok(vec![PluginView {
+            id: plugin_id.to_string(),
+            title: plugin_title.to_string(),
+            opens: Vec::new(),
+        }]);
+    };
+    if views.is_empty() {
+        bail!("views must list at least one view");
+    }
+    let mut seen = Vec::new();
+    let mut normalized = Vec::new();
+    for draft in &views {
+        let id = if draft.id.trim().is_empty() {
+            if views.len() != 1 {
+                bail!("each view needs an id");
+            }
+            plugin_id.to_string()
+        } else {
+            draft.id.clone()
+        };
+        validate_plugin_id(&id).map_err(|err| anyhow::anyhow!("view id: {err}"))?;
+        if seen.contains(&id) {
+            bail!("view id {id} is used more than once");
+        }
+        seen.push(id.clone());
+        let title = if draft.title.trim().is_empty() {
+            plugin_title.to_string()
+        } else {
+            draft.title.clone()
+        };
+        if title.trim().is_empty() || title.chars().count() > 80 {
+            bail!("view title must be 1 to 80 characters");
+        }
+        let mut opens = Vec::new();
+        for name in &draft.opens {
+            let open = parse_open(name)?;
+            if !opens.contains(&open) {
+                opens.push(open);
+            }
+        }
+        normalized.push(PluginView { id, title, opens });
+    }
+    Ok(normalized)
+}
+
+fn parse_open(name: &str) -> anyhow::Result<ViewOpen> {
+    match name {
+        "file" => Ok(ViewOpen::File),
+        "markdown" => Ok(ViewOpen::Markdown),
+        "html" => Ok(ViewOpen::Html),
+        "directory" => Ok(ViewOpen::Directory),
+        "url" => Ok(ViewOpen::Url),
+        other => bail!("unknown view kind {other}. use file, markdown, html, directory, or url"),
+    }
 }
 
 pub fn install_plugin(
@@ -246,6 +452,64 @@ mod tests {
     use super::*;
 
     #[test]
+    fn address_bar_can_be_shown_and_modified() {
+        let plain = parse_manifest(r#"{"id":"welcome","title":"Welcome"}"#).unwrap();
+        assert!(plain.address_bar.show);
+        assert!(!plain.address_bar.modify);
+
+        let hidden =
+            parse_manifest(r#"{"id":"welcome","title":"Welcome","addressBar":false}"#).unwrap();
+        assert!(!hidden.address_bar.show);
+        assert!(!hidden.address_bar.modify);
+
+        let shown =
+            parse_manifest(r#"{"id":"welcome","title":"Welcome","addressBar":true}"#).unwrap();
+        assert!(shown.address_bar.show);
+        assert!(!shown.address_bar.modify);
+
+        let both = parse_manifest(
+            r#"{"id":"welcome","title":"Welcome","addressBar":{"show":true,"modify":true}}"#,
+        )
+        .unwrap();
+        assert!(both.address_bar.show);
+        assert!(both.address_bar.modify);
+
+        let hidden_until_asked =
+            parse_manifest(r#"{"id":"welcome","title":"Welcome","addressBar":{"modify":true}}"#)
+                .unwrap();
+        assert!(hidden_until_asked.address_bar.show);
+        assert!(hidden_until_asked.address_bar.modify);
+        assert!(!plain.address_bar.replace);
+
+        let own =
+            parse_manifest(r#"{"id":"welcome","title":"Welcome","addressBar":{"replace":true}}"#)
+                .unwrap();
+        assert!(!own.address_bar.show);
+        assert!(!own.address_bar.modify);
+        assert!(own.address_bar.replace);
+
+        let own_and_modify = parse_manifest(
+            r#"{"id":"welcome","title":"Welcome","addressBar":{"show":true,"modify":true,"replace":true}}"#,
+        )
+        .unwrap();
+        assert!(!own_and_modify.address_bar.show);
+        assert!(own_and_modify.address_bar.modify);
+        assert!(own_and_modify.address_bar.replace);
+
+        assert!(
+            parse_manifest(r#"{"id":"welcome","title":"Welcome","addressBar":"yes"}"#).is_err()
+        );
+        assert!(parse_manifest(
+            r#"{"id":"welcome","title":"Welcome","addressBar":{"show":"yes"}}"#
+        )
+        .is_err());
+        assert!(parse_manifest(
+            r#"{"id":"welcome","title":"Welcome","addressBar":{"replace":"yes"}}"#
+        )
+        .is_err());
+    }
+
+    #[test]
     fn manifest_requires_a_safe_id_and_entry() {
         let manifest =
             parse_manifest(r#"{"id":"welcome","title":"Welcome","entry":"index.html"}"#).unwrap();
@@ -291,5 +555,41 @@ mod tests {
         );
         assert!(plugin_file(&root, "welcome", "index.html").is_ok());
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_plugin_view_declares_what_it_opens() {
+        let plain = parse_manifest(r#"{"id":"welcome","title":"Welcome"}"#).unwrap();
+        assert_eq!(plain.api_version, PLUGIN_API_VERSION);
+        assert_eq!(plain.views.len(), 1);
+        assert_eq!(plain.views[0].id, "welcome");
+        assert!(plain.views[0].opens.is_empty());
+
+        let named = parse_manifest(
+            r#"{"id":"vim","title":"Vim","views":[{"title":"Vim","opens":["file","file"]}]}"#,
+        )
+        .unwrap();
+        assert_eq!(named.views[0].id, "vim");
+        assert_eq!(named.views[0].opens, vec![ViewOpen::File]);
+
+        let docs = parse_manifest(
+            r#"{"id":"docs","title":"Docs","views":[{"id":"read","opens":["markdown","directory"]},{"id":"home","title":"Library"}]}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            docs.views[0].opens,
+            vec![ViewOpen::Markdown, ViewOpen::Directory]
+        );
+        assert_eq!(docs.views[1].title, "Library");
+        assert!(docs.views[1].opens.is_empty());
+
+        assert!(parse_manifest(r#"{"id":"vim","title":"Vim","views":[]}"#).is_err());
+        assert!(
+            parse_manifest(r#"{"id":"vim","title":"Vim","views":[{"opens":["page"]}]}"#).is_err()
+        );
+        assert!(parse_manifest(
+            r#"{"id":"docs","title":"Docs","views":[{"title":"A"},{"title":"B"}]}"#
+        )
+        .is_err());
     }
 }

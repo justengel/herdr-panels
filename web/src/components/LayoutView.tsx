@@ -1,11 +1,24 @@
-import { useRef } from "react";
+import { useRef, useState } from "react";
 import type { AgentView, Attachment, GridNode, LayoutNode, PaneView, PanelConfig, WorkspaceView } from "../types";
 import { api } from "../api";
-import { baseName, samePath } from "../paths";
-import { cellNode } from "../layoutEdit";
+import { baseName, parentPath, plainPath, samePath } from "../paths";
+import { openFileBeside } from "../fileOpen";
+import { isDefaultPanelTitle } from "../openTitle";
+import { pluginAddressBar } from "../pluginAddress";
+import { addressBarSurfaceId, carryAddressBar, hostAddressBarVisible, setAddressBar, supportsAddressBar, writeAddressBarChoice } from "../addressBar";
+import { carryRaw, showsRawText, writeRawChoice } from "../rawText";
+import { adoptPluginAddress, menuFor, pluginOpenMessage, showViewer, writePluginSubject } from "../viewMenu";
+import { canPinPanel, findPin, removePin, unpinFromSpace, upsertPin } from "../pins";
+import { openTerminalPane } from "../openTerminal";
+import { terminalHereCwd } from "../terminalHere";
+import { cellNode, listPanels } from "../layoutEdit";
 import { useDesign } from "../design";
+import { useDesk } from "../desk";
+import { usePanelActions } from "../panelActions";
 import { PanelChrome } from "./PanelChrome";
 import { addressOf, DocumentFrame } from "./LocationBar";
+import { OpenAddressDialog } from "./OpenAddressDialog";
+import { PinDialog, type PinDialogResult } from "./PinDialog";
 import { TabGroup } from "./TabGroup";
 import { SpaceMirror } from "./panels/SpaceMirror";
 import { MarkdownView } from "./panels/MarkdownView";
@@ -16,6 +29,7 @@ import { ExplorerView } from "./panels/ExplorerView";
 import { FilesView } from "./panels/FilesView";
 import { TextView } from "./panels/TextView";
 import { AgentsView } from "./panels/AgentsView";
+import { PluginView, type PluginHostCommand } from "./panels/PluginView";
 
 interface Props {
   node: LayoutNode;
@@ -28,9 +42,13 @@ interface Props {
   onConsume: (panelId: string) => void;
   onRatio: (path: string, ratio: number) => void;
   onTracks: (path: string, columns: number[], rows: number[]) => void;
-  onPanel: (id: string, panel: PanelConfig) => void;
+  onPanel: (id: string, panel: PanelConfig, retitle?: boolean) => void;
   onCloseTab: (id: string, tabId: string) => void;
   onFocusPane: (paneId: string) => void;
+  onOpenSpace?: (workspaceId: string) => void;
+  openMenuId?: string | null;
+  openMenuToken?: number;
+  root?: LayoutNode;
 }
 
 export function LayoutView({
@@ -47,26 +65,34 @@ export function LayoutView({
   onPanel,
   onCloseTab,
   onFocusPane,
+  onOpenSpace,
+  openMenuId = null,
+  openMenuToken = 0,
+  root,
 }: Props) {
+  const tree = root ?? node;
+  const shared = {
+    panes,
+    workspaces,
+    agents,
+    layoutId,
+    pending,
+    onConsume,
+    onRatio,
+    onTracks,
+    onPanel,
+    onCloseTab,
+    onFocusPane,
+    onOpenSpace,
+    openMenuId,
+    openMenuToken,
+    root: tree,
+  };
   if (node.type === "split") {
     return (
       <div className={`split ${node.direction}`}>
         <div className="split-pane" style={paneStyle(node.ratio)}>
-          <LayoutView
-            node={node.first}
-            path={join(path, "first")}
-            panes={panes}
-            workspaces={workspaces}
-            agents={agents}
-            layoutId={layoutId}
-            pending={pending}
-            onConsume={onConsume}
-            onRatio={onRatio}
-            onTracks={onTracks}
-            onPanel={onPanel}
-            onCloseTab={onCloseTab}
-            onFocusPane={onFocusPane}
-          />
+          <LayoutView {...shared} node={node.first} path={join(path, "first")} />
         </div>
         <div
           className={`gutter ${node.direction}`}
@@ -76,60 +102,23 @@ export function LayoutView({
           onPointerDown={(event) => startSplitDrag(event, node.direction, node.ratio, (ratio) => onRatio(path, ratio))}
         />
         <div className="split-pane" style={paneStyle(1 - node.ratio)}>
-          <LayoutView
-            node={node.second}
-            path={join(path, "second")}
-            panes={panes}
-            workspaces={workspaces}
-            agents={agents}
-            layoutId={layoutId}
-            pending={pending}
-            onConsume={onConsume}
-            onRatio={onRatio}
-            onTracks={onTracks}
-            onPanel={onPanel}
-            onCloseTab={onCloseTab}
-            onFocusPane={onFocusPane}
-          />
+          <LayoutView {...shared} node={node.second} path={join(path, "second")} />
         </div>
       </div>
     );
   }
 
   if (node.type === "grid") {
-    return (
-      <GridView
-        node={node}
-        path={path}
-        panes={panes}
-        workspaces={workspaces}
-        agents={agents}
-        layoutId={layoutId}
-        pending={pending}
-        onConsume={onConsume}
-        onRatio={onRatio}
-      onTracks={onTracks}
-      onPanel={onPanel}
-      onCloseTab={onCloseTab}
-      onFocusPane={onFocusPane}
-    />
-  );
-}
+    return <GridView {...shared} node={node} path={path} />;
+  }
 
   return (
     <PanelView
+      {...shared}
       id={node.id}
       title={node.title}
       panel={node.panel}
-      panes={panes}
-      workspaces={workspaces}
-      agents={agents}
-      layoutId={layoutId}
       pending={pending[node.id] ?? []}
-      onConsume={onConsume}
-      onPanel={onPanel}
-      onCloseTab={onCloseTab}
-      onFocusPane={onFocusPane}
     />
   );
 }
@@ -148,10 +137,31 @@ function GridView({
   onPanel,
   onCloseTab,
   onFocusPane,
+  onOpenSpace,
+  openMenuId = null,
+  openMenuToken = 0,
+  root,
 }: Props & { node: GridNode }) {
   const ref = useRef<HTMLDivElement>(null);
   const columnSum = node.columns.reduce((total, value) => total + value, 0);
   const rowSum = node.rows.reduce((total, value) => total + value, 0);
+  const shared = {
+    panes,
+    workspaces,
+    agents,
+    layoutId,
+    pending,
+    onConsume,
+    onRatio,
+    onTracks,
+    onPanel,
+    onCloseTab,
+    onFocusPane,
+    onOpenSpace,
+    openMenuId,
+    openMenuToken,
+    root,
+  };
   return (
     <div
       className="grid"
@@ -171,21 +181,7 @@ function GridView({
             minHeight: 0,
           }}
         >
-          <LayoutView
-            node={cellNode(cell)}
-            path={join(path, `cell/${cell.id}`)}
-            panes={panes}
-            workspaces={workspaces}
-            agents={agents}
-            layoutId={layoutId}
-            pending={pending}
-            onConsume={onConsume}
-            onRatio={onRatio}
-            onTracks={onTracks}
-            onPanel={onPanel}
-            onCloseTab={onCloseTab}
-            onFocusPane={onFocusPane}
-          />
+          <LayoutView {...shared} node={cellNode(cell)} path={join(path, `cell/${cell.id}`)} />
         </div>
       ))}
       {node.columns.slice(0, -1).map((_, index) => {
@@ -238,12 +234,22 @@ function PanelView(props: {
   layoutId: string;
   pending: Attachment[];
   onConsume: (panelId: string) => void;
-  onPanel: (id: string, panel: PanelConfig) => void;
+  onPanel: (id: string, panel: PanelConfig, retitle?: boolean) => void;
   onCloseTab: (id: string, tabId: string) => void;
   onFocusPane: (paneId: string) => void;
+  onOpenSpace?: (workspaceId: string) => void;
+  openMenuId?: string | null;
+  openMenuToken?: number;
+  root?: LayoutNode;
 }) {
-  const { id, title, panel, onPanel, onCloseTab } = props;
+  const { id, title, panel, panes, workspaces, onPanel, onCloseTab, layoutId, openMenuId, openMenuToken, root } =
+    props;
   const design = useDesign();
+  const desk = useDesk();
+  const panelActions = usePanelActions();
+  const [opening, setOpening] = useState(false);
+  const [pinning, setPinning] = useState(false);
+  const [pinTick, setPinTick] = useState(0);
   const selected = design.enabled && design.selectedId === id;
   const select = (event: React.MouseEvent<HTMLElement>) => {
     if (!design.enabled) return;
@@ -252,6 +258,22 @@ function PanelView(props: {
     design.selectPanel(id);
   };
   const content = activeContent(panel);
+  const plugin = content.type === "plugin" ? desk.plugins.find((item) => item.id === content.plugin) : undefined;
+  const addressBar = supportsAddressBar(content)
+    ? hostAddressBarVisible(content, pluginAddressBar(plugin))
+    : undefined;
+  const canClose = !root || listPanels(root).length > 1;
+  const blank = content.type === "blank";
+  const allowPin = canPinPanel(content);
+  void pinTick;
+  const pinned = findPin(id);
+  const activeSpace = workspaces.find((item) => item.focused) ?? workspaces[0];
+  const menuPanes = panes.map((pane) => ({
+    paneId: pane.paneId,
+    label: pane.label || pane.title || pane.agentName || baseName(pane.cwd || "") || pane.paneId,
+    cwd: pane.cwd,
+    workspaceId: pane.workspaceId,
+  }));
   const chrome = {
     className: selected ? "selected" : undefined,
     onClick: select,
@@ -260,38 +282,151 @@ function PanelView(props: {
     pluginId: content.type === "plugin" ? content.plugin : undefined,
     tabbed: panel.type === "tabs",
     tabEdge: panel.type === "tabs" ? panel.edge : undefined,
+    addressBar,
+    canClose,
+    openMenuToken: openMenuId === id ? openMenuToken : undefined,
+    onMenuDismiss: blank && canClose ? () => panelActions.close(id) : undefined,
+    allowPin,
+    pinLabel: pinned ? "Pinned…" : "Pin…",
+    onPin: allowPin ? () => setPinning(true) : undefined,
+    onAddressBar:
+      addressBar === undefined
+        ? undefined
+        : (show: boolean) => {
+            const surfaceId = addressBarSurfaceId(id, panel);
+            if (surfaceId) writeAddressBarChoice(layoutId, surfaceId, show);
+            onPanel(id, setAddressBar(panel, show));
+          },
+    entries: menuFor(content, desk.plugins, {
+      panes: menuPanes,
+      workspaceId: activeSpace?.workspaceId ?? null,
+    }),
+    onView: (choice: string) => {
+      if (choice === "open") {
+        setOpening(true);
+        return;
+      }
+      if (choice === "terminal" || choice === "pane:new") {
+        const current = content.type === "herdr" ? content.paneId : null;
+        const focused = panes.find((item) => item.focused) ?? panes[0];
+        const source = current || focused?.paneId;
+        if (!source) {
+          onPanel(id, { type: "herdr", paneId: null });
+          return;
+        }
+        const here = choice === "terminal" ? terminalHereCwd(content) : null;
+        const cwd =
+          here ||
+          (choice === "terminal" ? activeSpace?.root || focused?.cwd || null : null);
+        void openTerminalPane(source, cwd).then(
+          (paneId) => onPanel(id, { type: "herdr", paneId }),
+          () => onPanel(id, { type: "herdr", paneId: null }),
+        );
+        return;
+      }
+      const next = showViewer(panel, choice, desk.plugins, {
+        workspaceRoot: activeSpace?.root ?? null,
+      });
+      const surfaceId = addressBarSurfaceId(id, panel);
+      if (surfaceId) {
+        writePluginSubject(layoutId, surfaceId, next);
+        const shown = activeContent(next);
+        const raw = (shown.type === "markdown" || shown.type === "html") && shown.raw === true;
+        writeRawChoice(layoutId, surfaceId, raw);
+      }
+      const retitle = choice === "spaces" || choice === "agents";
+      onPanel(id, next, retitle);
+    },
   };
+  function applyPin(result: PinDialogResult) {
+    setPinning(false);
+    const spaceIds = workspaces.map((space) => space.workspaceId);
+    if (result.action === "unpin-all") {
+      removePin(id);
+      setPinTick((tick) => tick + 1);
+      return;
+    }
+    if (result.action === "unpin-space") {
+      if (activeSpace?.workspaceId) unpinFromSpace(id, activeSpace.workspaceId, spaceIds);
+      setPinTick((tick) => tick + 1);
+      return;
+    }
+    upsertPin({
+      id,
+      title: title || heading(content),
+      panel: content,
+      mode: result.mode,
+      spaces: result.mode === "chosen" ? result.spaces : [],
+    });
+    setPinTick((tick) => tick + 1);
+  }
   if (panel.type === "tabs") {
     return (
-      <PanelChrome
-        {...chrome}
-        title={title || "Tabs"}
-        kind="Tabs"
-      >
-        <TabGroup
-          group={panel}
-          onChange={(next) => onPanel(id, next)}
-          onClose={(tabId) => onCloseTab(id, tabId)}
-          renderContent={(tab, update) => (
-            <Surface {...props} id={`${id}:${tab.id}`} panel={tab.panel} onPanel={(_id, next) => update(next)} />
-          )}
+      <>
+        <PanelChrome {...chrome} title={title || "Tabs"} kind="Tabs">
+          <TabGroup
+            group={panel}
+            onChange={(next) => onPanel(id, next)}
+            onClose={(tabId) => onCloseTab(id, tabId)}
+            renderContent={(tab, update) => (
+              <Surface {...props} id={`${id}:${tab.id}`} panel={tab.panel} onPanel={(_id, next) => update(next)} />
+            )}
+          />
+        </PanelChrome>
+        <PinDialog
+          open={pinning}
+          panelTitle={title || "Tabs"}
+          current={pinned}
+          spaces={workspaces.map((space) => ({ id: space.workspaceId, name: space.label }))}
+          activeSpaceId={activeSpace?.workspaceId ?? null}
+          preferAllSpaces={content.type === "files" || content.type === "agents"}
+          onClose={() => setPinning(false)}
+          onApply={applyPin}
         />
-      </PanelChrome>
+      </>
     );
   }
-  const plain = panel.type === "files" || panel.type === "agents";
+  const panelTitle =
+    (panel.type === "files" || panel.type === "agents") && (!title || title === "Panel")
+      ? heading(panel)
+      : title || heading(panel);
   return (
-    <PanelChrome
-      {...chrome}
-      plain={plain}
-      title={plain ? (panel.type === "agents" ? "agents" : "spaces") : title || heading(panel)}
-      kind={kindOf(panel)}
-      subtitle={panel.type === "herdr" ? herdrSubtitle(props) : undefined}
-      badge={panel.type === "herdr" ? badgeText(herdrPane(props)) : undefined}
-      badgeClass={panel.type === "herdr" ? badgeClass(herdrPane(props)) : undefined}
-    >
-      <Surface {...props} />
-    </PanelChrome>
+    <>
+      <PanelChrome
+        {...chrome}
+        title={panelTitle}
+        kind={kindOf(panel)}
+        subtitle={panel.type === "herdr" ? herdrSubtitle(props) : undefined}
+        badge={panel.type === "herdr" ? badgeText(herdrPane(props)) : undefined}
+        badgeClass={panel.type === "herdr" ? badgeClass(herdrPane(props)) : undefined}
+      >
+        <Surface {...props} />
+      </PanelChrome>
+      {opening ? (
+        <OpenAddressDialog
+          onCancel={() => setOpening(false)}
+          onOpen={(address) => {
+            setOpening(false);
+            const retitle = isDefaultPanelTitle(title);
+            void api.resolve(address).then(
+              (resolved) =>
+                onPanel(id, carryRaw(panel, carryAddressBar(panel, resolved)), retitle),
+              () => onPanel(id, { type: "iframe", url: address, proxy: false }, retitle),
+            );
+          }}
+        />
+      ) : null}
+      <PinDialog
+        open={pinning}
+        panelTitle={panelTitle}
+        current={pinned}
+        spaces={workspaces.map((space) => ({ id: space.workspaceId, name: space.label }))}
+        activeSpaceId={activeSpace?.workspaceId ?? null}
+        preferAllSpaces={content.type === "files" || content.type === "agents"}
+        onClose={() => setPinning(false)}
+        onApply={applyPin}
+      />
+    </>
   );
 }
 
@@ -307,6 +442,7 @@ function Surface({
   onConsume,
   onPanel,
   onFocusPane,
+  onOpenSpace,
 }: {
   id: string;
   title?: string | null;
@@ -317,12 +453,11 @@ function Surface({
   layoutId: string;
   pending: Attachment[];
   onConsume: (panelId: string) => void;
-  onPanel: (id: string, panel: PanelConfig) => void;
+  onPanel: (id: string, panel: PanelConfig, retitle?: boolean) => void;
   onFocusPane: (paneId: string) => void;
+  onOpenSpace?: (workspaceId: string) => void;
 }) {
   const design = useDesign();
-  const pick = (tag: string, text: string) => design.selectElement({ panelId: id, tag, text });
-  const open = (next: PanelConfig) => onPanel(id, next);
   if (panel.type === "tabs") {
     return <div className="empty">Tab groups cannot be nested.</div>;
   }
@@ -336,57 +471,15 @@ function Surface({
   }
   if (panel.type === "markdown" || panel.type === "iframe" || panel.type === "html" || panel.type === "file" || panel.type === "explorer" || panel.type === "plugin") {
     return (
-      <DocumentFrame historyKey={id} address={addressOf(panel)} onOpen={open}>
-        {panel.type === "markdown" ? (
-          <MarkdownView path={panel.path} design={design.enabled} onPick={({ tag, text }) => pick(tag, text)} />
-        ) : null}
-        {panel.type === "iframe" ? (
-          panel.url ? (
-            <IframeView
-              url={panel.url}
-              proxy={panel.proxy}
-              title={title || "Browser"}
-              panelId={id}
-              suspended={design.enabled}
-            />
-          ) : (
-            <div className="empty">Enter a URL, a file, or plugin:id.</div>
-          )
-        ) : null}
-        {panel.type === "html" ? (
-          <HtmlView
-            path={panel.path}
-            inline={panel.inline}
-            title={title || "Browser"}
-            control={panel.control}
-            design={design.enabled}
-            onPick={({ tag, text }) => pick(tag, text)}
-          />
-        ) : null}
-        {panel.type === "file" ? <TextView path={panel.path} /> : null}
-        {panel.type === "explorer" ? (
-          <ExplorerView
-            path={panel.path}
-            roots={folderRoots(workspaces, panes)}
-            showAddress={false}
-            onEnter={(next) => {
-              void api.resolve(next).then(open, () => onPanel(id, { ...panel, path: next }));
-            }}
-            onOpenFile={(target) => api.resolve(target).then(open)}
-          />
-        ) : null}
-        {panel.type === "plugin" ? (
-          <iframe
-            className="frame"
-            title={title || panel.plugin}
-            sandbox="allow-scripts allow-forms allow-popups"
-            src={`/plugins/${encodeURIComponent(panel.plugin)}`}
-          />
-        ) : null}
-        {design.enabled && panel.type === "iframe" ? (
-          <button type="button" className="design-shield" onClick={() => design.selectPanel(id)} />
-        ) : null}
-      </DocumentFrame>
+      <DocumentSurface
+        id={id}
+        title={title}
+        panel={panel}
+        panes={panes}
+        workspaces={workspaces}
+        layoutId={layoutId}
+        onPanel={onPanel}
+      />
     );
   }
   if (panel.type === "files") {
@@ -395,6 +488,10 @@ function Surface({
         workspaces={workspaces}
         panes={panes}
         onOpen={(workspaceId) => {
+          if (onOpenSpace) {
+            onOpenSpace(workspaceId);
+            return;
+          }
           const inSpace = panes.filter((pane) => pane.workspaceId === workspaceId);
           const pane = inSpace.find((item) => item.focused) ?? inSpace[0];
           if (pane) onFocusPane(pane.paneId);
@@ -406,17 +503,172 @@ function Surface({
   if (panel.type === "agents") {
     return <AgentsView agents={agents} panes={panes} workspaces={workspaces} onFocus={onFocusPane} />;
   }
+  if (panel.type === "blank") {
+    return <div className="empty">Open a file, URL, or desk tool.</div>;
+  }
+  if (panel.type === "chat") {
+    return (
+      <ChatView
+        layoutId={layoutId}
+        panelId={id}
+        paneId={panel.paneId}
+        pending={pending}
+        onConsume={onConsume}
+        panes={panes}
+        workspaces={workspaces}
+        onPane={(paneId) => onPanel(id, { ...panel, paneId })}
+      />
+    );
+  }
+  return <div className="empty">Unknown panel.</div>;
+}
+
+function DocumentSurface({
+  id,
+  title,
+  panel,
+  panes,
+  workspaces,
+  layoutId,
+  onPanel,
+}: {
+  id: string;
+  title?: string | null;
+  panel: PanelConfig;
+  panes: PaneView[];
+  workspaces: WorkspaceView[];
+  layoutId: string;
+  onPanel: (id: string, panel: PanelConfig, retitle?: boolean) => void;
+}) {
+  const design = useDesign();
+  const plugins = useDesk().plugins;
+  const pluginId = panel.type === "plugin" ? panel.plugin : "";
+  const bar = pluginAddressBar(plugins.find((item) => item.id === pluginId));
+  const [pluginAddress, setPluginAddress] = useState<{ id: string; value: string } | null>(null);
+  const commandId = useRef(0);
+  const [command, setCommand] = useState<PluginHostCommand | null>(null);
+  const pick = (tag: string, text: string) => design.selectElement({ panelId: id, tag, text });
+  const open = (next: PanelConfig) => onPanel(id, carryRaw(panel, carryAddressBar(panel, next)));
+  const folder = panel.type === "explorer" ? plainPath(panel.path) : "";
+  const parent = folder ? parentPath(folder) : "";
+  const canUp = parent.length > 0 && !samePath(parent, folder);
+  const shown = hostAddressBarVisible(panel, bar);
+  const override = pluginAddress?.id === pluginId ? pluginAddress.value : null;
+  const address = panel.type === "plugin" && override !== null ? override : addressOf(panel);
+  const modify = panel.type === "plugin" && bar.modify;
+  const liveCommand = command && command.pluginId === pluginId ? command : null;
+
+  function enter(next: string) {
+    void api.resolve(next).then(open, () => {
+      if (panel.type === "explorer") onPanel(id, { type: "explorer", path: next, addressBar: panel.addressBar });
+    });
+  }
+
+  function navigatePlugin(value: string) {
+    setPluginAddress({ id: pluginId, value });
+    commandId.current += 1;
+    setCommand({ id: commandId.current, pluginId, type: "address-navigate", value });
+  }
+
+  function reloadPlugin() {
+    commandId.current += 1;
+    setCommand({ id: commandId.current, pluginId, type: "address-reload" });
+  }
+
   return (
-    <ChatView
-      layoutId={layoutId}
-      panelId={id}
-      paneId={panel.paneId}
-      pending={pending}
-      onConsume={onConsume}
-      panes={panes}
-      workspaces={workspaces}
-      onPane={(paneId) => onPanel(id, { ...panel, paneId })}
-    />
+    <DocumentFrame
+      historyKey={id}
+      address={address}
+      onOpen={open}
+      visible={shown}
+      canUp={canUp}
+      onUp={
+        panel.type === "explorer"
+          ? () => {
+              if (canUp) enter(parent);
+            }
+          : undefined
+      }
+      onPluginNavigate={modify ? navigatePlugin : undefined}
+      onPluginReload={modify ? reloadPlugin : undefined}
+    >
+      {panel.type === "markdown" && !showsRawText(panel) ? (
+        <MarkdownView path={panel.path} design={design.enabled} onPick={({ tag, text }) => pick(tag, text)} />
+      ) : null}
+      {panel.type === "iframe" ? (
+        panel.url ? (
+          <IframeView
+            url={panel.url}
+            proxy={panel.proxy}
+            title={title || "Browser"}
+            panelId={id}
+            suspended={design.enabled}
+          />
+        ) : (
+          <div className="empty">Enter a URL, a file, or plugin:id.</div>
+        )
+      ) : null}
+      {panel.type === "html" && !showsRawText(panel) ? (
+        <HtmlView
+          path={panel.path}
+          inline={panel.inline}
+          title={title || "Browser"}
+          control={panel.control}
+          design={design.enabled}
+          onPick={({ tag, text }) => pick(tag, text)}
+        />
+      ) : null}
+      {showsRawText(panel) && (panel.type === "markdown" || panel.type === "html" || panel.type === "file") ? (
+        panel.type === "html" && !panel.path ? (
+          <TextView text={panel.inline ?? ""} />
+        ) : (
+          <TextView path={panel.type === "html" ? panel.path ?? "" : panel.path} />
+        )
+      ) : null}
+      {panel.type === "explorer" ? (
+        <ExplorerView
+          panelId={id}
+          path={panel.path}
+          focus={panel.focus}
+          roots={folderRoots(workspaces, panes)}
+          showAddress={false}
+          onEnter={enter}
+          onOpenFile={(target) => api.open(openFileBeside(id, target))}
+        />
+      ) : null}
+      {panel.type === "plugin" ? (
+        <PluginView
+          pluginId={panel.plugin}
+          title={title || panel.plugin}
+          modify={bar.modify}
+          command={liveCommand}
+          open={pluginOpenMessage(panel)}
+          onAddress={(value) => {
+            setPluginAddress({ id: panel.plugin, value });
+            if (panel.type !== "plugin") return;
+            const current = panel;
+            void api.resolve(value).then((resolved) => {
+              const next = adoptPluginAddress(current, resolved);
+              if (!next) return;
+              writePluginSubject(layoutId, id, next);
+              onPanel(id, next);
+            }, () => undefined);
+          }}
+          onConfig={(value) => {
+            if (panel.type !== "plugin") return;
+            onPanel(id, { ...panel, config: value });
+          }}
+          onBar={(next) => {
+            const show = next.show && !next.replace;
+            writeAddressBarChoice(layoutId, id, show);
+            onPanel(id, setAddressBar(panel, show));
+          }}
+        />
+      ) : null}
+      {design.enabled && panel.type === "iframe" ? (
+        <button type="button" className="design-shield" onClick={() => design.selectPanel(id)} />
+      ) : null}
+    </DocumentFrame>
   );
 }
 
@@ -443,11 +695,13 @@ function heading(panel: PanelConfig): string {
     case "tabs":
       return "Tabs";
     case "files":
-      return "spaces";
+      return "Spaces";
     case "agents":
-      return "agents";
+      return "Agents";
     case "chat":
       return "Chat";
+    case "blank":
+      return "";
     default:
       return "Panel";
   }

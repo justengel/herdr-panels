@@ -1,27 +1,39 @@
 {
   "id": "side-by-side",
   "title": "Side by side",
-  "description": "A Herdr terminal beside a Markdown note.",
+  "description": "Spaces and agents beside a Herdr terminal.",
   "root": {
     "type": "split",
     "direction": "row",
-    "ratio": 0.58,
+    "ratio": 0.22,
     "first": {
-      "type": "panel",
-      "id": "term",
-      "title": "Herdr",
-      "panel": {
-        "type": "herdr",
-        "paneId": "w1:p1"
+      "type": "split",
+      "direction": "column",
+      "ratio": 0.62,
+      "first": {
+        "type": "panel",
+        "id": "spaces",
+        "title": "Spaces",
+        "panel": {
+          "type": "files"
+        }
+      },
+      "second": {
+        "type": "panel",
+        "id": "agents",
+        "title": "Agents",
+        "panel": {
+          "type": "agents"
+        }
       }
     },
     "second": {
       "type": "panel",
-      "id": "notes",
-      "title": "Notes",
+      "id": "terminal",
+      "title": "Terminal",
       "panel": {
-        "type": "markdown",
-        "path": "notes/welcome.md"
+        "type": "herdr",
+        "paneId": null
       }
     }
   }

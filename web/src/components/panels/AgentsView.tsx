@@ -73,8 +73,7 @@ export function AgentsView({
 
   return (
     <div className="side-pane">
-      <div className="side-heading">
-        <span>agents</span>
+      <div className="side-toolbar">
         <button
           type="button"
           className="side-mode"

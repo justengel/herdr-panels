@@ -1,6 +1,18 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { api } from "../api";
+import { noteAddress, visitAddress, type AddressHistory } from "../addressHistory";
+import { displayPath, expandDisplayPath, guessHome, middleEllipsis } from "../displayPath";
 import type { PanelConfig } from "../types";
+
+const DISPLAY_MAX = 48;
+
+function shownAddress(path: string): string {
+  return middleEllipsis(displayPath(path, guessHome(path)), DISPLAY_MAX);
+}
+
+function realAddress(path: string, hint = ""): string {
+  return expandDisplayPath(path, guessHome(hint) || guessHome(path));
+}
 
 let fieldClipboard = "";
 let ownClipboard = false;
@@ -53,13 +65,16 @@ export function addressOf(panel: PanelConfig): string {
   switch (panel.type) {
     case "markdown":
     case "file":
-    case "explorer":
       return panel.path;
+    case "explorer":
+      return panel.focus || panel.path;
     case "html":
       return panel.path ?? "";
     case "iframe":
       return panel.url;
     case "plugin":
+      if (panel.url) return panel.url;
+      if (panel.path) return panel.path;
       return panel.plugin ? `plugin:${panel.plugin}` : "";
     default:
       return "";
@@ -71,41 +86,58 @@ export function LocationBar({
   historyKey,
   onNavigate,
   onReload,
+  visible = true,
+  canUp = false,
+  onUp,
 }: {
   value: string;
   historyKey: string;
-  onNavigate: (next: string) => void;
+  onNavigate: (next: string) => void | Promise<unknown>;
   onReload?: () => void;
+  visible?: boolean;
+  canUp?: boolean;
+  onUp?: () => void;
 }) {
   const [draft, setDraft] = useState(value);
   const [history, setHistory] = useState<string[]>(value ? [value] : []);
   const [index, setIndex] = useState(0);
   const indexRef = useRef(0);
+  const historyRef = useRef(history);
+  const pendingVisit = useRef<string | null>(null);
+  const ready = useRef(false);
   const keyRef = useRef(historyKey);
   const inputRef = useRef<HTMLInputElement>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
   const draftRef = useRef(value);
   const caretRef = useRef<number | null>(null);
   const undoRef = useRef<string[]>([]);
   const redoRef = useRef<string[]>([]);
   const undoAt = useRef(0);
 
+  function commitHistory(next: AddressHistory) {
+    historyRef.current = next.entries;
+    indexRef.current = next.index;
+    setHistory(next.entries);
+    setIndex(next.index);
+  }
+
   useEffect(() => {
     if (keyRef.current !== historyKey) {
       keyRef.current = historyKey;
-      indexRef.current = 0;
-      setIndex(0);
-      setHistory(value ? [value] : []);
-      replaceDraft(value, true);
+      pendingVisit.current = null;
+      ready.current = true;
+      commitHistory({ entries: value ? [value] : [], index: 0 });
+      replaceDraft(shownAddress(value), true);
       return;
     }
-    replaceDraft(value, true);
-    setHistory((current) => {
-      if (current[indexRef.current] === value) return current;
-      const next = current.slice();
-      if (next.length === 0) return value ? [value] : [];
-      next[indexRef.current] = value;
-      return next;
-    });
+    if (!ready.current) {
+      ready.current = true;
+      if (pendingVisit.current !== null || historyRef.current[indexRef.current] === value) return;
+    }
+    const fromBar = pendingVisit.current !== null;
+    pendingVisit.current = null;
+    commitHistory(noteAddress({ entries: historyRef.current, index: indexRef.current }, value, fromBar));
+    replaceDraft(shownAddress(value), true);
   }, [historyKey, value]);
 
   useLayoutEffect(() => {
@@ -274,26 +306,38 @@ export function LocationBar({
     }
   }
 
-  function go(nextIndex: number, nextHistory = history) {
+  function go(nextIndex: number, nextHistory = historyRef.current) {
     const next = nextHistory[nextIndex];
     if (next === undefined) return;
-    indexRef.current = nextIndex;
-    setIndex(nextIndex);
-    replaceDraft(next, true);
-    onNavigate(next);
+    commitHistory({ entries: nextHistory, index: nextIndex });
+    replaceDraft(shownAddress(next), true);
+    pendingVisit.current = next;
+    void (async () => {
+      try {
+        await onNavigate(next);
+        window.setTimeout(() => {
+          if (pendingVisit.current === next) pendingVisit.current = null;
+        }, 0);
+      } catch {
+        pendingVisit.current = null;
+      }
+    })();
+  }
+
+  function openAddress(next: string) {
+    const address = next.trim();
+    if (!address) return;
+    const visited = visitAddress({ entries: historyRef.current, index: indexRef.current }, address);
+    go(visited.index, visited.entries);
   }
 
   return (
     <form
       className="location-bar"
+      hidden={!visible}
       onSubmit={(event) => {
         event.preventDefault();
-        const next = draft.trim();
-        if (!next) return;
-        const kept = history.slice(0, index + 1);
-        if (kept[kept.length - 1] !== next) kept.push(next);
-        setHistory(kept);
-        go(kept.length - 1, kept);
+        openAddress(realAddress(draft.trim(), value));
       }}
     >
       <button type="button" aria-label="Back" disabled={index <= 0} onClick={() => go(index - 1)}>
@@ -307,6 +351,11 @@ export function LocationBar({
       >
         ›
       </button>
+      {onUp ? (
+        <button type="button" aria-label="Up" disabled={!canUp} onClick={onUp}>
+          ↑
+        </button>
+      ) : null}
       <button type="button" aria-label="Reload" onClick={onReload}>
         ↻
       </button>
@@ -318,10 +367,67 @@ export function LocationBar({
         spellCheck={false}
         autoCapitalize="off"
         autoCorrect="off"
+        onFocus={() => replaceDraft(realAddress(draft, value) || value, false)}
+        onBlur={() => replaceDraft(shownAddress(value), false)}
         onKeyDown={onAddressKey}
         onChange={(event) => edit(event.target.value, event.target.selectionStart ?? event.target.value.length, true)}
       />
+      <button
+        type="button"
+        aria-label="Browse"
+        title="Browse for a file"
+        onClick={() => {
+          const hint = browseHint(realAddress(value) || value);
+          void api.pickFile(hint).then(
+            (path) => {
+              if (path) openAddress(path);
+            },
+            () => {
+              // Older servers: fall back to the HTML picker, starting near the address when possible.
+              const input = fileRef.current;
+              if (!input) return;
+              if (hint) input.setAttribute("nwworkingdir", hint);
+              else input.removeAttribute("nwworkingdir");
+              input.click();
+            },
+          );
+        }}
+      >
+        <BrowseFolderIcon />
+      </button>
+      <input
+        ref={fileRef}
+        type="file"
+        hidden
+        onChange={(event) => {
+          const file = event.target.files?.[0];
+          event.target.value = "";
+          if (!file) return;
+          // Desktop shells expose an absolute path; browsers only give the basename.
+          const path = (file as File & { path?: string }).path || file.name;
+          openAddress(path);
+        }}
+      />
     </form>
+  );
+}
+
+/** Filesystem path to open the picker near; null for URLs / plugins. */
+export function browseHint(address: string): string | null {
+  const trimmed = address.trim();
+  if (!trimmed) return null;
+  if (/^(https?|plugin|file):/i.test(trimmed)) return null;
+  return trimmed;
+}
+
+function BrowseFolderIcon() {
+  return (
+    <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+      <path
+        fill="currentColor"
+        d="M1.5 3.5A1.5 1.5 0 0 1 3 2h3.2l1.3 1.5H13A1.5 1.5 0 0 1 14.5 5v7.5A1.5 1.5 0 0 1 13 14H3a1.5 1.5 0 0 1-1.5-1.5v-9Z"
+      />
+    </svg>
   );
 }
 
@@ -330,11 +436,21 @@ export function DocumentFrame({
   address,
   onOpen,
   children,
+  visible = true,
+  canUp = false,
+  onUp,
+  onPluginNavigate,
+  onPluginReload,
 }: {
   historyKey: string;
   address: string;
   onOpen: (panel: PanelConfig) => void;
   children: ReactNode;
+  visible?: boolean;
+  canUp?: boolean;
+  onUp?: () => void;
+  onPluginNavigate?: (value: string) => void;
+  onPluginReload?: () => void;
 }) {
   const [error, setError] = useState<string | null>(null);
   const [generation, setGeneration] = useState(0);
@@ -346,18 +462,28 @@ export function DocumentFrame({
       <LocationBar
         historyKey={historyKey}
         value={address}
+        visible={visible}
+        canUp={canUp}
+        onUp={onUp}
         onNavigate={async (next) => {
+          if (onPluginNavigate) {
+            setError(null);
+            onPluginNavigate(next);
+            return;
+          }
           try {
             const panel = await api.resolve(next);
             setError(null);
             onOpen(panel);
           } catch (err) {
             setError(err instanceof Error ? err.message : "Could not open that address");
+            throw err;
           }
         }}
         onReload={() => {
           setError(null);
-          setGeneration((current) => current + 1);
+          if (onPluginReload) onPluginReload();
+          else setGeneration((current) => current + 1);
         }}
       />
       <div className="document-body" key={generation}>

@@ -16,6 +16,7 @@ pub mod content;
 pub mod files;
 pub mod frame_pass;
 pub mod herdr;
+pub mod herdr_ctl;
 pub mod herdr_config;
 pub mod keys;
 pub mod layout;

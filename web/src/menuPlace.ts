@@ -30,6 +30,42 @@ export function fitMenu(
   };
 }
 
+export interface FlyoutBox {
+  left: number;
+  top: number;
+  maxHeight: number;
+  side: "left" | "right";
+}
+
+/** Place a nested flyout beside an anchor; flip left when the right edge is tight. */
+export function fitFlyout(
+  anchor: { left: number; top: number; right: number; bottom: number },
+  size: { width: number; height: number },
+  viewport: { width: number; height: number },
+  margin = 8,
+  gap = 4,
+): FlyoutBox {
+  const width = Math.max(120, size.width);
+  const height = Math.max(40, size.height);
+  const roomRight = viewport.width - margin - (anchor.right + gap);
+  const roomLeft = anchor.left - gap - margin;
+  const side: "left" | "right" = roomRight >= width || roomRight >= roomLeft ? "right" : "left";
+  let left = side === "right" ? anchor.right + gap : anchor.left - gap - width;
+  if (left < margin) left = margin;
+  if (left + width > viewport.width - margin) left = Math.max(margin, viewport.width - margin - width);
+  let top = anchor.top;
+  const maxHeight = Math.max(80, viewport.height - margin * 2);
+  const usedHeight = Math.min(height, maxHeight);
+  if (top + usedHeight > viewport.height - margin) top = viewport.height - margin - usedHeight;
+  if (top < margin) top = margin;
+  return {
+    left,
+    top,
+    maxHeight: Math.max(80, viewport.height - margin - top),
+    side,
+  };
+}
+
 export function useKeepMenuOnScreen(
   ref: RefObject<HTMLElement | null>,
   open: boolean,

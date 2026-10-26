@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { fitMenu } from "../src/menuPlace";
+import { fitFlyout, fitMenu } from "../src/menuPlace";
 
 const view = { width: 1280, height: 800 };
 
@@ -45,5 +45,38 @@ describe("menus stay inside the window", () => {
     const box = fitMenu({ left: 240, top: 120, width: 220, height: 180 }, view);
     expect(box.left).toBe(240);
     expect(box.top).toBe(120);
+  });
+});
+
+describe("nested flyouts stay inside the window", () => {
+  it("opens to the right when there is room", () => {
+    const box = fitFlyout(
+      { left: 100, top: 80, right: 280, bottom: 110 },
+      { width: 160, height: 120 },
+      view,
+    );
+    expect(box.side).toBe("right");
+    expect(box.left).toBe(284);
+    expect(box.top).toBe(80);
+  });
+
+  it("flips to the left near the right edge", () => {
+    const box = fitFlyout(
+      { left: 1100, top: 80, right: 1260, bottom: 110 },
+      { width: 180, height: 120 },
+      view,
+    );
+    expect(box.side).toBe("left");
+    expect(box.left + 180).toBeLessThanOrEqual(1100);
+    expect(box.left).toBeGreaterThanOrEqual(8);
+  });
+
+  it("lifts a tall flyout that would run off the bottom", () => {
+    const box = fitFlyout(
+      { left: 200, top: 720, right: 360, bottom: 750 },
+      { width: 160, height: 200 },
+      view,
+    );
+    expect(box.top + Math.min(200, box.maxHeight)).toBeLessThanOrEqual(view.height - 8);
   });
 });

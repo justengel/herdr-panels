@@ -95,7 +95,11 @@ pub async fn apply(body: &Value, session: Option<&str>) -> Result<Value, String>
         );
     }
     if let Some(settings) = body.get("settings").and_then(Value::as_object) {
-        for field in catalog.fields.iter().filter(|field| field.section != "keys") {
+        for field in catalog
+            .fields
+            .iter()
+            .filter(|field| field.section != "keys")
+        {
             let Some(value) = settings.get(&field.id) else {
                 continue;
             };
@@ -103,7 +107,11 @@ pub async fn apply(body: &Value, session: Option<&str>) -> Result<Value, String>
         }
     }
     if let Some(keys) = body.get("keys").and_then(Value::as_object) {
-        for field in catalog.fields.iter().filter(|field| field.section == "keys") {
+        for field in catalog
+            .fields
+            .iter()
+            .filter(|field| field.section == "keys")
+        {
             let Some(value) = keys.get(&field.id).and_then(Value::as_str) else {
                 continue;
             };
@@ -144,7 +152,9 @@ fn default_config_text() -> String {
         .arg("--default-config")
         .output()
     {
-        Ok(output) if output.status.success() => String::from_utf8_lossy(&output.stdout).into_owned(),
+        Ok(output) if output.status.success() => {
+            String::from_utf8_lossy(&output.stdout).into_owned()
+        }
         _ => String::new(),
     }
 }
@@ -218,7 +228,8 @@ fn parse_catalog(text: &str) -> Catalog {
                         }
                     }
                     let help = help_text(&help_lines);
-                    let (kind, options, choices) = classify(&section, &help, &comments, &default_value, literal);
+                    let (kind, options, choices) =
+                        classify(&section, &help, &comments, &default_value, literal);
                     fields.push(Spec {
                         section: section.clone(),
                         key: key.to_string(),
@@ -238,7 +249,10 @@ fn parse_catalog(text: &str) -> Catalog {
                 }
             }
         }
-        if uncommented.to_ascii_lowercase().contains("built-in themes:") {
+        if uncommented
+            .to_ascii_lowercase()
+            .contains("built-in themes:")
+        {
             theme_lines = true;
             push_theme_list(&mut themes, uncommented);
         } else if theme_lines && !uncommented.contains('=') {
@@ -278,7 +292,10 @@ fn rows_field(section: &str, literal: &str, options: &[String], comments: &[Stri
     } else {
         "Rows".into()
     };
-    let help_lines: Vec<&String> = comments.iter().filter(|line| choice_line(line).is_none()).collect();
+    let help_lines: Vec<&String> = comments
+        .iter()
+        .filter(|line| choice_line(line).is_none())
+        .collect();
     Spec {
         section: section.to_string(),
         key: "rows".into(),
@@ -334,7 +351,10 @@ fn classify(
     if is_int(literal) {
         return ("int".into(), Vec::new(), Vec::new());
     }
-    let choices: Vec<Choice> = comments.iter().filter_map(|line| choice_line(line)).collect();
+    let choices: Vec<Choice> = comments
+        .iter()
+        .filter_map(|line| choice_line(line))
+        .collect();
     if choices.len() >= 2 && choices.iter().any(|choice| choice.value == default_value) {
         let options = choices.iter().map(|choice| choice.value.clone()).collect();
         return ("enum".into(), options, choices);
@@ -456,7 +476,9 @@ const TUI_KEYBINDS: &[&str] = &[
 ];
 
 fn tui_only(section: &str, key: &str) -> bool {
-    TUI_SECTIONS.iter().any(|prefix| section == *prefix || section.starts_with(&format!("{prefix}.")))
+    TUI_SECTIONS
+        .iter()
+        .any(|prefix| section == *prefix || section.starts_with(&format!("{prefix}.")))
         || TUI_KEYS.binary_search(&key).is_ok()
 }
 
@@ -507,7 +529,9 @@ fn group_for(section: &str, key: &str) -> String {
 }
 
 fn skipped_section(section: &str) -> bool {
-    section.starts_with("theme.custom") || section.starts_with("keys.command") || section == "keys.indexed"
+    section.starts_with("theme.custom")
+        || section.starts_with("keys.command")
+        || section == "keys.indexed"
 }
 
 fn field_json(text: &str, field: &Spec) -> Value {
@@ -596,7 +620,11 @@ fn assignment(field: &Spec, value: &Value) -> Result<Option<String>, String> {
         }
         _ => {
             let text = value.as_str().unwrap_or("");
-            if text.chars().count() > 400 || text.contains('\n') || text.contains('\r') || text.contains('"') {
+            if text.chars().count() > 400
+                || text.contains('\n')
+                || text.contains('\r')
+                || text.contains('"')
+            {
                 return Err(format!("{} contains unsupported characters", field.label));
             }
             if text == field.default_value {
@@ -645,7 +673,11 @@ fn selected_tokens(raw: &str, options: &[String]) -> String {
 }
 
 fn normalize_tokens(options: &[String], value: &str) -> Vec<String> {
-    let enabled: Vec<&str> = value.split(',').map(str::trim).filter(|item| !item.is_empty()).collect();
+    let enabled: Vec<&str> = value
+        .split(',')
+        .map(str::trim)
+        .filter(|item| !item.is_empty())
+        .collect();
     options
         .iter()
         .filter(|option| enabled.iter().any(|item| item == option))
@@ -774,9 +806,12 @@ fn pipe_words(text: &str) -> Vec<String> {
     }
     text.split('|')
         .filter_map(|part| {
-            let word = part.split_whitespace().next_back()?.trim_matches(|ch: char| {
-                !ch.is_ascii_lowercase() && ch != '_' && !ch.is_ascii_digit()
-            });
+            let word = part
+                .split_whitespace()
+                .next_back()?
+                .trim_matches(|ch: char| {
+                    !ch.is_ascii_lowercase() && ch != '_' && !ch.is_ascii_digit()
+                });
             if word.is_empty() || word.len() > 20 {
                 None
             } else {
@@ -788,7 +823,12 @@ fn pipe_words(text: &str) -> Vec<String> {
 
 fn is_literal(raw: &str) -> bool {
     let raw = raw.trim();
-    raw == "true" || raw == "false" || is_int(raw) || raw.starts_with('"') || raw.starts_with('[') || raw.starts_with('{')
+    raw == "true"
+        || raw == "false"
+        || is_int(raw)
+        || raw.starts_with('"')
+        || raw.starts_with('[')
+        || raw.starts_with('{')
 }
 
 fn is_int(raw: &str) -> bool {
@@ -1067,17 +1107,28 @@ mod tests {
         assert_eq!(indicators.group, "indicators");
         assert_eq!(indicators.kind, "enum");
         assert_eq!(indicators.options, ["dots", "symbols"]);
-        let delivery = catalog.fields.iter().find(|field| field.key == "delivery").unwrap();
+        let delivery = catalog
+            .fields
+            .iter()
+            .find(|field| field.key == "delivery")
+            .unwrap();
         assert_eq!(delivery.group, "toasts");
-        assert_eq!(
-            delivery.options,
-            ["off", "herdr", "terminal", "system"]
-        );
-        assert!(delivery.choices.iter().any(|choice| choice.value == "system" && choice.detail.contains("OS")));
-        let prefix = catalog.fields.iter().find(|field| field.key == "prefix").unwrap();
+        assert_eq!(delivery.options, ["off", "herdr", "terminal", "system"]);
+        assert!(delivery
+            .choices
+            .iter()
+            .any(|choice| choice.value == "system" && choice.detail.contains("OS")));
+        let prefix = catalog
+            .fields
+            .iter()
+            .find(|field| field.key == "prefix")
+            .unwrap();
         assert_eq!(prefix.kind, "string");
         assert!(catalog.themes.iter().any(|theme| theme == "catppuccin"));
-        assert!(catalog.themes.iter().any(|theme| theme == "catppuccin-latte"));
+        assert!(catalog
+            .themes
+            .iter()
+            .any(|theme| theme == "catppuccin-latte"));
         assert!(catalog.themes.iter().any(|theme| theme == "vesper"));
         let spaces = catalog
             .fields
@@ -1086,13 +1137,19 @@ mod tests {
             .unwrap();
         assert_eq!(spaces.kind, "tokens");
         assert!(spaces.options.iter().any(|token| token == "branch"));
-        assert!(spaces.default_value.split(',').any(|token| token == "branch"));
+        assert!(spaces
+            .default_value
+            .split(',')
+            .any(|token| token == "branch"));
         let agents = catalog
             .fields
             .iter()
             .find(|field| field.section == "ui.sidebar.agents" && field.key == "rows")
             .unwrap();
-        assert!(agents.options.iter().any(|token| token == "terminal_title_stripped"));
+        assert!(agents
+            .options
+            .iter()
+            .any(|token| token == "terminal_title_stripped"));
         assert_ne!(spaces.id, agents.id);
         let enabled = catalog
             .fields
@@ -1110,9 +1167,17 @@ mod tests {
             return;
         }
         let catalog = parse_catalog(&text);
-        let indicators = catalog.fields.iter().find(|field| field.key == "status_indicators").unwrap();
+        let indicators = catalog
+            .fields
+            .iter()
+            .find(|field| field.key == "status_indicators")
+            .unwrap();
         assert_eq!(indicators.options, ["dots", "symbols"]);
-        let delivery = catalog.fields.iter().find(|field| field.key == "delivery").unwrap();
+        let delivery = catalog
+            .fields
+            .iter()
+            .find(|field| field.key == "delivery")
+            .unwrap();
         assert_eq!(delivery.options, ["off", "herdr", "terminal", "system"]);
         let spaces = catalog
             .fields
@@ -1121,10 +1186,17 @@ mod tests {
             .unwrap();
         assert!(spaces.options.iter().any(|token| token == "branch"));
         assert!(spaces.options.iter().any(|token| token == "git_status"));
-        let prefix = catalog.fields.iter().find(|field| field.section == "keys" && field.key == "prefix").unwrap();
+        let prefix = catalog
+            .fields
+            .iter()
+            .find(|field| field.section == "keys" && field.key == "prefix")
+            .unwrap();
         assert_eq!(prefix.kind, "string");
         assert!(catalog.themes.len() >= 8, "themes: {:?}", catalog.themes);
-        assert!(catalog.fields.iter().any(|field| field.kind == "bool" && field.group == "sound"));
+        assert!(catalog
+            .fields
+            .iter()
+            .any(|field| field.kind == "bool" && field.group == "sound"));
     }
 
     #[test]
@@ -1134,7 +1206,11 @@ mod tests {
             .into_iter()
             .map(str::to_string)
             .collect::<Vec<_>>();
-        let rendered = render_token_rows(raw, &options, &["state_icon".into(), "workspace".into(), "branch".into()]);
+        let rendered = render_token_rows(
+            raw,
+            &options,
+            &["state_icon".into(), "workspace".into(), "branch".into()],
+        );
         assert_eq!(rendered, r#"[["state_icon", "workspace"], ["branch"]]"#);
     }
 

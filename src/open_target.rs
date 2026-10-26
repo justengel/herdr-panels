@@ -326,13 +326,7 @@ fn browser_title(url: &str) -> String {
     let Ok(parsed) = url::Url::parse(url) else {
         return url.to_string();
     };
-    let host = parsed.host_str().unwrap_or("");
-    let path = parsed.path().trim_matches('/');
-    if path.is_empty() {
-        host.to_string()
-    } else {
-        format!("{host}/{path}")
-    }
+    parsed.host_str().unwrap_or("").to_string()
 }
 
 #[cfg(test)]
@@ -492,7 +486,7 @@ mod tests {
                 url: "https://example.com/docs".into(),
                 proxy: false,
             }),
-            "example.com/docs"
+            "example.com"
         );
         assert_eq!(
             open_title(&OpenKind::Explorer {

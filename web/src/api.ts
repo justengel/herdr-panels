@@ -1,3 +1,4 @@
+import type { PluginInfo } from "./desk";
 import type { Bootstrap, ChatMessage, LayoutDocument, PanelConfig, RuntimeSnapshot } from "./types";
 import { baseName as pathName, contentSegments } from "./paths";
 
@@ -36,6 +37,16 @@ export interface HerdrConfig {
   spaceRows?: string[][];
   integrations?: HerdrIntegration[];
   integrationError?: string;
+}
+
+export interface HerdrCtlStatus {
+  clientVersion?: string | null;
+  channel?: string | null;
+  serverRunning: boolean;
+  restartNeeded: boolean;
+  serverBinaryStale: boolean;
+  updateAvailable: boolean;
+  latestVersion?: string | null;
 }
 
 function viewerToken(): string {
@@ -114,7 +125,7 @@ export const api = {
       method: "POST",
       body: JSON.stringify(body),
     }),
-  plugins: () => request<{ plugins: { id: string; title: string }[] }>("/api/plugins"),
+  plugins: () => request<{ plugins: PluginInfo[] }>("/api/plugins"),
   closeSession: (name: string) =>
     request<{ name: string; runtime: RuntimeSnapshot }>("/api/sessions/close", {
       method: "POST",
@@ -160,11 +171,28 @@ export const api = {
       method: "POST",
       body: JSON.stringify(body),
     }),
+  herdrCtl: () => request<HerdrCtlStatus>("/api/herdr/ctl"),
+  herdrCtlAction: (action: "start" | "update" | "restart") =>
+    request<{
+      name?: string;
+      runtime?: RuntimeSnapshot;
+      message?: string;
+      ctl?: HerdrCtlStatus;
+    }>("/api/herdr/ctl", {
+      method: "POST",
+      body: JSON.stringify({ action }),
+    }),
   resolve: (target: string) =>
     request<{ panel: PanelConfig }>("/api/agent/resolve", {
       method: "POST",
       body: JSON.stringify({ target }),
     }).then((body) => body.panel),
+  /** Native file picker. Starts in `directory` when it is a folder, or its parent when a file. */
+  pickFile: (directory?: string | null) =>
+    request<{ path: string | null }>("/api/pick-file", {
+      method: "POST",
+      body: JSON.stringify({ directory: directory || null }),
+    }).then((body) => body.path),
   frame: (url: string) =>
     request<{ allowed: boolean; reason?: string }>(`/api/frame?url=${encodeURIComponent(url)}`),
   framePass: (path: string) =>

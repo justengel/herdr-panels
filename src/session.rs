@@ -558,7 +558,8 @@ mod tests {
         let (branch, dirty) = parse_branch_status("## master...origin/master\n");
         assert_eq!(branch.as_deref(), Some("master"));
         assert!(!dirty);
-        let (branch, dirty) = parse_branch_status("## feature/one...origin/feature/one\n M src/main.rs\n");
+        let (branch, dirty) =
+            parse_branch_status("## feature/one...origin/feature/one\n M src/main.rs\n");
         assert_eq!(branch.as_deref(), Some("feature/one"));
         assert!(dirty);
         let (branch, _) = parse_branch_status("## HEAD (no branch)\n");

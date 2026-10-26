@@ -1,7 +1,17 @@
 import { useEffect, useState } from "react";
 import { wsUrl } from "../../api";
 
-export function TextView({ path }: { path: string }) {
+export function TextView({ path, text }: { path?: string; text?: string }) {
+  if (text !== undefined) return <StaticText text={text} />;
+  return <WatchedText path={path ?? ""} />;
+}
+
+function StaticText({ text }: { text: string }) {
+  if (text.includes("\u0000")) return <div className="empty">This file is not text.</div>;
+  return <pre className="file-text">{text}</pre>;
+}
+
+function WatchedText({ path }: { path: string }) {
   const [text, setText] = useState("");
   const [missing, setMissing] = useState(false);
   const [error, setError] = useState<string | null>(null);

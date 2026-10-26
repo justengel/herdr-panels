@@ -85,6 +85,7 @@ pub fn build_app(config_dir: PathBuf, herdr_socket: PathBuf, port: u16) -> anyho
         .route("/api/layouts/{id}", get(layout_one).put(put_layout))
         .route("/api/active", put(set_active))
         .route("/api/tree", get(tree))
+        .route("/api/pick-file", post(pick_file))
         .route("/api/frame", get(frame_policy))
         .route("/api/frame-pass", post(issue_frame_pass))
         .route("/api/session/focus", post(focus_session))
@@ -97,6 +98,7 @@ pub fn build_app(config_dir: PathBuf, herdr_socket: PathBuf, port: u16) -> anyho
         .route("/api/plugins", get(list_plugins))
         .route("/api/herdr/config", get(herdr_config).put(put_herdr_config))
         .route("/api/herdr/action", post(herdr_action))
+        .route("/api/herdr/ctl", get(herdr_ctl_status).post(herdr_ctl_action))
         .route("/api/terminal/input", post(terminal_input))
         .route("/api/terminal/split", post(terminal_split))
         .route("/api/terminal/{pane_id}/screen", get(terminal_screen))
@@ -206,7 +208,10 @@ async fn serve_gate(state: AppState, mut req: Request<Body>, path: &str, next: N
     let Some(gate) = crate::frame_pass::parse_gate(path) else {
         return deny(StatusCode::UNAUTHORIZED, "viewer token is required");
     };
-    if !state.passes.authorize(&gate.secret, &gate.path, req.method()) {
+    if !state
+        .passes
+        .authorize(&gate.secret, &gate.path, req.method())
+    {
         return deny(StatusCode::UNAUTHORIZED, "viewer token is required");
     }
     let mut rewritten = gate.path;
@@ -218,8 +223,9 @@ async fn serve_gate(state: AppState, mut req: Request<Body>, path: &str, next: N
         return deny(StatusCode::BAD_REQUEST, "path is invalid");
     };
     *req.uri_mut() = uri;
-    req.extensions_mut()
-        .insert(crate::frame_pass::ActiveGate { secret: gate.secret });
+    req.extensions_mut().insert(crate::frame_pass::ActiveGate {
+        secret: gate.secret,
+    });
     let mut response = next.run(req).await;
     stamp(&mut response);
     response
@@ -548,9 +554,53 @@ pub async fn allowed_roots(state: &AppState) -> Vec<PathBuf> {
 }
 
 async fn tree(Query(query): Query<TreeQuery>) -> Result<Json<Value>, ApiError> {
-    let entries = crate::files::list_children(std::path::Path::new(&query.path))
-        .map_err(ApiError::bad)?;
+    let entries =
+        crate::files::list_children(std::path::Path::new(&query.path)).map_err(ApiError::bad)?;
     Ok(Json(json!({ "path": query.path, "entries": entries })))
+}
+
+#[derive(Deserialize)]
+struct PickFileBody {
+    /// Current address: a directory opens there; a file opens its parent.
+    #[serde(default)]
+    directory: Option<String>,
+}
+
+async fn pick_file(Json(body): Json<PickFileBody>) -> Result<Json<Value>, ApiError> {
+    let start = pick_start_dir(body.directory.as_deref());
+    let path = tokio::task::spawn_blocking(move || {
+        let mut dialog = rfd::FileDialog::new().set_title("Open file");
+        if let Some(dir) = start {
+            dialog = dialog.set_directory(dir);
+        }
+        dialog.pick_file()
+    })
+    .await
+    .map_err(|err| ApiError::bad(err.to_string()))?;
+    Ok(Json(json!({
+        "path": path.map(|value| value.to_string_lossy().into_owned()),
+    })))
+}
+
+fn pick_start_dir(directory: Option<&str>) -> Option<PathBuf> {
+    let raw = directory?.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    if raw.starts_with("http://")
+        || raw.starts_with("https://")
+        || raw.starts_with("plugin:")
+        || raw.starts_with("file:")
+    {
+        return None;
+    }
+    let path = PathBuf::from(raw);
+    if path.is_dir() {
+        return Some(path);
+    }
+    path.parent()
+        .filter(|parent| !parent.as_os_str().is_empty() && parent.is_dir())
+        .map(|parent| parent.to_path_buf())
 }
 
 #[derive(Deserialize)]
@@ -732,6 +782,7 @@ async fn focus_session(
             .call("pane.focus", json!({ "pane_id": pane_id }))
             .await
             .map_err(|err| ApiError::upstream(err.to_string()))?;
+        state.runtime.invalidate();
         return Ok(StatusCode::NO_CONTENT);
     }
     if let Some(workspace_id) = body.workspace_id {
@@ -742,6 +793,7 @@ async fn focus_session(
             .call("workspace.focus", json!({ "workspace_id": workspace_id }))
             .await
             .map_err(|err| ApiError::upstream(err.to_string()))?;
+        state.runtime.invalidate();
         return Ok(StatusCode::NO_CONTENT);
     }
     if let Some(tab_id) = body.tab_id {
@@ -786,6 +838,50 @@ async fn herdr_config(State(state): State<AppState>) -> Json<Value> {
         .await
         .unwrap_or_else(|_| json!({}));
     Json(with_integrations(&state, doc).await)
+}
+
+async fn herdr_ctl_status(State(state): State<AppState>) -> Json<crate::herdr_ctl::HerdrCtlStatus> {
+    Json(crate::herdr_ctl::status(&state.http).await)
+}
+
+#[derive(Deserialize)]
+struct HerdrCtlBody {
+    action: String,
+}
+
+async fn herdr_ctl_action(
+    State(state): State<AppState>,
+    Json(body): Json<HerdrCtlBody>,
+) -> Result<Json<Value>, ApiError> {
+    let session = {
+        let socket = state.runtime.client().logical_socket();
+        crate::paths::session_label(std::path::Path::new(&socket))
+    };
+    match body.action.as_str() {
+        "start" => {
+            let socket = crate::herdr_ctl::start(&session)
+                .await
+                .map_err(ApiError::bad)?;
+            attach_session(&state, &session, socket).await
+        }
+        "restart" => {
+            let socket = crate::herdr_ctl::restart(&session)
+                .await
+                .map_err(ApiError::bad)?;
+            attach_session(&state, &session, socket).await
+        }
+        "update" => {
+            let message = crate::herdr_ctl::update().await.map_err(ApiError::bad)?;
+            let ctl = crate::herdr_ctl::status(&state.http).await;
+            let runtime = state.runtime.snapshot().await;
+            Ok(Json(json!({
+                "message": message,
+                "ctl": ctl,
+                "runtime": runtime,
+            })))
+        }
+        _ => Err(ApiError::bad("unknown herdr action")),
+    }
 }
 
 async fn put_herdr_config(
@@ -1202,5 +1298,28 @@ mod tests {
             .parse()
             .unwrap();
         assert_eq!(query_token(&uri).as_deref(), Some("abc+/="));
+    }
+
+    #[test]
+    fn pick_start_dir_uses_a_folder_or_a_file_parent() {
+        let root = std::env::temp_dir().join("herdr-panels-pick-start");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let file = root.join("note.md");
+        std::fs::write(&file, "hi").unwrap();
+
+        assert_eq!(
+            pick_start_dir(Some(root.to_str().unwrap())),
+            Some(root.clone())
+        );
+        assert_eq!(
+            pick_start_dir(Some(file.to_str().unwrap())),
+            Some(root.clone())
+        );
+        assert_eq!(pick_start_dir(Some("https://example.com")), None);
+        assert_eq!(pick_start_dir(Some("plugin:welcome")), None);
+        assert_eq!(pick_start_dir(Some("")), None);
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

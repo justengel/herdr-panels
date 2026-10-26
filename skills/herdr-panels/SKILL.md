@@ -112,7 +112,7 @@ def call(method, path, body=None, base="http://127.0.0.1:4737"):
 - `{"type":"markdown","path":"notes/welcome.md"}`
 - `{"type":"iframe","url":"http://127.0.0.1:8080/","proxy":false}` browser. Set `proxy` to true only for a loopback URL that refuses to be framed. The command always leaves `proxy` false.
 - `{"type":"html","path":"panels/session-board.html"}` or `{"type":"html","inline":"<p>Hi</p>"}`. Add `"control": true` only when that panel should type into a Herdr pane. The command cannot set `control`.
-- `{"type":"plugin","plugin":"my-plugin"}`
+- `{"type":"plugin","plugin":"my-plugin"}` the plugin's own panel. Add `"view"` and `"path"` or `"url"` when that view is showing a file or a page. Set `"directory": true` when `path` is a folder.
 - `{"type":"explorer","path":""}` file explorer. An empty path lists the open workspace folders. This is not the `files` spaces list or the `agents` list.
 - `{"type":"file","path":"src/main.rs"}` plain text. Prefer `open`.
 - `{"type":"chat","paneId":null}` an older local transcript. Run an agent in a Herdr pane instead.
@@ -130,6 +130,8 @@ Copy `examples/plugins/welcome` and change it. A plugin is that directory. Do no
 ```
 
 The directory name and `id` must match. `id` is 1 to 64 characters of lowercase letters, digits, and hyphens, and it cannot start or end with a hyphen. `title` is the menu label, 1 to 80 characters. `entry` defaults to `index.html` and must be a file inside the directory. CSS, scripts, and images next to the page are served with it.
+
+A plugin is a view. `views` lists the viewers it adds. Each view has an `id`, a `title`, and `opens`: `file`, `markdown`, `html`, `directory`, or `url`. `file` matches every file, including Markdown and HTML. A view with no `opens` is the plugin's own panel and does not take the current file. Leave `views` out for that panel. One view can omit `id`; it then uses the plugin id. The gear shows a matching view beside the built-in viewers and keeps the address. On load the host posts `{ source: "hwp-host", type: "open", view, address, kind, config }`. `kind` is `file`, `markdown`, `html`, `directory`, or `url`. `config` is the panel's JSON object. The page can save that object with `{ source: "hwp-plugin", type: "config", value }`, up to 32 KB. The page stays sandboxed. It does not get the viewer token or `window.herdrPanels`.
 
 ```text
 herdr-panels plugin install <directory>
