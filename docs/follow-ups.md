@@ -26,7 +26,7 @@ The archives are unsigned on purpose. Windows SmartScreen and macOS Gatekeeper w
 
 ### Machines the release does not cover
 
-There is no Intel Mac archive and no Linux arm64 archive. The macOS archive is Apple Silicon because that is the current GitHub macOS runner. The Linux archive is built on the current Ubuntu runner and links that system's OpenSSL 3. Ubuntu 22.04 and 24.04 can run it. Ubuntu 20.04 cannot.
+There is no Intel Mac archive and no Linux arm64 archive. The macOS archive is Apple Silicon because that is the current GitHub macOS runner. The Linux archive is built on the current Ubuntu runner. It links that system's OpenSSL 3 and Wayland client libraries. Ubuntu 22.04 and 24.04 desktops have both. Ubuntu 20.04 does not have OpenSSL 3.
 
 ### Herdr action lifetime
 
