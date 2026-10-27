@@ -4,6 +4,8 @@ version = "0.1.0"
 edition = "2021"
 description = "Local multi-panel browser client for Herdr"
 license = "MIT"
+repository = "https://github.com/justengel/herdr-panels"
+readme = "README.md"
 publish = false
 
 [lib]
@@ -21,6 +23,7 @@ bytes = "1"
 clap = { version = "4", features = ["derive"] }
 futures-util = "0.3"
 getrandom = { version = "0.2", features = ["std"] }
+include_dir = "0.7"
 mime_guess = "2"
 notify = "6"
 reqwest = "0.12"

@@ -114,7 +114,7 @@ pub fn build_app(config_dir: PathBuf, herdr_socket: PathBuf, port: u16) -> anyho
         .route("/proxy/{*path}", any(crate::proxy::handle))
         .route("/gate/{*path}", any(gate_entry));
 
-    router = if dist_dir.is_some() {
+    router = if dist_dir.is_some() || crate::bundle::has_packaged_page() {
         router.fallback(get(frontend))
     } else {
         router.fallback(get(setup_page))
@@ -139,7 +139,9 @@ pub async fn serve(config: ServerConfig) -> anyhow::Result<()> {
     tracing::info!("config directory {}", config.config_dir.display());
     tracing::info!("herdr socket {}", config.herdr_socket.display());
     if find_dist_dir().is_some() {
-        tracing::info!("serving the built UI");
+        tracing::info!("serving the built UI from disk");
+    } else if crate::bundle::has_packaged_page() {
+        tracing::info!("serving the packaged UI");
     } else {
         tracing::info!("UI bundle not found; run `npm run dev` in web/ or `npm run build`");
     }
@@ -372,20 +374,43 @@ fn from_hex(byte: u8) -> Option<u8> {
 }
 
 async fn frontend(State(state): State<AppState>, uri: Uri) -> Response {
-    let Some(dist) = state.dist_dir.clone() else {
-        return setup_page().await.into_response();
-    };
     let path = uri.path();
     if is_shell_document(path) {
-        return match tokio::fs::read_to_string(dist.join("index.html")).await {
-            Ok(html) => html_document(&html, &state.token),
-            Err(_) => (StatusCode::NOT_FOUND, "not found").into_response(),
-        };
+        if let Some(html) = disk_index(&state).await {
+            return html_document(&html, &state.token);
+        }
+        if let Some(bytes) = crate::bundle::packaged_asset("index.html") {
+            let html = String::from_utf8_lossy(bytes);
+            return html_document(&html, &state.token);
+        }
+        return setup_page().await.into_response();
     }
-    if let Some(file) = safe_asset(&dist, path) {
-        return serve_file(file).await;
+    if let Some(dist) = &state.dist_dir {
+        if let Some(file) = safe_asset(dist, path) {
+            return serve_file(file).await;
+        }
+    }
+    let decoded = percent_decode(path.trim_start_matches('/'));
+    if let Some(bytes) = crate::bundle::packaged_asset(&decoded) {
+        return serve_bytes(&decoded, bytes);
     }
     (StatusCode::NOT_FOUND, "not found").into_response()
+}
+
+async fn disk_index(state: &AppState) -> Option<String> {
+    let dist = state.dist_dir.as_ref()?;
+    tokio::fs::read_to_string(dist.join("index.html"))
+        .await
+        .ok()
+}
+
+fn serve_bytes(path: &str, bytes: &'static [u8]) -> Response {
+    let mime = mime_guess::from_path(path).first_or_octet_stream();
+    let mut response = Response::new(Body::from(bytes));
+    if let Ok(value) = HeaderValue::from_str(mime.as_ref()) {
+        response.headers_mut().insert(header::CONTENT_TYPE, value);
+    }
+    response
 }
 
 fn html_document(html: &str, token: &str) -> Response {

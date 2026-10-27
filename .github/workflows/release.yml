@@ -1,0 +1,84 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: ${{ matrix.asset }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            asset: linux-x64
+          - os: windows-latest
+            asset: windows-x64
+          - os: macos-latest
+            asset: macos-arm64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Page
+        working-directory: web
+        run: |
+          npm ci
+          npm test
+          npm run build
+      - name: Test
+        run: cargo test --locked
+      - name: Build
+        run: cargo build --release --locked
+      - name: Package Unix
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          name="herdr-panels-${version}-${{ matrix.asset }}"
+          mkdir -p "$name"
+          cp target/release/herdr-panels "$name/"
+          cp LICENSE README.md "$name/"
+          tar -czf "${name}.tar.gz" "$name"
+      - name: Package Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $version = $env:GITHUB_REF_NAME.Substring(1)
+          $name = "herdr-panels-$version-${{ matrix.asset }}"
+          New-Item -ItemType Directory -Force -Path $name | Out-Null
+          Copy-Item target/release/herdr-panels.exe -Destination $name
+          Copy-Item LICENSE, README.md -Destination $name
+          Compress-Archive -Path $name -DestinationPath "$name.zip" -Force
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: |
+            herdr-panels-*.tar.gz
+            herdr-panels-*.zip
+          if-no-files-found: error
+
+  publish:
+    name: Publish
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: dist/*

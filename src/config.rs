@@ -26,6 +26,11 @@ pub fn prepare_config_dir(flag: Option<PathBuf>) -> anyhow::Result<PathBuf> {
             tracing::info!("seeding config from {}", examples.display());
         }
         seed_examples(&examples, &dir)?;
+    } else {
+        if empty {
+            tracing::info!("seeding config from the packaged examples");
+        }
+        crate::bundle::seed_examples(&dir)?;
     }
     if !dir.join("settings.json").is_file() {
         let settings = Settings::default();
@@ -88,6 +93,19 @@ mod tests {
             "guide"
         );
         assert!(!config.join("plugins").join("welcome").exists());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn packaged_examples_seed_a_config_without_the_sample_plugin() {
+        let root = std::env::temp_dir().join(format!("hwp-packaged-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        crate::bundle::seed_examples(&root).unwrap();
+        let desk = fs::read_to_string(root.join("layouts").join("desk.json")).unwrap();
+        assert!(desk.contains("\"panel\""));
+        assert!(root.join("notes").join("welcome.md").is_file());
+        assert!(root.join("plugins").join("README.md").is_file());
+        assert!(!root.join("plugins").join("welcome").exists());
         let _ = fs::remove_dir_all(&root);
     }
 }

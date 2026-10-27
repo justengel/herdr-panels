@@ -323,8 +323,23 @@ pub fn install_example_plugin(
 }
 
 pub fn install_bundled_example(config_dir: &Path, replace: bool) -> anyhow::Result<PluginManifest> {
-    let examples = crate::paths::bundled_examples().context("the example plugin was not found")?;
-    install_example_plugin(config_dir, &examples, replace)
+    if let Some(examples) = crate::paths::bundled_examples() {
+        return install_example_plugin(config_dir, &examples, replace);
+    }
+    let scratch = std::env::temp_dir().join(format!(
+        "herdr-panels-welcome-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|elapsed| elapsed.as_nanos())
+            .unwrap_or(0)
+    ));
+    let result = (|| {
+        crate::bundle::extract_example_plugin(&scratch)?;
+        install_plugin(config_dir, &scratch, replace)
+    })();
+    let _ = fs::remove_dir_all(&scratch);
+    result
 }
 
 pub fn install_plugin(
@@ -524,6 +539,23 @@ mod tests {
             r#"{"id":"welcome","title":"Welcome","addressBar":{"replace":"yes"}}"#
         )
         .is_err());
+    }
+
+    #[test]
+    fn the_packaged_sample_plugin_installs_from_the_binary() {
+        let root = std::env::temp_dir().join(format!("hwp-packaged-plugin-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let source = root.join("welcome");
+        crate::bundle::extract_example_plugin(&source).unwrap();
+        let manifest = install_plugin(&root.join("config"), &source, false).unwrap();
+        assert_eq!(manifest.id, "welcome");
+        assert!(root
+            .join("config")
+            .join("plugins")
+            .join("welcome")
+            .join("index.html")
+            .is_file());
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]

@@ -6,9 +6,33 @@ An agent can do that arranging for you: open a URL, a note, an HTML page, or a p
 
 ![Herdr Panels with a note, charts, and a file list](docs/screenshot.png)
 
+## Download
+
+Prebuilt programs are on the [latest release](https://github.com/justengel/herdr-panels/releases/latest). Each archive is the `herdr-panels` program and the license. Node and Rust are not required, and there is no system installer.
+
+| System | Archive |
+| --- | --- |
+| Linux x64 | `linux-x64.tar.gz` |
+| Windows x64 | `windows-x64.zip` |
+| macOS Apple Silicon | `macos-arm64.tar.gz` |
+
+The Linux build is for Ubuntu 22.04 or newer. Unpack it and run `./herdr-panels`. It listens on http://127.0.0.1:4737 and opens a browser tab. The first start writes the viewer token and the example layouts into the config directory.
+
+On Windows, unpack the zip and run `herdr-panels.exe`. On macOS, unpack the archive and run `./herdr-panels`. Those systems may ask before an unsigned program runs.
+
+With `herdr-panels` on `PATH`, Herdr can start that same program. The manifest in this repository does not compile anything:
+
+```sh
+herdr plugin install justengel/herdr-panels
+```
+
+The action is **Open Herdr Panels**. That command runs until you stop the viewer. View plugins loaded inside the desk are a separate mechanism, described under [Design mode](#design-mode).
+
+Building from this repository is next. The release notes start at [CHANGELOG.md](CHANGELOG.md).
+
 ## Install and run
 
-Requirements: Rust, Node.js, and a running Herdr (`herdr`, or `herdr server` for a headless session). These commands are the same on Windows, macOS, and Linux. There is no installer for each OS.
+These steps build from source. Requirements: Rust, Node.js, and a running Herdr (`herdr`, or `herdr server` for a headless session). The commands are the same on Windows, macOS, and Linux.
 
 ```sh
 cd web
@@ -18,13 +42,13 @@ cd ..
 cargo install --path .
 ```
 
-`npm install` fetches the packages for the page. `npm run build` writes that page to `web/dist`. Both the browser and the desktop window show that page, so this build is done once. `cargo install` puts `herdr-panels` on your PATH. That program is the server.
+`npm install` fetches the packages for the page. `npm run build` writes that page to `web/dist`. Both the browser and the desktop window show that page, so this build is done once. `cargo build --release` packages that page and `examples/` into the program. It stops if `web/dist/index.html` is missing. `cargo install --path .` puts `herdr-panels` on your PATH. That program is the server. A debug build can compile before the page exists; it then serves a short setup page unless `web/dist` is still on disk.
 
 ```sh
 herdr-panels
 ```
 
-This listens on http://127.0.0.1:4737 and opens a browser tab. Opening that address loads the page with its token, so you do not paste one. The first start copies `examples/` into the config directory and writes `auth-token` there.
+This listens on http://127.0.0.1:4737 and opens a browser tab. Opening that address loads the page with its token, so you do not paste one. The first start copies the bundled examples into the config directory and writes `auth-token` there. A release program carries those examples itself. A build made in this checkout still prefers the `examples/` directory on disk, so edits there are what get copied.
 
 The desktop window is optional:
 
@@ -78,8 +102,11 @@ web/src/components   Layout engine, design mode, and the panel types
 | `markdown` | A local `.md` file, sanitized in the browser and refreshed when the file changes. |
 | `html` | A local HTML file or an inline snippet. A bridge script exposes `window.herdrPanels`. |
 | `plugin` | An installed view. The id names a directory under `<config>/plugins` that contains `plugin.json` and its own HTML. |
+| `explorer` | A file list. An empty path lists the open workspace folders. |
+| `file` | The plain text of a local file. |
 | `files` | The spaces list: open Herdr workspaces, with a status dot. |
 | `agents` | Agents in the session, grouped under the spaces list. |
+| `blank` | An empty panel. |
 | `chat` | An older local transcript. It still loads. A Herdr pane is the place to run an agent. |
 
 ### Panels
@@ -232,7 +259,7 @@ Default config directory:
 - Windows: `%APPDATA%\herdr-panels`
 - macOS and Linux: `$XDG_CONFIG_HOME/herdr-panels` or `~/.config/herdr-panels`
 
-The first launch copies `examples/` into that directory when it has no layouts. `HERDR_PANELS_CONFIG` selects that directory when `--config` is omitted, which is how `npm run dev` finds the same place as the viewer. `HERDR_PANELS_TOKEN` overrides `auth-token` for each process that has it set. Herdr's own socket is discovered from `HERDR_SOCKET_PATH`, then `HERDR_SESSION` / `--herdr-session`, then the default session socket printed by `herdr status`.
+The first launch copies the bundled examples into that directory when it has no layouts. `HERDR_PANELS_CONFIG` selects that directory when `--config` is omitted, which is how `npm run dev` finds the same place as the viewer. `HERDR_PANELS_TOKEN` overrides `auth-token` for each process that has it set. Herdr's own socket is discovered from `HERDR_SOCKET_PATH`, then `HERDR_SESSION` / `--herdr-session`, then the default session socket printed by `herdr status`.
 
 The example side-by-side layout targets pane `w1:p1`. If that pane is not in the session, right-click the terminal's title bar and choose another pane. The choice is saved into the layout file.
 
@@ -251,12 +278,16 @@ cargo run -- server --herdr-session demo
 ## Development checks
 
 ```sh
-cargo test
 cd web
+npm install
+npm test
 npm run build
+cd ..
+cargo test
+cargo build --release
 ```
 
-`cargo test` covers layout parsing, path confinement, key mapping, the loopback proxy, and snapshot geometry. It does not need a running Herdr. A live Herdr is required to exercise a terminal pane.
+`cargo test` covers layout parsing, path confinement, key mapping, the loopback proxy, and snapshot geometry. It does not need a running Herdr. A live Herdr is required to exercise a terminal pane. `cargo build --release` includes the page built by `npm run build`.
 
 ## License
 
