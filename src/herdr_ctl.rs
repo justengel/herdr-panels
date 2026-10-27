@@ -145,7 +145,10 @@ fn stop(session: &str) -> Result<(), String> {
 fn spawn_server(session: Option<&str>) -> Result<(), String> {
     let mut command = Command::new("herdr");
     if let Some(name) = session {
-        command.arg("--session").arg(name).env("HERDR_SESSION", name);
+        command
+            .arg("--session")
+            .arg(name)
+            .env("HERDR_SESSION", name);
     }
     command
         .arg("server")

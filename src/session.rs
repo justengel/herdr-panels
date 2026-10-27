@@ -313,7 +313,35 @@ fn geometry_for(layouts: &[Value], pane_id: &str) -> Option<PaneRect> {
     None
 }
 
+fn fill_workspace_roots(snapshot: &mut RuntimeSnapshot) {
+    let dirs: Vec<(String, String)> = snapshot
+        .workspaces
+        .iter()
+        .filter_map(|workspace| {
+            if workspace
+                .root
+                .as_ref()
+                .filter(|root| !root.is_empty())
+                .is_some()
+            {
+                return None;
+            }
+            workspace_dir(snapshot, workspace).map(|dir| (workspace.workspace_id.clone(), dir))
+        })
+        .collect();
+    for (id, dir) in dirs {
+        if let Some(workspace) = snapshot
+            .workspaces
+            .iter_mut()
+            .find(|workspace| workspace.workspace_id == id)
+        {
+            workspace.root = Some(dir);
+        }
+    }
+}
+
 async fn attach_branches(snapshot: &mut RuntimeSnapshot) {
+    fill_workspace_roots(snapshot);
     let jobs: Vec<(String, String)> = snapshot
         .workspaces
         .iter()
@@ -551,6 +579,52 @@ mod tests {
         assert!(runtime.tabs[1].focused);
         assert_eq!(runtime.panes[0].x, Some(26));
         assert_eq!(runtime.panes[0].y, Some(1));
+    }
+
+    #[test]
+    fn missing_workspace_root_uses_the_focused_pane_directory() {
+        let mut snapshot = RuntimeSnapshot {
+            connected: true,
+            error: None,
+            version: None,
+            protocol: None,
+            socket: "sock".to_string(),
+            session: "default".to_string(),
+            focused_pane_id: Some("w1:p1".to_string()),
+            focused_tab_id: None,
+            focused_workspace_id: Some("w1".to_string()),
+            workspaces: vec![WorkspaceView {
+                workspace_id: "w1".to_string(),
+                label: "proj".to_string(),
+                focused: true,
+                root: None,
+                branch: None,
+                dirty: false,
+            }],
+            tabs: Vec::new(),
+            panes: vec![PaneView {
+                pane_id: "w1:p1".to_string(),
+                workspace_id: "w1".to_string(),
+                tab_id: "w1:t1".to_string(),
+                label: None,
+                title: None,
+                cwd: Some("C:/Users/me/proj".to_string()),
+                agent_status: "unknown".to_string(),
+                agent: None,
+                agent_name: None,
+                focused: true,
+                x: None,
+                y: None,
+                cols: None,
+                rows: None,
+            }],
+            agents: Vec::new(),
+        };
+        fill_workspace_roots(&mut snapshot);
+        assert_eq!(
+            snapshot.workspaces[0].root.as_deref(),
+            Some("C:/Users/me/proj")
+        );
     }
 
     #[test]

@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { initialAllSpaces } from "../src/components/PinDialog";
-import { canPinPanel, findPin, readPins, removePin, unpinFromSpace, upsertPin } from "../src/pins";
+import { initialAllSpaces, initialChosen, pinFormKey } from "../src/components/PinDialog";
+import { canPinPanel, findPin, pinApplies, pinDraft, readPins, removePin, unpinFromSpace, upsertPin } from "../src/pins";
 import type { PanelConfig } from "../src/types";
 
 function memoryStorage(): Storage {
@@ -59,7 +59,7 @@ describe("pins", () => {
     expect(findPin("charts")).toBeNull();
   });
 
-  it("unpins from one space while keeping the pin elsewhere", () => {
+  it("unpins from one space and still covers spaces created later", () => {
     upsertPin({
       id: "spaces",
       title: "Spaces",
@@ -72,9 +72,12 @@ describe("pins", () => {
       id: "spaces",
       title: "Spaces",
       panel: { type: "files" },
-      mode: "chosen",
-      spaces: ["ws-b", "ws-c"],
+      mode: "all",
+      spaces: ["ws-a"],
     });
+    expect(pinApplies(next!, "ws-a")).toBe(false);
+    expect(pinApplies(next!, "ws-b")).toBe(true);
+    expect(pinApplies(next!, "ws-new")).toBe(true);
   });
 
   it("removes the pin when the last space is unpinned", () => {
@@ -96,5 +99,35 @@ describe("pins", () => {
       false,
     );
     expect(initialAllSpaces({ id: "n", title: "N", panel: { type: "files" }, mode: "all", spaces: [] }, false)).toBe(true);
+  });
+
+  it("keeps the pin form still when the space list is a new array with the same ids", () => {
+    const pin = {
+      id: "charts",
+      title: "Charts",
+      panel: { type: "html" as const, path: "charts.html" },
+      mode: "chosen" as const,
+      spaces: ["wG"],
+    };
+    const first = pinFormKey(pin, [{ id: "wG" }, { id: "wH" }], "wG", false);
+    const again = pinFormKey({ ...pin, spaces: ["wG"] }, [{ id: "wG" }, { id: "wH" }], "wG", false);
+    expect(again).toBe(first);
+    expect(pinFormKey({ ...pin, mode: "all", spaces: [] }, [{ id: "wG" }, { id: "wH" }], "wG", false)).not.toBe(first);
+  });
+
+  it("keeps All spaces when a space is unchecked, and treats a full checklist as chosen", () => {
+    const pin = {
+      id: "notes",
+      title: "Notes",
+      panel: { type: "markdown" as const, path: "a.md" },
+      mode: "all" as const,
+      spaces: ["ws-a"],
+    };
+    expect(initialChosen(pin, [{ id: "ws-a" }, { id: "ws-b" }], "ws-b", true)).toEqual(["ws-b"]);
+    expect(pinDraft(true, ["ws-b"], ["ws-a", "ws-b"])).toEqual({ mode: "all", spaces: ["ws-a"] });
+    expect(pinDraft(false, ["ws-a", "ws-b"], ["ws-a", "ws-b"])).toEqual({
+      mode: "chosen",
+      spaces: ["ws-a", "ws-b"],
+    });
   });
 });

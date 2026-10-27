@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { displayPath, expandDisplayPath, guessHome, middleEllipsis } from "../src/displayPath";
+import { charsThatFit, displayPath, expandDisplayPath, guessHome, middleEllipsis } from "../src/displayPath";
 
 describe("displayPath", () => {
   it("collapses home to ~ and expands it again", () => {
@@ -26,6 +26,16 @@ describe("middleEllipsis", () => {
 
   it("leaves short paths alone", () => {
     expect(middleEllipsis("~/notes/a.md", 40)).toBe("~/notes/a.md");
+  });
+
+  it("keeps the whole path when it fits and otherwise the longest ellipsis", () => {
+    const text = "~/projects/herdr-panels/examples/notes/welcome.md";
+    expect(charsThatFit(text, text.length, (sample) => sample.length)).toBe(text.length);
+    const max = charsThatFit(text, 28, (sample) => sample.length);
+    const shown = middleEllipsis(text, max);
+    expect(shown.length).toBeLessThanOrEqual(28);
+    expect(shown.startsWith("~/")).toBe(true);
+    expect(shown.endsWith("welcome.md")).toBe(true);
   });
 
   it("keeps the host and leaf for long URLs", () => {

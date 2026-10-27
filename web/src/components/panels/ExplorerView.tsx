@@ -8,7 +8,7 @@ import {
   rememberFolder,
   type TreeEntry,
 } from "../../explorerMemory";
-import { parentPath, plainPath, samePath } from "../../paths";
+import { parentPath, pathKey, plainPath, samePath } from "../../paths";
 
 interface Root {
   path: string;
@@ -19,6 +19,7 @@ export function ExplorerView({
   panelId,
   path,
   focus,
+  highlight,
   roots,
   onEnter,
   onOpenFile,
@@ -27,6 +28,8 @@ export function ExplorerView({
   panelId: string;
   path: string;
   focus?: string;
+  /** File or folder the address bar is showing. The tree selects this row. */
+  highlight?: string;
   roots: Root[];
   onEnter: (path: string) => void;
   onOpenFile: (path: string) => void | Promise<unknown>;
@@ -72,6 +75,18 @@ export function ExplorerView({
   useEffect(() => setDraft(plainPath(path)), [path]);
   useEffect(() => setError(null), [path]);
 
+  const selected = highlight || focus || "";
+  const scrolled = useRef("");
+
+  useEffect(() => {
+    const node = treeRef.current?.querySelector("[data-selected='true']");
+    if (!(node instanceof HTMLElement)) return;
+    const key = node.getAttribute("data-path") || "";
+    if (!key || scrolled.current === key) return;
+    scrolled.current = key;
+    node.scrollIntoView({ block: "nearest" });
+  });
+
   const parent = parentOf(path);
   const canUp = parent.length > 0 && !samePath(parent, path);
 
@@ -103,6 +118,7 @@ export function ExplorerView({
               depth={0}
               startOpen
               focus={focus}
+              highlight={selected}
               onOpenFile={onOpenFile}
               onError={setError}
             />
@@ -114,8 +130,9 @@ export function ExplorerView({
                 path={plainPath(root.path)}
                 name={root.label}
                 depth={0}
-                startOpen={Boolean(focus && samePath(focus, root.path))}
+                startOpen={Boolean(selected && samePath(selected, root.path))}
                 focus={focus}
+                highlight={selected}
                 onOpenFile={onOpenFile}
                 onError={setError}
               />
@@ -134,6 +151,7 @@ function TreeBranch({
   depth,
   startOpen,
   focus,
+  highlight,
   onOpenFile,
   onError,
 }: {
@@ -143,12 +161,15 @@ function TreeBranch({
   depth: number;
   startOpen: boolean;
   focus?: string;
+  highlight?: string;
   onOpenFile: (path: string) => void | Promise<unknown>;
   onError: (message: string | null) => void;
 }) {
   const memory = explorerMemory(panelId);
-  const forceOpen = Boolean(focus && samePath(focus, path) && !samePath(path, focus));
-  const [open, setOpen] = useState(() => folderOpen(memory, path, startOpen || forceOpen));
+  const chain = highlight || focus || "";
+  const forceOpen = Boolean(chain && samePath(chain, path) && pathKey(path) !== pathKey(chain));
+  const selected = Boolean(highlight && pathKey(path) === pathKey(highlight));
+  const [open, setOpen] = useState(() => forceOpen || folderOpen(memory, path, startOpen || forceOpen));
   const [entries, setEntries] = useState<TreeEntry[] | null>(() => cachedEntries(memory, path) ?? null);
   const openRef = useRef(open);
   const pathRef = useRef(path);
@@ -157,7 +178,7 @@ function TreeBranch({
   useEffect(() => {
     rememberFolder(memory, pathRef.current, openRef.current);
     pathRef.current = path;
-    setOpen(folderOpen(memory, path, startOpen || forceOpen));
+    setOpen(forceOpen || folderOpen(memory, path, startOpen || forceOpen));
     setEntries(cachedEntries(memory, path) ?? null);
   }, [memory, path, startOpen, forceOpen]);
 
@@ -197,7 +218,9 @@ function TreeBranch({
     <div>
       <button
         type="button"
-        className="tree-row"
+        className={`tree-row${selected ? " is-selected" : ""}`}
+        data-path={path}
+        data-selected={selected ? "true" : undefined}
         style={{ paddingLeft: 8 + depth * 14 }}
         aria-expanded={open}
         onClick={toggle}
@@ -218,6 +241,7 @@ function TreeBranch({
                 depth={depth + 1}
                 startOpen={false}
                 focus={focus}
+                highlight={highlight}
                 onOpenFile={onOpenFile}
                 onError={onError}
               />
@@ -225,7 +249,9 @@ function TreeBranch({
               <button
                 key={entry.path}
                 type="button"
-                className={`tree-row${focus && samePath(entry.path, focus) ? " is-selected" : ""}`}
+                className={`tree-row${highlight && pathKey(entry.path) === pathKey(highlight) ? " is-selected" : ""}`}
+                data-path={entry.path}
+                data-selected={highlight && pathKey(entry.path) === pathKey(highlight) ? "true" : undefined}
                 style={{ paddingLeft: 8 + (depth + 1) * 14 }}
                 onClick={() => {
                   void Promise.resolve(onOpenFile(entry.path)).catch((err: unknown) => {

@@ -1,14 +1,16 @@
 import { useRef, useState } from "react";
 import type { AgentView, Attachment, GridNode, LayoutNode, PaneView, PanelConfig, WorkspaceView } from "../types";
 import { api } from "../api";
-import { baseName, parentPath, plainPath, samePath } from "../paths";
+import { baseName, samePath } from "../paths";
 import { openFileBeside } from "../fileOpen";
 import { isDefaultPanelTitle } from "../openTitle";
 import { pluginAddressBar } from "../pluginAddress";
 import { addressBarSurfaceId, carryAddressBar, hostAddressBarVisible, setAddressBar, supportsAddressBar, writeAddressBarChoice } from "../addressBar";
 import { carryRaw, showsRawText, writeRawChoice } from "../rawText";
-import { adoptPluginAddress, menuFor, pluginOpenMessage, showViewer, writePluginSubject } from "../viewMenu";
-import { canPinPanel, findPin, removePin, unpinFromSpace, upsertPin } from "../pins";
+import { adoptPluginAddress, menuFor, pluginOpenMessage, showViewer, viewerName, writePluginSubject } from "../viewMenu";
+import { climbExplorer, explorerRootFor, resolveWorkspacePath, workspaceDirectory } from "../explorerRoot";
+import { canPinPanel, findPin, pinApplies, upsertPin } from "../pins";
+import { unpinEverywhere, unpinHere } from "../spaceLayout";
 import { openTerminalPane } from "../openTerminal";
 import { terminalHereCwd } from "../terminalHere";
 import { cellNode, listPanels } from "../layoutEdit";
@@ -325,7 +327,7 @@ function PanelView(props: {
         return;
       }
       const next = showViewer(panel, choice, desk.plugins, {
-        workspaceRoot: activeSpace?.root ?? null,
+        workspaceRoot: workspaceDirectory(activeSpace, panes),
       });
       const surfaceId = addressBarSurfaceId(id, panel);
       if (surfaceId) {
@@ -342,28 +344,37 @@ function PanelView(props: {
     setPinning(false);
     const spaceIds = workspaces.map((space) => space.workspaceId);
     if (result.action === "unpin-all") {
-      removePin(id);
+      if (root) {
+        const next = unpinEverywhere(root, id);
+        if (next !== root) panelActions.close(id);
+      }
       setPinTick((tick) => tick + 1);
       return;
     }
     if (result.action === "unpin-space") {
-      if (activeSpace?.workspaceId) unpinFromSpace(id, activeSpace.workspaceId, spaceIds);
+      if (activeSpace?.workspaceId && root && unpinHere(root, id, activeSpace.workspaceId, spaceIds)) {
+        panelActions.close(id);
+      }
       setPinTick((tick) => tick + 1);
       return;
     }
-    upsertPin({
+    const pin = {
       id,
       title: title || heading(content),
       panel: content,
       mode: result.mode,
-      spaces: result.mode === "chosen" ? result.spaces : [],
-    });
+      spaces: result.spaces,
+    };
+    upsertPin(pin);
+    if (activeSpace?.workspaceId && root && !pinApplies(pin, activeSpace.workspaceId)) {
+      panelActions.close(id);
+    }
     setPinTick((tick) => tick + 1);
   }
   if (panel.type === "tabs") {
     return (
       <>
-        <PanelChrome {...chrome} title={title || "Tabs"} kind="Tabs">
+        <PanelChrome {...chrome} title={title || "Tabs"} kind="Tabs" viewer={viewerName(content, plugin?.title)}>
           <TabGroup
             group={panel}
             onChange={(next) => onPanel(id, next)}
@@ -396,6 +407,7 @@ function PanelView(props: {
         {...chrome}
         title={panelTitle}
         kind={kindOf(panel)}
+        viewer={viewerName(content, plugin?.title)}
         subtitle={panel.type === "herdr" ? herdrSubtitle(props) : undefined}
         badge={panel.type === "herdr" ? badgeText(herdrPane(props)) : undefined}
         badgeClass={panel.type === "herdr" ? badgeClass(herdrPane(props)) : undefined}
@@ -549,9 +561,9 @@ function DocumentSurface({
   const [command, setCommand] = useState<PluginHostCommand | null>(null);
   const pick = (tag: string, text: string) => design.selectElement({ panelId: id, tag, text });
   const open = (next: PanelConfig) => onPanel(id, carryRaw(panel, carryAddressBar(panel, next)));
-  const folder = panel.type === "explorer" ? plainPath(panel.path) : "";
-  const parent = folder ? parentPath(folder) : "";
-  const canUp = parent.length > 0 && !samePath(parent, folder);
+  const space = workspaces.find((item) => item.focused) ?? workspaces[0];
+  const workspaceRoot = workspaceDirectory(space, panes);
+  const climbed = panel.type === "explorer" ? climbExplorer(panel) : null;
   const shown = hostAddressBarVisible(panel, bar);
   const override = pluginAddress?.id === pluginId ? pluginAddress.value : null;
   const address = panel.type === "plugin" && override !== null ? override : addressOf(panel);
@@ -559,9 +571,21 @@ function DocumentSurface({
   const liveCommand = command && command.pluginId === pluginId ? command : null;
 
   function enter(next: string) {
-    void api.resolve(next).then(open, () => {
-      if (panel.type === "explorer") onPanel(id, { type: "explorer", path: next, addressBar: panel.addressBar });
-    });
+    void api.resolve(next).then(
+      (resolved) => {
+        if (panel.type !== "explorer") {
+          open(resolved);
+          return;
+        }
+        const stayed = keepExplorer(panel, resolved, workspaceRoot);
+        if (stayed) onPanel(id, stayed);
+        else open(resolved);
+      },
+      () => {
+        if (panel.type !== "explorer") return;
+        onPanel(id, keepExplorerAddress(panel, next, workspaceRoot, "directory"));
+      },
+    );
   }
 
   function navigatePlugin(value: string) {
@@ -581,11 +605,11 @@ function DocumentSurface({
       address={address}
       onOpen={open}
       visible={shown}
-      canUp={canUp}
+      canUp={climbed !== null}
       onUp={
-        panel.type === "explorer"
+        climbed
           ? () => {
-              if (canUp) enter(parent);
+              onPanel(id, climbed);
             }
           : undefined
       }
@@ -628,8 +652,9 @@ function DocumentSurface({
       {panel.type === "explorer" ? (
         <ExplorerView
           panelId={id}
-          path={panel.path}
+          path={explorerRootFor(panel.focus || panel.path, workspaceRoot)}
           focus={panel.focus}
+          highlight={panel.focus || panel.path}
           roots={folderRoots(workspaces, panes)}
           showAddress={false}
           onEnter={enter}
@@ -710,6 +735,36 @@ function heading(panel: PanelConfig): string {
 function kindOf(panel: PanelConfig): string {
   if (panel.type === "html") return "Browser";
   return heading(panel);
+}
+
+function keepExplorer(
+  current: Extract<PanelConfig, { type: "explorer" }>,
+  resolved: PanelConfig,
+  workspaceRoot: string | null,
+): PanelConfig | null {
+  if (resolved.type === "explorer") return keepExplorerAddress(current, resolved.path, workspaceRoot, "directory");
+  if (resolved.type === "markdown" || resolved.type === "file") {
+    return keepExplorerAddress(current, resolved.path, workspaceRoot, "file");
+  }
+  if (resolved.type === "html" && resolved.path) {
+    return keepExplorerAddress(current, resolved.path, workspaceRoot, "file");
+  }
+  return null;
+}
+
+function keepExplorerAddress(
+  current: Extract<PanelConfig, { type: "explorer" }>,
+  address: string,
+  workspaceRoot: string | null,
+  kind: "file" | "directory",
+): Extract<PanelConfig, { type: "explorer" }> {
+  const located = resolveWorkspacePath(address, workspaceRoot);
+  const next: Extract<PanelConfig, { type: "explorer" }> =
+    kind === "file"
+      ? { type: "explorer", path: explorerRootFor(located, workspaceRoot), focus: located }
+      : { type: "explorer", path: located };
+  if (typeof current.addressBar === "boolean") next.addressBar = current.addressBar;
+  return next;
 }
 
 function herdrPane(props: { panel: PanelConfig; panes: PaneView[]; workspaces: WorkspaceView[] }): PaneView | undefined {

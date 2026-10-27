@@ -1,6 +1,6 @@
 import { useEffect, useId, useState } from "react";
 import { createPortal } from "react-dom";
-import type { PinRecord } from "../pins";
+import { pinDraft, type PinRecord } from "../pins";
 
 export type PinDialogResult =
   | { action: "apply"; mode: "all" | "chosen"; spaces: string[] }
@@ -35,12 +35,16 @@ export function PinDialog({
     initialChosen(current, spaces, activeSpaceId, initialAllSpaces(current, preferAllSpaces)),
   );
 
+  const formKey = pinFormKey(current, spaces, activeSpaceId, preferAllSpaces);
   useEffect(() => {
     if (!open) return;
     const nextAll = initialAllSpaces(current, preferAllSpaces);
     setAllSpaces(nextAll);
     setChosen(initialChosen(current, spaces, activeSpaceId, nextAll));
-  }, [open, current, activeSpaceId, spaces, preferAllSpaces]);
+    // formKey is the snapshot of the pin and the space list. A new array or
+    // object from a runtime poll must not wipe a selection the user just made.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, formKey]);
 
   useEffect(() => {
     if (!open) return;
@@ -62,18 +66,10 @@ export function PinDialog({
   };
 
   const toggleSpace = (id: string) => {
-    setAllSpaces(false);
-    setChosen((prev) => {
-      const next = prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id];
-      if (spaces.length > 0 && spaces.every((space) => next.includes(space.id))) {
-        setAllSpaces(true);
-      }
-      return next;
-    });
+    setChosen((prev) => (prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]));
   };
 
-  const selected = allSpaces ? spaces.map((space) => space.id) : chosen;
-  const canApply = allSpaces || selected.length > 0;
+  const canApply = allSpaces || chosen.length > 0;
 
   return createPortal(
     <div className="dialog-backdrop" role="presentation" onMouseDown={onClose}>
@@ -96,8 +92,7 @@ export function PinDialog({
                 <label className="pin-option">
                   <input
                     type="checkbox"
-                    checked={selected.includes(space.id)}
-                    disabled={allSpaces}
+                    checked={chosen.includes(space.id)}
                     onChange={() => toggleSpace(space.id)}
                   />
                   <span>{space.name || space.id}</span>
@@ -107,8 +102,9 @@ export function PinDialog({
           </ul>
           {current ? (
             <p className="pin-hint">
-              Unpin removes this panel from the current space only. It stays pinned elsewhere unless you
-              unpin everywhere.
+              All spaces covers spaces you create later. Uncheck a space to leave it out. Without All spaces,
+              only the checked spaces are pinned. Unpin here skips this space. Unpin everywhere removes the
+              pin. Spaces, Agents, and terminals stay.
             </p>
           ) : null}
         </div>
@@ -133,8 +129,7 @@ export function PinDialog({
             onClick={() =>
               onApply({
                 action: "apply",
-                mode: allSpaces ? "all" : "chosen",
-                spaces: allSpaces ? [] : selected,
+                ...pinDraft(allSpaces, chosen, spaces.map((space) => space.id)),
               })
             }
           >
@@ -152,13 +147,31 @@ export function initialAllSpaces(current: PinRecord | null, preferAllSpaces: boo
   return preferAllSpaces;
 }
 
-function initialChosen(
+/** Stable while the dialog is open. A fresh spaces array from a poll must not count as a change. */
+export function pinFormKey(
+  current: PinRecord | null,
+  spaces: Array<{ id: string }>,
+  activeSpaceId: string | null,
+  preferAllSpaces: boolean,
+): string {
+  const pin = current
+    ? `${current.mode}:${current.spaces.join(",")}`
+    : preferAllSpaces
+      ? "prefer-all"
+      : "prefer-space";
+  return `${pin}|${activeSpaceId ?? ""}|${spaces.map((space) => space.id).join(",")}`;
+}
+
+export function initialChosen(
   current: PinRecord | null,
   spaces: Array<{ id: string }>,
   activeSpaceId: string | null,
   all: boolean,
 ): string[] {
-  if (all) return spaces.map((space) => space.id);
+  if (all) {
+    const excluded = current?.mode === "all" ? current.spaces : [];
+    return spaces.map((space) => space.id).filter((id) => !excluded.includes(id));
+  }
   if (current?.mode === "chosen" && current.spaces.length) return [...current.spaces];
   return activeSpaceId ? [activeSpaceId] : [];
 }

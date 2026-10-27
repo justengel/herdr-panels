@@ -1,4 +1,5 @@
 import type { PanelConfig } from "./types";
+import { touchDesk } from "./deskBus";
 
 const STORAGE_KEY = "herdr-panels.pins";
 
@@ -6,7 +7,9 @@ export interface PinRecord {
   id: string;
   title: string;
   panel: PanelConfig;
+  /** "all" covers every space, including ones created later. "chosen" covers only `spaces`. */
   mode: "all" | "chosen";
+  /** For "all", the spaces to skip. For "chosen", the only spaces that receive the pin. */
   spaces: string[];
 }
 
@@ -50,8 +53,9 @@ export function writePins(pins: PinRecord[]) {
   if (!local) return;
   try {
     local.setItem(STORAGE_KEY, JSON.stringify(pins));
+    touchDesk();
   } catch {
-    // Pin state is best-effort until layouts persist it server-side.
+    // The desk is also saved with the herdr-panels server.
   }
 }
 
@@ -69,17 +73,26 @@ export function removePin(panelId: string) {
   writePins(readPins().filter((pin) => pin.id !== panelId));
 }
 
-/** Drop this space from a pin. All-spaces becomes chosen without this space. Empty → removed. */
-export function unpinFromSpace(panelId: string, spaceId: string, allSpaceIds: string[]): PinRecord | null {
+/**
+ * Skip this space. All spaces stays all spaces and records an exclusion, so a space
+ * created later still receives the pin. A chosen list that becomes empty is removed.
+ * `allSpaceIds` is unused: exclusions are not a snapshot of the spaces that exist now.
+ */
+export function unpinFromSpace(panelId: string, spaceId: string, _allSpaceIds: string[]): PinRecord | null {
   const pin = findPin(panelId);
   if (!pin || !spaceId) return pin;
-  const pool = pin.mode === "all" ? allSpaceIds : pin.spaces;
-  const rest = pool.filter((id) => id !== spaceId);
+  if (pin.mode === "all") {
+    if (pin.spaces.includes(spaceId)) return pin;
+    const next: PinRecord = { ...pin, spaces: [...pin.spaces, spaceId] };
+    upsertPin(next);
+    return next;
+  }
+  const rest = pin.spaces.filter((id) => id !== spaceId);
   if (rest.length === 0) {
     removePin(panelId);
     return null;
   }
-  const next: PinRecord = { ...pin, mode: "chosen", spaces: rest };
+  const next: PinRecord = { ...pin, spaces: rest };
   upsertPin(next);
   return next;
 }
@@ -89,6 +102,16 @@ export function canPinPanel(panel: PanelConfig): boolean {
 }
 
 export function pinApplies(pin: PinRecord, workspaceId: string): boolean {
-  if (pin.mode === "all") return true;
+  if (pin.mode === "all") return !pin.spaces.includes(workspaceId);
   return pin.spaces.includes(workspaceId);
+}
+
+/** Dialog selection. All spaces stores the unchecked rows as exclusions. */
+export function pinDraft(
+  allSpaces: boolean,
+  checked: string[],
+  spaceIds: string[],
+): { mode: "all" | "chosen"; spaces: string[] } {
+  if (allSpaces) return { mode: "all", spaces: spaceIds.filter((id) => !checked.includes(id)) };
+  return { mode: "chosen", spaces: checked };
 }

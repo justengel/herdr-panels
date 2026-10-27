@@ -1,6 +1,6 @@
 import type { LayoutNode, PanelConfig } from "./types";
 import { carryAddressBar } from "./addressBar";
-import { explorerRootFor } from "./explorerRoot";
+import { explorerRootFor, resolveWorkspacePath } from "./explorerRoot";
 import { parentPath, plainPath } from "./paths";
 
 export type ViewOpen = "file" | "markdown" | "html" | "directory" | "url";
@@ -134,6 +134,27 @@ function viewMatches(view: PluginViewInfo, subject: Subject): boolean {
   if (view.opens.includes("file")) return true;
   if (subject.file === "markdown" && view.opens.includes("markdown")) return true;
   return subject.file === "html" && view.opens.includes("html");
+}
+
+/** Label for the viewer pill. Empty for desk panels that are already named by their view. */
+export function viewerName(panel: PanelConfig, pluginTitle = ""): string {
+  const content = activePanel(panel);
+  switch (content.type) {
+    case "markdown":
+      return content.raw ? "Text" : "Markdown";
+    case "html":
+      return content.raw ? "Text" : "Browser";
+    case "iframe":
+      return "Browser";
+    case "file":
+      return "Text";
+    case "explorer":
+      return "Files";
+    case "plugin":
+      return pluginTitle || content.view || content.plugin;
+    default:
+      return "";
+  }
 }
 
 function activeId(panel: PanelConfig): string {
@@ -345,12 +366,15 @@ function applyViewer(
     return panel;
   }
   if (choice === "files") {
-    if (subject.kind === "directory") return { type: "explorer", path: subject.path };
+    if (subject.kind === "directory") {
+      return { type: "explorer", path: resolveWorkspacePath(subject.path, ctx.workspaceRoot) };
+    }
     if (subject.kind === "file") {
+      const focus = resolveWorkspacePath(subject.path, ctx.workspaceRoot);
       return {
         type: "explorer",
-        path: explorerRootFor(subject.path, ctx.workspaceRoot),
-        focus: subject.path,
+        path: explorerRootFor(focus, ctx.workspaceRoot),
+        focus,
       };
     }
     return { type: "explorer", path: plainPath(ctx.workspaceRoot || "") };

@@ -1,4 +1,5 @@
 import type { PluginInfo } from "./desk";
+import type { DeskSnapshot } from "./deskSync";
 import type { Bootstrap, ChatMessage, LayoutDocument, PanelConfig, RuntimeSnapshot } from "./types";
 import { baseName as pathName, contentSegments } from "./paths";
 
@@ -83,6 +84,15 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return (await response.json()) as T;
 }
 
+export interface DeskFile extends DeskSnapshot {
+  revision: number;
+}
+
+export interface DeskSaveResult {
+  status: "stored" | "conflict" | "session";
+  desk: DeskFile;
+}
+
 export const api = {
   bootstrap: () => request<Bootstrap>("/api/bootstrap"),
   runtime: () => request<RuntimeSnapshot>("/api/runtime"),
@@ -90,6 +100,12 @@ export const api = {
     request<LayoutDocument>(`/api/layouts/${encodeURIComponent(layout.id)}`, {
       method: "PUT",
       body: JSON.stringify(layout),
+    }),
+  desk: () => request<DeskFile>("/api/desk"),
+  saveDesk: (body: DeskFile & { session: string; adopt?: boolean }) =>
+    request<DeskSaveResult>("/api/desk", {
+      method: "PUT",
+      body: JSON.stringify(body),
     }),
   setActive: (id: string) =>
     request<{ layout: LayoutDocument }>("/api/active", {

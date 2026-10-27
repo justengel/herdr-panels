@@ -13,6 +13,8 @@ interface Props {
   badge?: string;
   badgeClass?: string;
   subtitle?: string;
+  /** Viewer name shown beside the title when it is not already the title. */
+  viewer?: string;
   config?: ReactNode;
   contents?: ReactNode;
   actions?: ReactNode;
@@ -57,6 +59,7 @@ export function PanelChrome({
   badge,
   badgeClass,
   subtitle,
+  viewer,
   config,
   contents,
   actions,
@@ -362,6 +365,9 @@ export function PanelChrome({
           />
           <div className="panel-title">
             <strong>{title}</strong>
+            {viewer && viewer.trim().toLowerCase() !== title.trim().toLowerCase() ? (
+              <span className="viewer-pill">{viewer}</span>
+            ) : null}
             {subtitle ? <span className="subtitle">{subtitle}</span> : null}
           </div>
           {config}
@@ -426,7 +432,8 @@ export function PanelChrome({
                   aria-expanded={flyout === "layout"}
                   {...flyoutTrigger("layout")}
                 >
-                  Layout
+                  <span className="menu-check" />
+                  <span className="menu-flyout-label">Layout</span>
                   <span className="menu-chevron">›</span>
                 </button>
                 {showAddress ? (
@@ -446,30 +453,13 @@ export function PanelChrome({
                   <button
                     type="button"
                     role="menuitem"
+                    className="menu-radio"
                     onMouseEnter={scheduleCloseFlyout}
                     onClick={() => run(() => onPin())}
                   >
+                    <span className="menu-check" />
                     {pinLabel}
                   </button>
-                ) : null}
-                {tabbed ? (
-                  <>
-                    <div className="menu-rule" />
-                    {EDGES.map((item) => (
-                      <button
-                        key={item.edge}
-                        type="button"
-                        role="menuitemradio"
-                        className="menu-radio"
-                        aria-checked={tabEdge === item.edge}
-                        onMouseEnter={scheduleCloseFlyout}
-                        onClick={() => run(() => panelActions.edge(panelId, item.edge))}
-                      >
-                        <span className="menu-check">{tabEdge === item.edge ? "✓" : ""}</span>
-                        {item.label}
-                      </button>
-                    ))}
-                  </>
                 ) : null}
 
                 {viewEntries.length > 0 ? (
@@ -485,9 +475,11 @@ export function PanelChrome({
                           className="menu-flyout-trigger"
                           aria-haspopup="menu"
                           aria-expanded={flyout === "views"}
+                          aria-checked={entry.checked}
                           {...flyoutTrigger("views")}
                         >
-                          {entry.label}
+                          <span className="menu-check">{entry.checked ? "✓" : ""}</span>
+                          <span className="menu-flyout-label">{entry.label}</span>
                           <span className="menu-chevron">›</span>
                         </button>
                       ) : (
@@ -516,9 +508,11 @@ export function PanelChrome({
                           className="menu-flyout-trigger"
                           aria-haspopup="menu"
                           aria-expanded={flyout === "panes"}
+                          aria-checked={entry.checked}
                           {...flyoutTrigger("panes")}
                         >
-                          {entry.label}
+                          <span className="menu-check">{entry.checked ? "✓" : ""}</span>
+                          <span className="menu-flyout-label">{entry.label}</span>
                           <span className="menu-chevron">›</span>
                         </button>
                       ) : (
@@ -545,7 +539,8 @@ export function PanelChrome({
                       aria-expanded={flyout === "plugins"}
                       {...flyoutTrigger("plugins")}
                     >
-                      Plugins
+                      <span className="menu-check" />
+                      <span className="menu-flyout-label">Plugins</span>
                       <span className="menu-chevron">›</span>
                     </button>
                   </>
@@ -557,9 +552,11 @@ export function PanelChrome({
                     <button
                       type="button"
                       role="menuitem"
+                      className="menu-radio"
                       onMouseEnter={scheduleCloseFlyout}
                       onClick={() => run(() => panelActions.close(panelId))}
                     >
+                      <span className="menu-check" />
                       Close
                     </button>
                   </>
@@ -575,25 +572,46 @@ export function PanelChrome({
                     onMouseEnter={cancelCloseFlyout}
                     onMouseLeave={scheduleCloseFlyout}
                   >
+                    <div className="menu-label">Layout</div>
                     <button
                       type="button"
                       role="menuitem"
+                      className="menu-radio"
                       title="Side by side"
                       onClick={() => run(() => panelActions.add(panelId, "row"))}
                     >
+                      <span className="menu-check" />
                       Split horizontal
                     </button>
                     <button
                       type="button"
                       role="menuitem"
+                      className="menu-radio"
                       title="One above the other"
                       onClick={() => run(() => panelActions.add(panelId, "column"))}
                     >
+                      <span className="menu-check" />
                       Split vertical
                     </button>
-                    <button type="button" role="menuitem" onClick={() => run(() => panelActions.addTab(panelId))}>
+                    <button type="button" role="menuitem" className="menu-radio" onClick={() => run(() => panelActions.addTab(panelId))}>
+                      <span className="menu-check" />
                       Add tab
                     </button>
+                    {tabbed
+                      ? EDGES.map((item) => (
+                          <button
+                            key={item.edge}
+                            type="button"
+                            role="menuitemradio"
+                            className="menu-radio"
+                            aria-checked={tabEdge === item.edge}
+                            onClick={() => run(() => panelActions.edge(panelId, item.edge))}
+                          >
+                            <span className="menu-check">{tabEdge === item.edge ? "✓" : ""}</span>
+                            {item.label}
+                          </button>
+                        ))
+                      : null}
                   </div>
                 ) : null}
                 {flyout === "plugins" ? (
@@ -606,6 +624,7 @@ export function PanelChrome({
                     onMouseEnter={cancelCloseFlyout}
                     onMouseLeave={scheduleCloseFlyout}
                   >
+                    <div className="menu-label">Plugins</div>
                     {pluginEntries.map((entry) => (
                       <MenuRow key={entry.id} entry={entry} onView={onView} run={run} />
                     ))}
@@ -621,6 +640,7 @@ export function PanelChrome({
                     onMouseEnter={cancelCloseFlyout}
                     onMouseLeave={scheduleCloseFlyout}
                   >
+                    <div className="menu-label">Panes</div>
                     {paneEntries.map((entry) => (
                       <MenuRow key={entry.id} entry={entry} onView={onView} run={run} />
                     ))}
@@ -636,6 +656,7 @@ export function PanelChrome({
                     onMouseEnter={cancelCloseFlyout}
                     onMouseLeave={scheduleCloseFlyout}
                   >
+                    <div className="menu-label">More views</div>
                     {moreViewEntries.map((entry) => (
                       <MenuRow key={entry.id} entry={entry} onView={onView} run={run} />
                     ))}

@@ -83,6 +83,7 @@ pub fn build_app(config_dir: PathBuf, herdr_socket: PathBuf, port: u16) -> anyho
         .route("/api/runtime", get(runtime))
         .route("/api/layouts", get(layouts))
         .route("/api/layouts/{id}", get(layout_one).put(put_layout))
+        .route("/api/desk", get(get_desk).put(put_desk))
         .route("/api/active", put(set_active))
         .route("/api/tree", get(tree))
         .route("/api/pick-file", post(pick_file))
@@ -98,7 +99,10 @@ pub fn build_app(config_dir: PathBuf, herdr_socket: PathBuf, port: u16) -> anyho
         .route("/api/plugins", get(list_plugins))
         .route("/api/herdr/config", get(herdr_config).put(put_herdr_config))
         .route("/api/herdr/action", post(herdr_action))
-        .route("/api/herdr/ctl", get(herdr_ctl_status).post(herdr_ctl_action))
+        .route(
+            "/api/herdr/ctl",
+            get(herdr_ctl_status).post(herdr_ctl_action),
+        )
         .route("/api/terminal/input", post(terminal_input))
         .route("/api/terminal/split", post(terminal_split))
         .route("/api/terminal/{pane_id}/screen", get(terminal_screen))
@@ -505,6 +509,81 @@ async fn put_layout(
     Ok(Json(doc))
 }
 
+async fn current_session(state: &AppState) -> String {
+    let session = state.runtime.snapshot().await.session;
+    if session.is_empty() {
+        "default".into()
+    } else {
+        session
+    }
+}
+
+async fn get_desk(
+    State(state): State<AppState>,
+) -> Result<Json<crate::desk::DeskDocument>, ApiError> {
+    let session = current_session(&state).await;
+    crate::desk::load_desk(&state.config_dir, &session)
+        .map(Json)
+        .map_err(ApiError::bad)
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DeskPut {
+    session: String,
+    #[serde(default)]
+    adopt: bool,
+    #[serde(default)]
+    revision: u64,
+    #[serde(default)]
+    pins: Vec<crate::desk::DeskPin>,
+    #[serde(default)]
+    spaces: std::collections::BTreeMap<String, crate::layout::LayoutNode>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DeskSaved {
+    status: &'static str,
+    desk: crate::desk::DeskDocument,
+}
+
+async fn put_desk(
+    State(state): State<AppState>,
+    Json(body): Json<DeskPut>,
+) -> Result<Json<DeskSaved>, ApiError> {
+    let session = current_session(&state).await;
+    if body.session != session {
+        let desk = crate::desk::load_desk(&state.config_dir, &session).map_err(ApiError::bad)?;
+        return Ok(Json(DeskSaved {
+            status: "session",
+            desk,
+        }));
+    }
+    let incoming = crate::desk::DeskDocument {
+        revision: body.revision,
+        pins: body.pins,
+        spaces: body.spaces,
+    };
+    match crate::desk::save_desk(&state.config_dir, &session, &incoming, body.adopt)
+        .map_err(ApiError::bad)?
+    {
+        crate::desk::DeskSave::Stored(desk) => {
+            state
+                .agent
+                .publish(&json!({ "type": "desk", "desk": &desk }));
+            Ok(Json(DeskSaved {
+                status: "stored",
+                desk,
+            }))
+        }
+        crate::desk::DeskSave::Conflict(desk) => Ok(Json(DeskSaved {
+            status: "conflict",
+            desk,
+        })),
+    }
+}
+
 #[derive(Deserialize)]
 struct ActiveBody {
     id: String,
@@ -740,6 +819,7 @@ async fn rename_session(
     let socket = crate::session_proc::rename_session(&body.name, &body.to)
         .await
         .map_err(ApiError::bad)?;
+    crate::desk::rename_desk(&state.config_dir, &body.name, &body.to).map_err(ApiError::bad)?;
     attach_session(&state, &body.to, socket).await
 }
 

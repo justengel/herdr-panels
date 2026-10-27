@@ -159,7 +159,7 @@ export function TopBar({
       >
         Select
       </button>
-      <button type="button" className="quiet" title="Insert a panel and choose what it shows" onClick={onAddPanel}>
+      <button type="button" className="accent" title="Insert a panel and choose what it shows" onClick={onAddPanel}>
         Add panel
       </button>
       {status.action ? (

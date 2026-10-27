@@ -1,13 +1,21 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { api } from "../api";
 import { noteAddress, visitAddress, type AddressHistory } from "../addressHistory";
-import { displayPath, expandDisplayPath, guessHome, middleEllipsis } from "../displayPath";
+import { charsThatFit, displayPath, expandDisplayPath, guessHome, middleEllipsis } from "../displayPath";
 import type { PanelConfig } from "../types";
 
-const DISPLAY_MAX = 48;
+let textContext: CanvasRenderingContext2D | null | undefined;
 
-function shownAddress(path: string): string {
-  return middleEllipsis(displayPath(path, guessHome(path)), DISPLAY_MAX);
+function textMeasurer(): CanvasRenderingContext2D | null {
+  if (textContext !== undefined) return textContext;
+  textContext = document.createElement("canvas").getContext("2d");
+  return textContext;
+}
+
+function shownAddress(path: string, maxChars: number | null): string {
+  const shown = displayPath(path, guessHome(path));
+  if (maxChars == null || maxChars >= shown.length) return shown;
+  return middleEllipsis(shown, maxChars);
 }
 
 function realAddress(path: string, hint = ""): string {
@@ -113,6 +121,13 @@ export function LocationBar({
   const undoRef = useRef<string[]>([]);
   const redoRef = useRef<string[]>([]);
   const undoAt = useRef(0);
+  const fitRef = useRef<number | null>(null);
+  const fitted = (path: string) => shownAddress(path, fitRef.current);
+  const draftFor = (path: string) => {
+    const input = inputRef.current;
+    if (input && document.activeElement === input) return displayPath(path, guessHome(path));
+    return fitted(path);
+  };
 
   function commitHistory(next: AddressHistory) {
     historyRef.current = next.entries;
@@ -127,7 +142,7 @@ export function LocationBar({
       pendingVisit.current = null;
       ready.current = true;
       commitHistory({ entries: value ? [value] : [], index: 0 });
-      replaceDraft(shownAddress(value), true);
+      replaceDraft(draftFor(value), true);
       return;
     }
     if (!ready.current) {
@@ -137,7 +152,7 @@ export function LocationBar({
     const fromBar = pendingVisit.current !== null;
     pendingVisit.current = null;
     commitHistory(noteAddress({ entries: historyRef.current, index: indexRef.current }, value, fromBar));
-    replaceDraft(shownAddress(value), true);
+    replaceDraft(draftFor(value), true);
   }, [historyKey, value]);
 
   useLayoutEffect(() => {
@@ -162,6 +177,35 @@ export function LocationBar({
     }
     setDraft(next);
   }
+
+  useLayoutEffect(() => {
+    const input = inputRef.current;
+    if (!input) return;
+    const apply = () => {
+      const style = getComputedStyle(input);
+      const pad = (Number.parseFloat(style.paddingLeft) || 0) + (Number.parseFloat(style.paddingRight) || 0);
+      const available = input.clientWidth - pad;
+      if (available <= 8) return;
+      const ctx = textMeasurer();
+      if (!ctx) return;
+      ctx.font = style.font;
+      const full = displayPath(value, guessHome(value));
+      const fit = charsThatFit(full, available, (sample) => ctx.measureText(sample).width);
+      fitRef.current = fit;
+      if (document.activeElement === input) return;
+      const next = shownAddress(value, fit);
+      if (draftRef.current === next) return;
+      replaceDraft(next, false);
+    };
+    apply();
+    const observer = new ResizeObserver(apply);
+    observer.observe(input);
+    input.addEventListener("blur", apply);
+    return () => {
+      observer.disconnect();
+      input.removeEventListener("blur", apply);
+    };
+  }, [value]);
 
   function edit(next: string, caret: number, coalesce: boolean) {
     const current = draftRef.current;
@@ -310,7 +354,7 @@ export function LocationBar({
     const next = nextHistory[nextIndex];
     if (next === undefined) return;
     commitHistory({ entries: nextHistory, index: nextIndex });
-    replaceDraft(shownAddress(next), true);
+    replaceDraft(fitted(next), true);
     pendingVisit.current = next;
     void (async () => {
       try {
@@ -368,7 +412,7 @@ export function LocationBar({
         autoCapitalize="off"
         autoCorrect="off"
         onFocus={() => replaceDraft(realAddress(draft, value) || value, false)}
-        onBlur={() => replaceDraft(shownAddress(value), false)}
+        onBlur={() => replaceDraft(fitted(value), false)}
         onKeyDown={onAddressKey}
         onChange={(event) => edit(event.target.value, event.target.selectionStart ?? event.target.value.length, true)}
       />

@@ -49,6 +49,25 @@ export function expandDisplayPath(path: string, home: string): string {
   return trimmed;
 }
 
+/** Largest character budget whose middle-ellipsis still fits `maxWidth`. */
+export function charsThatFit(text: string, maxWidth: number, measure: (sample: string) => number): number {
+  if (!text) return 0;
+  if (measure(text) <= maxWidth) return text.length;
+  let lo = Math.min(8, text.length);
+  let hi = text.length;
+  let best = lo;
+  while (lo <= hi) {
+    const mid = Math.floor((lo + hi) / 2);
+    if (measure(middleEllipsis(text, mid)) <= maxWidth) {
+      best = mid;
+      lo = mid + 1;
+    } else {
+      hi = mid - 1;
+    }
+  }
+  return best;
+}
+
 /** Shorten a display path/URL by dropping middle segments; keep the start and leaf. */
 export function middleEllipsis(path: string, maxChars: number): string {
   if (!path || path.length <= maxChars || maxChars < 8) return path;

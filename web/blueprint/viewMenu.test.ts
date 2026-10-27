@@ -82,8 +82,8 @@ describe("panel menu", () => {
   it("keeps the file address when switching to Files so View can return", () => {
     expect(showViewer(note, "files", plugins, { workspaceRoot: "C:/work/herdr-panels" })).toEqual({
       type: "explorer",
-      path: "notes",
-      focus: "notes/welcome.md",
+      path: "C:/work/herdr-panels",
+      focus: "C:/work/herdr-panels/notes/welcome.md",
       addressBar: false,
     });
     expect(
@@ -112,6 +112,13 @@ describe("panel menu", () => {
       "plugin:docs:read",
     ]);
     expect(checked(focused)).toEqual(["files"]);
+    const directory = {
+      type: "explorer" as const,
+      path: "C:/work/herdr-panels/notes",
+      addressBar: false,
+    };
+    expect(ids(directory, "view")).toEqual(["open", "files", "plugin:docs:read"]);
+    expect(checked(directory)).toEqual(["files"]);
     expect(showViewer(focused, "markdown", plugins)).toEqual({
       type: "markdown",
       path: "C:/work/herdr-panels/notes/welcome.md",

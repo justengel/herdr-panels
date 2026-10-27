@@ -1,12 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { api, wsUrl, type HerdrCtlStatus } from "./api";
+import { api, wsUrl, type DeskFile, type HerdrCtlStatus } from "./api";
 import type { HerdrStatusAction } from "./herdrStatus";
 import { DesignProvider } from "./design";
 import { highlight, inspectPanel } from "./inspect";
 import {
   addPanelTab,
   assignContent,
-  closePanel,
   closePanelTab,
   defaultPanel,
   findPanel,
@@ -23,7 +22,7 @@ import {
 } from "./layoutEdit";
 import { DeskProvider, type PluginInfo } from "./desk";
 import { PanelActionsProvider } from "./panelActions";
-import type { Attachment, LayoutDocument, PanelConfig, RuntimeSnapshot } from "./types";
+import type { Attachment, LayoutDocument, LayoutNode, PanelConfig, RuntimeSnapshot } from "./types";
 import { LayoutView } from "./components/LayoutView";
 import { TopBar } from "./components/TopBar";
 import { DesignBar } from "./components/DesignBar";
@@ -32,8 +31,20 @@ import { HostProvider } from "./host";
 import { applyAddressBarChoices, readAddressBarChoices } from "./addressBar";
 import { applyRawChoices, readRawChoices } from "./rawText";
 import { applyPluginSubjects, readPluginSubjects } from "./viewMenu";
+import { installContextMenuGuard } from "./contextMenuGuard";
+import { subscribeDesk } from "./deskBus";
+import {
+  chooseDesk,
+  deskMigrated,
+  deskRevision,
+  installDesk,
+  markDeskMigrated,
+  readLocalDesk,
+  setDeskRevision,
+} from "./deskSync";
 import {
   bindTerminalPane,
+  closePinned,
   layoutForSpace,
   loadSpaceLayout,
   markWorkspaceFocused,
@@ -68,6 +79,7 @@ export function App() {
   const [openMenuToken, setOpenMenuToken] = useState(0);
   const [herdrCtl, setHerdrCtl] = useState<HerdrCtlStatus | null>(null);
   const [herdrBusy, setHerdrBusy] = useState(false);
+  const [deskReady, setDeskReady] = useState(false);
   const saveRef = useRef(0);
   const noticeRef = useRef(0);
   const followed = useRef<string | null>(null);
@@ -76,18 +88,56 @@ export function App() {
   const pendingSpaceRef = useRef<string | null>(null);
   const layoutRef = useRef<LayoutDocument | null>(null);
   const runtimeRef = useRef<RuntimeSnapshot | null>(null);
+  const sessionRef = useRef<string | null>(null);
+  const deskGeneration = useRef(0);
+  const acceptDeskSaves = useRef(false);
+  const deskSaveTimer = useRef(0);
+  const applySpaceRef = useRef<(root: LayoutNode) => void>(() => {});
   layoutRef.current = layout;
   runtimeRef.current = runtime;
+
+  useEffect(() => installContextMenuGuard(), []);
 
   useEffect(() => {
     let stopped = false;
     api
       .bootstrap()
-      .then((boot) => {
+      .then(async (boot) => {
         if (stopped) return;
+        const session = boot.runtime.session || "default";
+        const server = await api.desk();
+        if (stopped) return;
+        const choice = chooseDesk(server, readLocalDesk(), deskMigrated());
+        let stored: DeskFile = server;
+        try {
+          if (choice.upload) {
+            const saved = await api.saveDesk({
+              session,
+              adopt: true,
+              revision: server.revision,
+              pins: choice.desk.pins,
+              spaces: choice.desk.spaces,
+            });
+            if (stopped) return;
+            stored = saved.desk;
+          }
+          markDeskMigrated();
+        } catch (err: unknown) {
+          stored = {
+            revision: server.revision,
+            pins: choice.desk.pins,
+            spaces: choice.desk.spaces,
+          };
+          if (!stopped) setNotice(err instanceof Error ? err.message : "Could not save the desk");
+        }
+        if (stopped) return;
+        installDesk(stored, stored.revision);
+        sessionRef.current = session;
+        acceptDeskSaves.current = true;
         const next = present(boot.layout);
         setLayout(next);
         setRuntime(boot.runtime);
+        setDeskReady(true);
         setSelectedId(listPanels(next.root)[0]?.id ?? null);
         setError(null);
         void api.sessions().then((list) => {
@@ -132,7 +182,44 @@ export function App() {
       window.clearInterval(ctlPoll);
       window.clearTimeout(saveRef.current);
       window.clearTimeout(noticeRef.current);
+      window.clearTimeout(deskSaveTimer.current);
     };
+  }, []);
+
+  useEffect(() => {
+    return subscribeDesk(() => {
+      if (!acceptDeskSaves.current) return;
+      window.clearTimeout(deskSaveTimer.current);
+      const generation = deskGeneration.current;
+      const session = sessionRef.current || "default";
+      deskSaveTimer.current = window.setTimeout(() => {
+        const snapshot = readLocalDesk();
+        void api
+          .saveDesk({
+            session,
+            adopt: false,
+            revision: deskRevision(),
+            pins: snapshot.pins,
+            spaces: snapshot.spaces,
+          })
+          .then((result) => {
+            if (generation !== deskGeneration.current) return;
+            if (result.status === "stored") {
+              setDeskRevision(result.desk.revision);
+              return;
+            }
+            acceptDeskSaves.current = false;
+            installDesk(result.desk, result.desk.revision);
+            acceptDeskSaves.current = true;
+            const space = spaceRef.current;
+            if (!space) return;
+            applySpaceRef.current(layoutForSpace(space, seedSpaceLayout()));
+          })
+          .catch((err: unknown) => {
+            setNotice(err instanceof Error ? err.message : "Could not save the desk");
+          });
+      }, 250);
+    });
   }, []);
 
   const remember = useCallback((next: LayoutDocument) => {
@@ -160,6 +247,10 @@ export function App() {
     setSelectedId(null);
     setOpenMenuId(null);
   }, []);
+  applySpaceRef.current = (root) => {
+    const doc = layoutRef.current;
+    if (doc) showSpaceLayout(doc, root);
+  };
 
   /** Instant desk swap; Herdr focus runs in the background. */
   const switchSpace = useCallback(
@@ -201,6 +292,7 @@ export function App() {
     null;
 
   useEffect(() => {
+    if (!deskReady) return;
     const doc = layoutRef.current;
     if (!doc || !focusedSpaceId) return;
     if (pendingSpaceRef.current) {
@@ -211,7 +303,17 @@ export function App() {
       spaceRef.current = focusedSpaceId;
       writeSpaceMap(focusedSpaceId);
       if (!loadSpaceLayout(focusedSpaceId)) {
-        saveSpaceLayout(focusedSpaceId, doc.root);
+        const snapshot = runtimeRef.current;
+        const pane =
+          snapshot?.panes.find(
+            (item) => item.workspaceId === focusedSpaceId && item.paneId === snapshot.focusedPaneId,
+          ) ??
+          snapshot?.panes.find((item) => item.workspaceId === focusedSpaceId) ??
+          null;
+        const seeded = bindTerminalPane(seedSpaceLayout(), pane?.paneId ?? null);
+        saveSpaceLayout(focusedSpaceId, seeded);
+        showSpaceLayout(doc, layoutForSpace(focusedSpaceId, seeded));
+        if (pane && snapshot?.connected) followed.current = snapshot.session || "default";
         return;
       }
       showSpaceLayout(doc, layoutForSpace(focusedSpaceId, doc.root));
@@ -222,7 +324,25 @@ export function App() {
     spaceRef.current = focusedSpaceId;
     writeSpaceMap(focusedSpaceId);
     showSpaceLayout(doc, layoutForSpace(focusedSpaceId, seedSpaceLayout()));
-  }, [focusedSpaceId, showSpaceLayout]);
+  }, [deskReady, focusedSpaceId, showSpaceLayout]);
+
+  useEffect(() => {
+    if (!deskReady || !runtime) return;
+    const session = runtime.session || "default";
+    if (sessionRef.current === session) return;
+    const generation = ++deskGeneration.current;
+    acceptDeskSaves.current = false;
+    window.clearTimeout(deskSaveTimer.current);
+    sessionRef.current = session;
+    void api.desk().then((desk) => {
+      if (generation !== deskGeneration.current) return;
+      installDesk(desk, desk.revision);
+      acceptDeskSaves.current = true;
+      const space = spaceRef.current;
+      if (!space) return;
+      applySpaceRef.current(layoutForSpace(space, seedSpaceLayout()));
+    });
+  }, [deskReady, runtime]);
 
   useEffect(() => {
     if (!layout || !runtime?.connected) return;
@@ -253,6 +373,7 @@ export function App() {
       let msg: {
         type?: string;
         layout?: LayoutDocument;
+        desk?: DeskFile;
         panelId?: string | null;
         selector?: string;
         text?: string;
@@ -261,6 +382,18 @@ export function App() {
       try {
         msg = JSON.parse(String(event.data)) as typeof msg;
       } catch {
+        return;
+      }
+      if (msg.type === "desk" && msg.desk) {
+        if (msg.desk.revision === deskRevision()) return;
+        const space = spaceRef.current;
+        const before = space ? layoutForSpace(space, seedSpaceLayout()) : null;
+        acceptDeskSaves.current = false;
+        installDesk(msg.desk, msg.desk.revision);
+        acceptDeskSaves.current = true;
+        if (!space) return;
+        const after = layoutForSpace(space, seedSpaceLayout());
+        if (JSON.stringify(before) !== JSON.stringify(after)) applySpaceRef.current(after);
         return;
       }
       if (msg.type === "layout" && msg.layout) {
@@ -410,7 +543,8 @@ export function App() {
   }
 
   function close(id: string) {
-    const next = closePanel(layout!.root, id);
+    const spaceIds = runtimeRef.current?.workspaces.map((space) => space.workspaceId) ?? [];
+    const next = closePinned(layout!.root, id, spaceRef.current ?? "", spaceIds);
     if (!next) {
       setNotice("At least one panel stays open");
       return;
