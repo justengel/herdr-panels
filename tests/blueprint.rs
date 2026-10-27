@@ -218,6 +218,59 @@ async fn the_viewer_stays_up_when_herdr_is_offline() {
 }
 
 #[tokio::test]
+async fn an_agent_edits_the_only_space_when_herdr_is_offline() {
+    let desk = desk().await;
+    let space = json!({
+        "type": "split",
+        "direction": "row",
+        "ratio": 0.5,
+        "first": {
+            "type": "panel",
+            "id": "shell",
+            "title": "Shell",
+            "panel": {"type": "herdr", "paneId": null}
+        },
+        "second": {
+            "type": "panel",
+            "id": "notes",
+            "title": "Notes",
+            "panel": {"type": "markdown", "path": "notes/welcome.md"}
+        }
+    });
+    std::fs::create_dir_all(desk.root.join("desks")).unwrap();
+    std::fs::write(
+        desk.root.join("desks").join("default.json"),
+        serde_json::to_vec_pretty(&json!({
+            "revision": 1,
+            "pins": [],
+            "spaces": { "wg": space }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let (status, workspace) = desk
+        .call(
+            "POST",
+            "/api/agent/update",
+            Some(json!({"panelId": "notes", "title": "Renamed"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{workspace}");
+
+    let saved: Value = serde_json::from_slice(
+        &std::fs::read(desk.root.join("desks").join("default.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(saved["spaces"]["wg"]["second"]["title"], "Renamed");
+    let layout: Value = serde_json::from_slice(
+        &std::fs::read(desk.root.join("layouts").join("desk.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(layout["root"]["second"]["title"], "Notes");
+}
+
+#[tokio::test]
 async fn a_panel_can_be_named_and_a_shared_name_cannot_be_used() {
     let desk = desk().await;
     let (status, workspace) = desk

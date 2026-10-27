@@ -1,6 +1,6 @@
 # Herdr Panels
 
-A desk for a running [Herdr](https://herdr.dev) session. Live panes sit beside notes, browsers, HTML, and views you install. Drag a panel's grip onto the side of another panel to place it there, or onto the middle to swap. Right-click a title bar to name the panel or change what it shows. The layout is a JSON file, and edits are saved as you make them.
+A desk for a running [Herdr](https://herdr.dev) session. Live panes sit beside notes, browsers, HTML, and views you install. Drag a panel's grip onto the side of another panel to place it there, or onto the middle to swap. Right-click a title bar to name the panel or change what it shows. Each Herdr session has its own desk, and edits are saved as you make them.
 
 An agent can do that arranging for you: open a URL, a note, an HTML page, or a plugin, then place the panels. The instructions it should follow are in [skills/herdr-panels/SKILL.md](skills/herdr-panels/SKILL.md).
 
@@ -32,7 +32,7 @@ The desktop window is optional:
 cargo install --path src-tauri
 ```
 
-Run that from the repository root. After it is installed, `herdr-panels` opens the native window instead of a browser tab. `herdr-panels desktop` opens that window directly. The window uses the operating system's web view. Windows uses the WebView2 already on the machine, and macOS uses the system web view. The Linux build needs WebKitGTK. A browser tab can still open http://127.0.0.1:4737 while the window is open. They share the session and the layout.
+Run that from the repository root. After it is installed, `herdr-panels` opens the native window instead of a browser tab. `herdr-panels desktop` opens that window directly. The window uses the operating system's web view. Windows uses the WebView2 already on the machine, and macOS uses the system web view. The Linux build needs WebKitGTK. A browser tab can still open http://127.0.0.1:4737 while the window is open. They share the Herdr session and that session's desk.
 
 `herdr-panels server` starts the server and leaves the window and the browser closed. `herdr-panels server --open` opens a browser tab even when the desktop program is installed. A second server on port 4737 will not start. From this checkout, before `herdr-panels` is on your PATH, `cargo run --release` does the same thing.
 
@@ -115,7 +115,7 @@ The Design button turns the workspace into an editor:
 
 ### Agents
 
-An agent on this machine can drive the open workspace over HTTP. The calls need the viewer token, which the `herdr-panels` commands attach on their own. The page does not have to perform the edit: a split, close, resize, or panel change is saved and pushed to a connected browser. Reads work with the page closed. A connected page adds the live DOM, computed CSS, and the current terminal screen.
+An agent on this machine can drive the focused space of the current session's desk over HTTP. The calls need the viewer token, which the `herdr-panels` commands attach on their own. The page does not have to perform the edit: a split, close, resize, or panel change is saved and pushed to a connected browser. Reads work with the page closed. A connected page adds the live DOM, computed CSS, and the current terminal screen.
 
 ```text
 GET  /api/agent
@@ -138,7 +138,7 @@ POST /api/agent/say       {"to":"chat"|"*","from":"planner","text":"look at the 
 
 ### Layout JSON
 
-A layout is either a `split` (`direction` is `row` or `column`, `ratio` is the first child's share), a `grid` of weighted tracks and cells, or a `panel`. Files live in `<config>/layouts/<id>.json`. The id and the filename must match. `settings.json` stores `activeLayout` and optional `contentRoots`. Those directories, the open workspace folders, and pane directories are where a relative path is looked up. An absolute path can be any file this user can read. A relative path cannot contain `..`.
+A layout is either a `split` (`direction` is `row` or `column`, `ratio` is the first child's share), a `grid` of weighted tracks and cells, or a `panel`. The desk for a session lives in `<config>/desks/<session>.json`: a revision, the pins, and one layout tree per space. Address-bar visibility, raw text, and a plugin's subject are fields on the panel in that tree. `herdr-panels panel` edits the focused space of the current session, including the pins that space shows. `<config>/layouts/<id>.json` is still a saved layout document. The id and the filename must match. `settings.json` stores `activeLayout` and optional `contentRoots`. Those directories, the open workspace folders, and pane directories are where a relative path is looked up. An absolute path can be any file this user can read. A relative path cannot contain `..`.
 
 ### Custom HTML bridge
 

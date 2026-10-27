@@ -12,7 +12,7 @@ description: >-
 
 Prefer `herdr-panels panel` and `herdr-panels plugin`. Those commands attach the viewer token. Use the HTTP API only when a command has no flag for the change. Do not print the token. This skill does not start Herdr and does not speak Herdr's private protocol.
 
-The viewer is usually `http://127.0.0.1:4737`. If it was started elsewhere, use the address in `server.json` in the viewer config directory. Run `herdr-panels panel list` before changing the desk. Address a panel by its unique title or its id. Names are compared without case. If two panels share a name, the call fails with `more than one panel has that name`; rename one first.
+The viewer is usually `http://127.0.0.1:4737`. If it was started elsewhere, use the address in `server.json` in the viewer config directory. Run `herdr-panels panel list` before changing the desk. Address a panel by its unique title or its id. Names are compared without case. If two panels share a name, the call fails with `more than one panel has that name`; rename one first. Panel commands edit the focused space of the current Herdr session's desk, including the pins that space shows.
 
 ## Arrange the desk
 

@@ -5,7 +5,8 @@ use std::path::{Path, PathBuf};
 use anyhow::{bail, Context};
 use serde::{Deserialize, Serialize};
 
-use crate::layout::{LayoutNode, PanelConfig};
+use crate::layout::{Direction, LayoutNode, PanelConfig};
+use crate::layout_ops;
 use crate::paths::valid_session_name;
 use crate::store;
 
@@ -156,6 +157,190 @@ fn desk_path(config_dir: &Path, session: &str) -> PathBuf {
     config_dir.join("desks").join(format!("{session}.json"))
 }
 
+pub fn space_key(workspace_id: &str) -> String {
+    let lower = workspace_id.trim().to_ascii_lowercase();
+    let mut raw = String::new();
+    let mut dash = false;
+    for ch in lower.chars() {
+        if ch.is_ascii_alphanumeric() || ch == '-' {
+            dash = false;
+            raw.push(ch);
+        } else if !dash {
+            dash = true;
+            raw.push('-');
+        }
+    }
+    let sliced: String = raw.trim_matches('-').chars().take(40).collect();
+    if sliced.is_empty() {
+        "space".into()
+    } else {
+        sliced
+    }
+}
+
+fn pin_applies(pin: &DeskPin, workspace_id: &str) -> bool {
+    match pin.mode {
+        DeskPinMode::All => !pin.spaces.iter().any(|id| id == workspace_id),
+        DeskPinMode::Chosen => pin.spaces.iter().any(|id| id == workspace_id),
+    }
+}
+
+fn is_native(panel: &PanelConfig) -> bool {
+    matches!(
+        panel,
+        PanelConfig::Files | PanelConfig::Agents | PanelConfig::Herdr { .. }
+    )
+}
+
+fn named_panel(id: &str, title: &str, panel: PanelConfig) -> LayoutNode {
+    LayoutNode::Panel {
+        id: id.into(),
+        title: Some(title.into()),
+        panel,
+        collapsed: false,
+    }
+}
+
+fn seed_space() -> LayoutNode {
+    let sidebar = LayoutNode::Split {
+        direction: Direction::Column,
+        ratio: 0.62,
+        first: Box::new(named_panel("spaces", "Spaces", PanelConfig::Files)),
+        second: Box::new(named_panel("agents", "Agents", PanelConfig::Agents)),
+    };
+    LayoutNode::Split {
+        direction: Direction::Row,
+        ratio: 0.22,
+        first: Box::new(sidebar),
+        second: Box::new(named_panel(
+            "terminal",
+            "Terminal",
+            PanelConfig::Herdr {
+                pane_id: None,
+                source: None,
+                lines: None,
+            },
+        )),
+    }
+}
+
+fn stack_column(nodes: &[LayoutNode]) -> LayoutNode {
+    let Some(first) = nodes.first() else {
+        return seed_space();
+    };
+    if nodes.len() == 1 {
+        return first.clone();
+    }
+    LayoutNode::Split {
+        direction: Direction::Column,
+        ratio: 1.0 / nodes.len() as f64,
+        first: Box::new(first.clone()),
+        second: Box::new(stack_column(&nodes[1..])),
+    }
+}
+
+fn drop_foreign(root: LayoutNode, desk: &DeskDocument, workspace_id: &str) -> LayoutNode {
+    let mut next = root;
+    for pin in &desk.pins {
+        if matches!(pin.panel, PanelConfig::Herdr { .. }) || pin_applies(pin, workspace_id) {
+            continue;
+        }
+        if let Ok(closed) = layout_ops::close_panel(next.clone(), &pin.id) {
+            next = closed;
+        }
+    }
+    next
+}
+
+/// The tree for one workspace: the saved space, or the Spaces, Agents, and Terminal seed, plus pins that belong there.
+pub fn open_space(desk: &DeskDocument, workspace_id: &str) -> LayoutNode {
+    let stored = desk
+        .spaces
+        .get(&space_key(workspace_id))
+        .cloned()
+        .unwrap_or_else(seed_space);
+    let mut root = drop_foreign(stored, desk, workspace_id);
+    let mut pins = desk.pins.clone();
+    pins.sort_by(|left, right| left.id.cmp(&right.id));
+    let mut missing = Vec::new();
+    for pin in pins {
+        if !pin_applies(&pin, workspace_id) || matches!(pin.panel, PanelConfig::Herdr { .. }) {
+            continue;
+        }
+        if layout_ops::contains(&root, &pin.id) {
+            if let Ok(updated) = layout_ops::update_panel(
+                root.clone(),
+                &pin.id,
+                Some(Some(pin.title.clone())),
+                Some(pin.panel.clone()),
+            ) {
+                root = updated;
+            }
+        } else {
+            missing.push(named_panel(&pin.id, &pin.title, pin.panel));
+        }
+    }
+    if missing.is_empty() {
+        return root;
+    }
+    LayoutNode::Split {
+        direction: Direction::Row,
+        ratio: 0.28,
+        first: Box::new(stack_column(&missing)),
+        second: Box::new(root),
+    }
+}
+
+/// Writes one space and keeps pins in step: a missing all-spaces panel is excluded here, and a chosen pin with nowhere left is removed.
+pub fn store_space(desk: &DeskDocument, workspace_id: &str, root: LayoutNode) -> DeskDocument {
+    let mut next = desk.clone();
+    let mut removed = Vec::new();
+    next.pins.retain_mut(|pin| {
+        if let Some(info) = layout_ops::list_panels(&root)
+            .into_iter()
+            .find(|panel| panel.id == pin.id)
+        {
+            if !matches!(pin.panel, PanelConfig::Herdr { .. }) {
+                pin.title = info.title.unwrap_or_else(|| pin.title.clone());
+                pin.panel = info.panel;
+            }
+            return true;
+        }
+        if !pin_applies(pin, workspace_id) {
+            return true;
+        }
+        match pin.mode {
+            DeskPinMode::All => {
+                if !workspace_id.is_empty() && !pin.spaces.iter().any(|id| id == workspace_id) {
+                    pin.spaces.push(workspace_id.to_string());
+                }
+                true
+            }
+            DeskPinMode::Chosen => {
+                pin.spaces.retain(|id| id != workspace_id);
+                if pin.spaces.is_empty() {
+                    removed.push(pin.clone());
+                    false
+                } else {
+                    true
+                }
+            }
+        }
+    });
+    for pin in removed {
+        if is_native(&pin.panel) {
+            continue;
+        }
+        for tree in next.spaces.values_mut() {
+            if let Ok(closed) = layout_ops::close_panel(tree.clone(), &pin.id) {
+                *tree = closed;
+            }
+        }
+    }
+    next.spaces.insert(space_key(workspace_id), root);
+    next
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -226,5 +411,51 @@ mod tests {
         assert!(load_desk(&dir, "default").unwrap().spaces.is_empty());
         assert_eq!(load_desk(&dir, "other").unwrap().pins[0].title, "Notes");
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    fn panel_titles(node: &LayoutNode) -> Vec<String> {
+        crate::layout_ops::list_panels(node)
+            .into_iter()
+            .map(|panel| panel.title.unwrap_or(panel.id))
+            .collect()
+    }
+
+    #[test]
+    fn the_open_space_includes_pins_and_stores_an_exclusion() {
+        assert_eq!(space_key("wG"), "wg");
+        assert_eq!(space_key(" My  Space "), "my-space");
+        let pin = DeskPin {
+            id: "notes".into(),
+            title: "Notes".into(),
+            panel: PanelConfig::Markdown {
+                path: "a.md".into(),
+                address_bar: None,
+                raw: false,
+            },
+            mode: DeskPinMode::All,
+            spaces: vec!["wH".into()],
+        };
+        let desk = DeskDocument {
+            pins: vec![pin],
+            ..DeskDocument::default()
+        };
+        let shown = open_space(&desk, "wG");
+        assert!(panel_titles(&shown).contains(&"Notes".into()));
+        assert!(!panel_titles(&open_space(&desk, "wH")).contains(&"Notes".into()));
+        let stored = store_space(&desk, "wG", terminal());
+        assert!(stored.spaces.contains_key("wg"));
+        assert_eq!(
+            stored.pins[0].spaces,
+            vec!["wH".to_string(), "wG".to_string()]
+        );
+        let chosen = DeskDocument {
+            pins: vec![DeskPin {
+                mode: DeskPinMode::Chosen,
+                spaces: vec!["wG".into()],
+                ..desk.pins[0].clone()
+            }],
+            ..DeskDocument::default()
+        };
+        assert!(store_space(&chosen, "wG", terminal()).pins.is_empty());
     }
 }

@@ -5,9 +5,9 @@ import { baseName, samePath } from "../paths";
 import { openFileBeside } from "../fileOpen";
 import { isDefaultPanelTitle } from "../openTitle";
 import { pluginAddressBar } from "../pluginAddress";
-import { addressBarSurfaceId, carryAddressBar, hostAddressBarVisible, setAddressBar, supportsAddressBar, writeAddressBarChoice } from "../addressBar";
-import { carryRaw, showsRawText, writeRawChoice } from "../rawText";
-import { adoptPluginAddress, menuFor, pluginOpenMessage, showViewer, viewerName, writePluginSubject } from "../viewMenu";
+import { carryAddressBar, hostAddressBarVisible, setAddressBar, supportsAddressBar } from "../addressBar";
+import { carryRaw, showsRawText } from "../rawText";
+import { adoptPluginAddress, menuFor, pluginOpenMessage, showViewer, viewerName } from "../viewMenu";
 import { climbExplorer, explorerRootFor, resolveWorkspacePath, workspaceDirectory } from "../explorerRoot";
 import { canPinPanel, findPin, pinApplies, upsertPin } from "../pins";
 import { unpinEverywhere, unpinHere } from "../spaceLayout";
@@ -244,7 +244,7 @@ function PanelView(props: {
   openMenuToken?: number;
   root?: LayoutNode;
 }) {
-  const { id, title, panel, panes, workspaces, onPanel, onCloseTab, layoutId, openMenuId, openMenuToken, root } =
+  const { id, title, panel, panes, workspaces, onPanel, onCloseTab, openMenuId, openMenuToken, root } =
     props;
   const design = useDesign();
   const desk = useDesk();
@@ -295,8 +295,6 @@ function PanelView(props: {
       addressBar === undefined
         ? undefined
         : (show: boolean) => {
-            const surfaceId = addressBarSurfaceId(id, panel);
-            if (surfaceId) writeAddressBarChoice(layoutId, surfaceId, show);
             onPanel(id, setAddressBar(panel, show));
           },
     entries: menuFor(content, desk.plugins, {
@@ -329,13 +327,6 @@ function PanelView(props: {
       const next = showViewer(panel, choice, desk.plugins, {
         workspaceRoot: workspaceDirectory(activeSpace, panes),
       });
-      const surfaceId = addressBarSurfaceId(id, panel);
-      if (surfaceId) {
-        writePluginSubject(layoutId, surfaceId, next);
-        const shown = activeContent(next);
-        const raw = (shown.type === "markdown" || shown.type === "html") && shown.raw === true;
-        writeRawChoice(layoutId, surfaceId, raw);
-      }
       const retitle = choice === "spaces" || choice === "agents";
       onPanel(id, next, retitle);
     },
@@ -489,7 +480,6 @@ function Surface({
         panel={panel}
         panes={panes}
         workspaces={workspaces}
-        layoutId={layoutId}
         onPanel={onPanel}
       />
     );
@@ -541,7 +531,6 @@ function DocumentSurface({
   panel,
   panes,
   workspaces,
-  layoutId,
   onPanel,
 }: {
   id: string;
@@ -549,7 +538,6 @@ function DocumentSurface({
   panel: PanelConfig;
   panes: PaneView[];
   workspaces: WorkspaceView[];
-  layoutId: string;
   onPanel: (id: string, panel: PanelConfig, retitle?: boolean) => void;
 }) {
   const design = useDesign();
@@ -675,7 +663,6 @@ function DocumentSurface({
             void api.resolve(value).then((resolved) => {
               const next = adoptPluginAddress(current, resolved);
               if (!next) return;
-              writePluginSubject(layoutId, id, next);
               onPanel(id, next);
             }, () => undefined);
           }}
@@ -685,7 +672,6 @@ function DocumentSurface({
           }}
           onBar={(next) => {
             const show = next.show && !next.replace;
-            writeAddressBarChoice(layoutId, id, show);
             onPanel(id, setAddressBar(panel, show));
           }}
         />

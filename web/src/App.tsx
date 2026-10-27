@@ -28,9 +28,10 @@ import { TopBar } from "./components/TopBar";
 import { DesignBar } from "./components/DesignBar";
 import { ElementSelect } from "./components/ElementSelect";
 import { HostProvider } from "./host";
-import { applyAddressBarChoices, readAddressBarChoices } from "./addressBar";
-import { applyRawChoices, readRawChoices } from "./rawText";
-import { applyPluginSubjects, readPluginSubjects } from "./viewMenu";
+import { readAddressBarChoices } from "./addressBar";
+import { readRawChoices } from "./rawText";
+import { readPluginSubjects } from "./viewMenu";
+import { bakeStoredDesk } from "./viewerChoices";
 import { installContextMenuGuard } from "./contextMenuGuard";
 import { subscribeDesk } from "./deskBus";
 import {
@@ -54,10 +55,29 @@ import {
   writeSpaceMap,
 } from "./spaceLayout";
 
+const VIEWER_BAKED = "herdr-panels.viewer-baked";
+
+function viewerBaked(): boolean {
+  try {
+    return localStorage.getItem(VIEWER_BAKED) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function markViewerBaked() {
+  try {
+    localStorage.setItem(VIEWER_BAKED, "1");
+    localStorage.removeItem("herdr-panels.address-bar");
+    localStorage.removeItem("herdr-panels.raw-text");
+    localStorage.removeItem("herdr-panels.plugin-view");
+  } catch {
+    // A later load can bake the same choices again.
+  }
+}
+
 function present(doc: LayoutDocument): LayoutDocument {
-  const rooted = applyAddressBarChoices(normalizeLayout(doc.root), doc.id, readAddressBarChoices());
-  const raw = applyRawChoices(rooted, doc.id, readRawChoices());
-  return { ...doc, root: applyPluginSubjects(raw, doc.id, readPluginSubjects()) };
+  return { ...doc, root: normalizeLayout(doc.root) };
 }
 
 export function App() {
@@ -108,25 +128,37 @@ export function App() {
         const server = await api.desk();
         if (stopped) return;
         const choice = chooseDesk(server, readLocalDesk(), deskMigrated());
+        const bake = !viewerBaked();
+        const desk = bake
+          ? bakeStoredDesk(choice.desk, boot.layout.id, {
+              addressBar: readAddressBarChoices(),
+              raw: readRawChoices(),
+              plugins: readPluginSubjects(),
+            })
+          : choice.desk;
+        const changed = bake && JSON.stringify(desk) !== JSON.stringify(choice.desk);
         let stored: DeskFile = server;
         try {
-          if (choice.upload) {
+          if (choice.upload || changed) {
             const saved = await api.saveDesk({
               session,
               adopt: true,
               revision: server.revision,
-              pins: choice.desk.pins,
-              spaces: choice.desk.spaces,
+              pins: desk.pins,
+              spaces: desk.spaces,
             });
             if (stopped) return;
             stored = saved.desk;
+          } else if (bake) {
+            stored = { revision: server.revision, pins: desk.pins, spaces: desk.spaces };
           }
           markDeskMigrated();
+          if (bake) markViewerBaked();
         } catch (err: unknown) {
           stored = {
             revision: server.revision,
-            pins: choice.desk.pins,
-            spaces: choice.desk.spaces,
+            pins: desk.pins,
+            spaces: desk.spaces,
           };
           if (!stopped) setNotice(err instanceof Error ? err.message : "Could not save the desk");
         }

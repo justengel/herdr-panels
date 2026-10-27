@@ -13,6 +13,7 @@ use serde_json::{json, Value};
 use tokio::sync::{broadcast, oneshot, Mutex};
 
 use crate::chats::{self, ChatMessage};
+use crate::desk;
 use crate::keys::ClientInput;
 use crate::layout::{is_pane_id, Direction, LayoutDocument, LayoutNode, PanelConfig};
 use crate::layout_ops::{self, list_panels};
@@ -144,7 +145,7 @@ async fn index(State(state): State<AppState>) -> Json<Value> {
 }
 
 async fn workspace(State(state): State<AppState>) -> Result<Json<Value>, AgentError> {
-    let doc = load_active(&state)?;
+    let doc = load_active(&state).await?;
     Ok(Json(workspace_json(&state, &doc)))
 }
 
@@ -170,7 +171,7 @@ async fn split(
         "down" => Direction::Column,
         _ => return Err(AgentError::bad("direction must be right or down")),
     };
-    let mut doc = load_active(&state)?;
+    let mut doc = load_active(&state).await?;
     let source_id = resolve_key(&doc.root, &body.panel_id)?;
     let source = list_panels(&doc.root)
         .into_iter()
@@ -228,7 +229,7 @@ async fn split(
         )
         .map_err(AgentError::bad)?;
     }
-    let doc = save_active(&state, doc)?;
+    let doc = save_active(&state, doc).await?;
     Ok(Json(json!({
         "panelId": created_id,
         "workspace": workspace_json(&state, &doc),
@@ -245,10 +246,10 @@ async fn close(
     State(state): State<AppState>,
     Json(body): Json<PanelBody>,
 ) -> Result<Json<Value>, AgentError> {
-    let mut doc = load_active(&state)?;
+    let mut doc = load_active(&state).await?;
     let panel_id = resolve_key(&doc.root, &body.panel_id)?;
     doc.root = layout_ops::close_panel(doc.root, &panel_id).map_err(AgentError::bad)?;
-    let doc = save_active(&state, doc)?;
+    let doc = save_active(&state, doc).await?;
     Ok(Json(workspace_json(&state, &doc)))
 }
 
@@ -263,11 +264,11 @@ async fn resize(
     State(state): State<AppState>,
     Json(body): Json<ResizeBody>,
 ) -> Result<Json<Value>, AgentError> {
-    let mut doc = load_active(&state)?;
+    let mut doc = load_active(&state).await?;
     let panel_id = resolve_key(&doc.root, &body.panel_id)?;
     doc.root =
         layout_ops::resize_panel(doc.root, &panel_id, body.ratio).map_err(AgentError::bad)?;
-    let doc = save_active(&state, doc)?;
+    let doc = save_active(&state, doc).await?;
     Ok(Json(workspace_json(&state, &doc)))
 }
 
@@ -321,7 +322,7 @@ async fn open_target(
         .title
         .filter(|title| !title.trim().is_empty())
         .unwrap_or_else(|| crate::open_target::open_title(&kind));
-    let mut doc = load_active(&state)?;
+    let mut doc = load_active(&state).await?;
     let (root, panel_id, created) = if let Some(panel_id) = body.panel_id.as_deref() {
         let panel_id = resolve_key(&doc.root, panel_id)?;
         let root = layout_ops::update_panel(doc.root, &panel_id, Some(Some(title)), Some(panel))
@@ -342,7 +343,7 @@ async fn open_target(
         (root, panel_id, created)
     };
     doc.root = root;
-    let doc = save_active(&state, doc)?;
+    let doc = save_active(&state, doc).await?;
     Ok(Json(json!({
         "panelId": panel_id,
         "created": created,
@@ -464,7 +465,7 @@ async fn update_panel(
     State(state): State<AppState>,
     Json(body): Json<UpdateBody>,
 ) -> Result<Json<Value>, AgentError> {
-    let mut doc = load_active(&state)?;
+    let mut doc = load_active(&state).await?;
     let panel_id = resolve_key(&doc.root, &body.panel_id)?;
     let title = if body.clear_title {
         Some(None)
@@ -473,7 +474,7 @@ async fn update_panel(
     };
     doc.root = layout_ops::update_panel(doc.root, &panel_id, title, body.panel)
         .map_err(AgentError::bad)?;
-    let doc = save_active(&state, doc)?;
+    let doc = save_active(&state, doc).await?;
     Ok(Json(workspace_json(&state, &doc)))
 }
 
@@ -494,7 +495,7 @@ async fn move_panel(
     State(state): State<AppState>,
     Json(body): Json<MoveBody>,
 ) -> Result<Json<Value>, AgentError> {
-    let mut doc = load_active(&state)?;
+    let mut doc = load_active(&state).await?;
     let source = resolve_key(&doc.root, &body.panel_id)?;
     let target = resolve_key(&doc.root, &body.target)?;
     doc.root = layout_ops::move_panel(doc.root, &source, &target, &body.place).map_err(|err| {
@@ -504,7 +505,7 @@ async fn move_panel(
             AgentError::bad(err)
         }
     })?;
-    let doc = save_active(&state, doc)?;
+    let doc = save_active(&state, doc).await?;
     Ok(Json(workspace_json(&state, &doc)))
 }
 
@@ -520,7 +521,7 @@ async fn zoom(
     Json(body): Json<ZoomBody>,
 ) -> Result<Json<Value>, AgentError> {
     if let Some(panel_id) = &body.panel_id {
-        let doc = load_active(&state)?;
+        let doc = load_active(&state).await?;
         let panel_id = resolve_key(&doc.root, panel_id)?;
         state.agent.publish(&json!({
             "type": "zoom",
@@ -555,7 +556,7 @@ async fn say(
     if spoken.is_empty() || spoken.chars().count() > 8_000 {
         return Err(AgentError::bad("text must be 1 to 8000 characters"));
     }
-    let doc = load_active(&state)?;
+    let doc = load_active(&state).await?;
     let target = if body.to == "*" {
         None
     } else {
@@ -644,7 +645,7 @@ async fn read_panel(
     Path(id): Path<String>,
     axum::extract::Query(query): axum::extract::Query<ReadQuery>,
 ) -> Result<Json<Value>, AgentError> {
-    let doc = load_active(&state)?;
+    let doc = load_active(&state).await?;
     let id = resolve_key(&doc.root, &id)?;
     let panel = list_panels(&doc.root)
         .into_iter()
@@ -682,7 +683,7 @@ async fn write_panel(
     Path(id): Path<String>,
     Json(body): Json<WriteBody>,
 ) -> Result<Json<Value>, AgentError> {
-    let doc = load_active(&state)?;
+    let doc = load_active(&state).await?;
     let id = resolve_key(&doc.root, &id)?;
     let panel = list_panels(&doc.root)
         .into_iter()
@@ -721,7 +722,7 @@ async fn select_panel(
     Path(id): Path<String>,
     Json(body): Json<SelectBody>,
 ) -> Result<Json<Value>, AgentError> {
-    let doc = load_active(&state)?;
+    let doc = load_active(&state).await?;
     let id = resolve_key(&doc.root, &id)?;
     if !layout_ops::contains(&doc.root, &id) {
         return Err(AgentError::missing("panel was not found"));
@@ -792,18 +793,128 @@ fn resolve_key(root: &LayoutNode, key: &str) -> Result<String, AgentError> {
     })
 }
 
-fn load_active(state: &AppState) -> Result<LayoutDocument, AgentError> {
-    let settings = store::load_settings(&state.config_dir).map_err(AgentError::bad)?;
-    store::load_layout(&state.config_dir, &settings.active_layout).map_err(AgentError::bad)
+enum ActiveSource {
+    Space {
+        session: String,
+        workspace_id: String,
+    },
+    Layout,
 }
 
-fn save_active(state: &AppState, doc: LayoutDocument) -> Result<LayoutDocument, AgentError> {
+fn session_name(snapshot: &crate::session::RuntimeSnapshot) -> String {
+    if snapshot.session.is_empty() {
+        "default".into()
+    } else {
+        snapshot.session.clone()
+    }
+}
+
+fn focused_workspace(snapshot: &crate::session::RuntimeSnapshot) -> Option<String> {
+    snapshot
+        .focused_workspace_id
+        .clone()
+        .filter(|id| !id.is_empty())
+        .or_else(|| {
+            snapshot
+                .workspaces
+                .iter()
+                .find(|space| space.focused)
+                .map(|space| space.workspace_id.clone())
+        })
+}
+
+fn workspace_id_for_key(desk: &desk::DeskDocument, key: &str) -> String {
+    for pin in &desk.pins {
+        for id in &pin.spaces {
+            if desk::space_key(id) == key {
+                return id.clone();
+            }
+        }
+    }
+    key.to_string()
+}
+
+async fn active_source(state: &AppState) -> Result<ActiveSource, AgentError> {
+    let snapshot = state.runtime.snapshot().await;
+    let session = session_name(&snapshot);
+    if snapshot.connected {
+        if let Some(workspace_id) = focused_workspace(&snapshot) {
+            return Ok(ActiveSource::Space {
+                session,
+                workspace_id,
+            });
+        }
+    }
+    let stored = desk::load_desk(&state.config_dir, &session).map_err(AgentError::bad)?;
+    if stored.spaces.len() == 1 {
+        let key = stored.spaces.keys().next().cloned().unwrap_or_default();
+        return Ok(ActiveSource::Space {
+            workspace_id: workspace_id_for_key(&stored, &key),
+            session,
+        });
+    }
+    if stored.spaces.len() > 1 {
+        return Err(AgentError::bad(
+            "Herdr is not focused on a space, so there is no desk to edit",
+        ));
+    }
+    Ok(ActiveSource::Layout)
+}
+
+async fn load_active(state: &AppState) -> Result<LayoutDocument, AgentError> {
+    match active_source(state).await? {
+        ActiveSource::Space {
+            session,
+            workspace_id,
+        } => {
+            let stored = desk::load_desk(&state.config_dir, &session).map_err(AgentError::bad)?;
+            let root = desk::open_space(&stored, &workspace_id);
+            let settings = store::load_settings(&state.config_dir).map_err(AgentError::bad)?;
+            let mut doc = store::load_layout(&state.config_dir, &settings.active_layout).unwrap_or(
+                LayoutDocument {
+                    id: settings.active_layout.clone(),
+                    title: "Desk".into(),
+                    description: None,
+                    root: root.clone(),
+                },
+            );
+            doc.root = root;
+            Ok(doc)
+        }
+        ActiveSource::Layout => {
+            let settings = store::load_settings(&state.config_dir).map_err(AgentError::bad)?;
+            store::load_layout(&state.config_dir, &settings.active_layout).map_err(AgentError::bad)
+        }
+    }
+}
+
+async fn save_active(state: &AppState, doc: LayoutDocument) -> Result<LayoutDocument, AgentError> {
     doc.validate().map_err(AgentError::bad)?;
-    store::save_layout(&state.config_dir, &doc).map_err(AgentError::bad)?;
-    state
-        .agent
-        .publish(&json!({"type": "layout", "layout": &doc}));
-    Ok(doc)
+    match active_source(state).await? {
+        ActiveSource::Space {
+            session,
+            workspace_id,
+        } => {
+            let current = desk::load_desk(&state.config_dir, &session).map_err(AgentError::bad)?;
+            let next = desk::store_space(&current, &workspace_id, doc.root.clone());
+            let stored = match desk::save_desk(&state.config_dir, &session, &next, true)
+                .map_err(AgentError::bad)?
+            {
+                desk::DeskSave::Stored(saved) | desk::DeskSave::Conflict(saved) => saved,
+            };
+            state
+                .agent
+                .publish(&json!({"type": "desk", "desk": stored}));
+            Ok(doc)
+        }
+        ActiveSource::Layout => {
+            store::save_layout(&state.config_dir, &doc).map_err(AgentError::bad)?;
+            state
+                .agent
+                .publish(&json!({"type": "layout", "layout": &doc}));
+            Ok(doc)
+        }
+    }
 }
 
 fn workspace_json(state: &AppState, doc: &LayoutDocument) -> Value {
