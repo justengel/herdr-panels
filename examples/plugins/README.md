@@ -90,9 +90,10 @@ parent.postMessage({ source: "hwp-plugin", type: "config", value: { line: 4 } },
 
 `value` has to be an object, and the JSON has to be 32 KB or smaller. An array is ignored. The page does not get the viewer token or `herdrPanels`.
 
-Install a directory into the config folder:
+Install the Welcome sample, or copy another directory into the config folder:
 
 ```text
+herdr-panels plugin install --example
 herdr-panels plugin install <directory>
 ```
 

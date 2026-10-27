@@ -145,7 +145,11 @@ enum PluginCommand {
     List,
     /// Copy a plugin directory into the config plugins folder
     Install {
-        path: PathBuf,
+        /// Plugin directory. Omit this with --example
+        path: Option<PathBuf>,
+        /// Install the bundled Welcome example
+        #[arg(long)]
+        example: bool,
         /// Replace an installed plugin with the same id
         #[arg(long)]
         replace: bool,
@@ -169,8 +173,22 @@ pub async fn execute() -> anyhow::Result<()> {
                 }
                 Ok(())
             }
-            PluginCommand::Install { path, replace } => {
-                let manifest = plugins::install_plugin(&config_dir, &path, replace)?;
+            PluginCommand::Install {
+                path,
+                example,
+                replace,
+            } => {
+                if example && path.is_some() {
+                    bail!("pass a plugin directory or --example, not both");
+                }
+                let manifest = if example {
+                    plugins::install_bundled_example(&config_dir, replace)?
+                } else {
+                    let Some(path) = path else {
+                        bail!("pass a plugin directory, or --example to install the sample plugin");
+                    };
+                    plugins::install_plugin(&config_dir, &path, replace)?
+                };
                 println!("installed {} ({})", manifest.id, manifest.title);
                 Ok(())
             }

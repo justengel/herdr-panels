@@ -104,14 +104,14 @@ The Design button turns the workspace into an editor:
 - Add the selection to a chat when a chat panel is already open.
 - When the selected panel is a Herdr terminal, **Split the Herdr pane too** opens a new pane in the daemon and attaches it to the new panel.
 
-`examples/layouts/desk.json` starts with a terminal, a note, and an HTML panel. A plugin is a directory the viewer can show as its own panel. Copy `examples/plugins/welcome` and follow `examples/plugins/README.md`. That guide is also copied to `<config>/plugins/README.md`. A plugin is a directory:
+`examples/layouts/desk.json` starts with a terminal, a note, and an HTML panel. The first run copies example layouts, notes, and the plugin guide. It does not install a plugin. `herdr-panels plugin install --example` installs the Welcome sample. Copy `examples/plugins/welcome` to start a plugin of your own, and follow `examples/plugins/README.md`. That guide is also copied to `<config>/plugins/README.md`. A plugin is a directory:
 
 ```text
 <config>/plugins/<id>/plugin.json
 <config>/plugins/<id>/index.html
 ```
 
-`plugin.json` has `id`, `title`, and `entry` (default `index.html`). `views` says which addresses a plugin can open, so it can sit beside Markdown or Text for that file. Leave `views` out and the plugin is its own panel. `addressBar` shows that bar, lets `modify` change it, or uses `replace` so the plugin can draw its own. The panel gear can show or hide the bar. Install one with `herdr-panels plugin install <directory>`. The page loads it at `/plugins/<id>`. See `examples/plugins/README.md`.
+`plugin.json` has `id`, `title`, and `entry` (default `index.html`). `views` says which addresses a plugin can open, so it can sit beside Markdown or Text for that file. Leave `views` out and the plugin is its own panel. `addressBar` shows that bar, lets `modify` change it, or uses `replace` so the plugin can draw its own. The panel gear can show or hide the bar. Install the sample with `herdr-panels plugin install --example`, or install another directory with `herdr-panels plugin install <directory>`. The page loads it at `/plugins/<id>`. See `examples/plugins/README.md`.
 
 ### Agents
 
@@ -195,6 +195,7 @@ herdr-panels panel move Notes --to Herdr --place below
 herdr-panels panel update Chat --title Shell --kind herdr
 herdr-panels panel zoom Notes
 herdr-panels plugin list
+herdr-panels plugin install --example
 herdr-panels plugin install <directory>
 herdr-panels token rotate
 herdr-panels token set <value>

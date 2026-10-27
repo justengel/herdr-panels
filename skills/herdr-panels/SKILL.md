@@ -119,7 +119,7 @@ def call(method, path, body=None, base="http://127.0.0.1:4737"):
 
 ## Create a plugin
 
-Copy `examples/plugins/welcome` and change it. A plugin is that directory. Do not add it to the viewer source. The same steps are in `examples/plugins/README.md`.
+Copy `examples/plugins/welcome` and change it, or install that sample with `herdr-panels plugin install --example`. A plugin is that directory. Do not add it to the viewer source. The same steps are in `examples/plugins/README.md`. The first run of the viewer does not install this plugin.
 
 ```json
 {
@@ -134,6 +134,7 @@ The directory name and `id` must match. `id` is 1 to 64 characters of lowercase 
 A plugin is a view. `views` lists the viewers it adds. Each view has an `id`, a `title`, and `opens`: `file`, `markdown`, `html`, `directory`, or `url`. `file` matches every file, including Markdown and HTML. A view with no `opens` is the plugin's own panel and does not take the current file. Leave `views` out for that panel. One view can omit `id`; it then uses the plugin id. The gear shows a matching view beside the built-in viewers and keeps the address. On load the host posts `{ source: "hwp-host", type: "open", view, address, kind, config }`. `kind` is `file`, `markdown`, `html`, `directory`, or `url`. `config` is the panel's JSON object. The page can save that object with `{ source: "hwp-plugin", type: "config", value }`, up to 32 KB. The page stays sandboxed. It does not get the viewer token or `window.herdrPanels`.
 
 ```text
+herdr-panels plugin install --example
 herdr-panels plugin install <directory>
 herdr-panels plugin list
 herdr-panels panel open plugin:my-plugin --from Notes

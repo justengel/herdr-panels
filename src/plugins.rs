@@ -310,6 +310,23 @@ fn parse_open(name: &str) -> anyhow::Result<ViewOpen> {
     }
 }
 
+pub fn install_example_plugin(
+    config_dir: &Path,
+    examples: &Path,
+    replace: bool,
+) -> anyhow::Result<PluginManifest> {
+    let source = examples.join("plugins").join("welcome");
+    if !source.join("plugin.json").is_file() {
+        bail!("the example plugin was not found");
+    }
+    install_plugin(config_dir, &source, replace)
+}
+
+pub fn install_bundled_example(config_dir: &Path, replace: bool) -> anyhow::Result<PluginManifest> {
+    let examples = crate::paths::bundled_examples().context("the example plugin was not found")?;
+    install_example_plugin(config_dir, &examples, replace)
+}
+
 pub fn install_plugin(
     config_dir: &Path,
     source: &Path,
@@ -591,5 +608,30 @@ mod tests {
             r#"{"id":"docs","title":"Docs","views":[{"title":"A"},{"title":"B"}]}"#
         )
         .is_err());
+    }
+
+    #[test]
+    fn the_example_plugin_is_installed_only_when_asked() {
+        let root = std::env::temp_dir().join(format!("hwp-example-plugin-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let examples = root.join("examples");
+        let source = examples.join("plugins").join("welcome");
+        std::fs::create_dir_all(&source).unwrap();
+        std::fs::write(
+            source.join("plugin.json"),
+            r#"{"id":"welcome","title":"Welcome","entry":"index.html"}"#,
+        )
+        .unwrap();
+        std::fs::write(source.join("index.html"), "<p>Welcome</p>").unwrap();
+        let config = root.join("config");
+        std::fs::create_dir_all(&config).unwrap();
+        let manifest = install_example_plugin(&config, &examples, false).unwrap();
+        assert_eq!(manifest.id, "welcome");
+        assert_eq!(
+            std::fs::read_to_string(config.join("plugins").join("welcome").join("index.html"))
+                .unwrap(),
+            "<p>Welcome</p>"
+        );
+        let _ = std::fs::remove_dir_all(&root);
     }
 }
