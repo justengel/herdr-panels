@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.2 - 2026-10-27
+
+The release archive includes the desktop window. `herdr-panels` opens it when `herdr-panels-desktop` is in the same folder. On Linux that window needs WebKitGTK 4.1 (`libwebkit2gtk-4.1-0`).
+
 ## 0.1.1 - 2026-10-27
 
 First downloadable release. The Linux build installs the OpenSSL and Wayland headers the file dialog needs. The `v0.1.0` tag did not publish a release.

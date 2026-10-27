@@ -8,7 +8,7 @@ An agent can do that arranging for you: open a URL, a note, an HTML page, or a p
 
 ## Download
 
-Prebuilt programs are on the [latest release](https://github.com/justengel/herdr-panels/releases/latest). Each archive is the `herdr-panels` program and the license. Node and Rust are not required, and there is no system installer.
+Prebuilt programs are on the [latest release](https://github.com/justengel/herdr-panels/releases/latest). Each archive contains `herdr-panels` (the server and the commands) and `herdr-panels-desktop` (the window). Node and Rust are not required, and there is no system installer.
 
 | System | Archive |
 | --- | --- |
@@ -16,9 +16,15 @@ Prebuilt programs are on the [latest release](https://github.com/justengel/herdr
 | Windows x64 | `windows-x64.zip` |
 | macOS Apple Silicon | `macos-arm64.tar.gz` |
 
-The Linux build is for an Ubuntu 22.04 or newer desktop. It uses the system OpenSSL and Wayland client libraries, which that desktop already has. Unpack it and run `./herdr-panels`. It listens on http://127.0.0.1:4737 and opens a browser tab. The first start writes the viewer token and the example layouts into the config directory.
+The Linux build is for an Ubuntu 22.04 or newer desktop. It uses the system OpenSSL, Wayland client, and WebKitGTK libraries. Install the web view once if it is not already there:
 
-On Windows, unpack the zip and run `herdr-panels.exe`. On macOS, unpack the archive and run `./herdr-panels`. Those systems may ask before an unsigned program runs.
+```sh
+sudo apt install libwebkit2gtk-4.1-0
+```
+
+Unpack the archive and run `./herdr-panels` from that folder. The desktop program is beside it, so this opens the window and listens on http://127.0.0.1:4737. The first start writes the viewer token and the example layouts into the config directory. A browser tab at that address shows the same desk. `herdr-panels server` starts the server and leaves the window closed.
+
+On Windows, unpack the zip and run `herdr-panels.exe`. The window uses the WebView2 already on Windows 10 and 11. On macOS, unpack the archive and run `./herdr-panels`. The window uses the system web view. Those systems may ask before an unsigned program runs.
 
 With `herdr-panels` on `PATH`, Herdr can start that same program. The manifest in this repository does not compile anything:
 

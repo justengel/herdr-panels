@@ -2,6 +2,10 @@
 
 Recorded 2026-10-27 from the review before the first public release. Closed items are here so this list stays the place to come back to.
 
+## Done in 0.1.2
+
+- The release archive includes `herdr-panels-desktop`. Running `herdr-panels` from that folder opens the window. Linux needs `libwebkit2gtk-4.1-0`.
+
 ## Done in 0.1.1
 
 - The release binary contains the built page and the examples. Moving the program away from this checkout no longer shows the setup page, and the first start can still seed a config directory.
@@ -12,9 +16,9 @@ Recorded 2026-10-27 from the review before the first public release. Closed item
 
 ## Still open
 
-### Desktop window
+### Desktop installers
 
-`herdr-panels-desktop` is a second program. Tauri packaging is off (`bundle.active` is false). The window turns devtools on and sets no content security policy. It is not in the GitHub release. Building that window on Linux needs WebKitGTK. The released program opens a browser tab.
+The window is in the release archive. Tauri packaging is still off (`bundle.active` is false), so there is no `.deb`, `.msi`, or `.dmg`. The window turns devtools on and sets no content security policy. Linux still needs the system WebKitGTK package named above.
 
 ### Code signing
 
