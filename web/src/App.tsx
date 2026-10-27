@@ -27,6 +27,8 @@ import { LayoutView } from "./components/LayoutView";
 import { TopBar } from "./components/TopBar";
 import { DesignBar } from "./components/DesignBar";
 import { ElementSelect } from "./components/ElementSelect";
+import { DeskKeyboard, KeyedPanelProvider } from "./deskKeyboard";
+import { layoutForFocusedPane, panelForPane, panelRefs } from "./deskKeys";
 import { HostProvider } from "./host";
 import { readAddressBarChoices } from "./addressBar";
 import { readRawChoices } from "./rawText";
@@ -49,6 +51,7 @@ import {
   layoutForSpace,
   loadSpaceLayout,
   markWorkspaceFocused,
+  preferPendingPane,
   preferPendingSpace,
   saveSpaceLayout,
   seedSpaceLayout,
@@ -96,6 +99,8 @@ export function App() {
   const [plugins, setPlugins] = useState<PluginInfo[]>([]);
   const [selecting, setSelecting] = useState(false);
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
+  const [keyId, setKeyId] = useState<string | null>(null);
+  const [help, setHelp] = useState(false);
   const [openMenuToken, setOpenMenuToken] = useState(0);
   const [herdrCtl, setHerdrCtl] = useState<HerdrCtlStatus | null>(null);
   const [herdrBusy, setHerdrBusy] = useState(false);
@@ -106,6 +111,8 @@ export function App() {
   const spaceRef = useRef<string | null>(null);
   /** While set, ignore runtime focus that still points at the previous space. */
   const pendingSpaceRef = useRef<string | null>(null);
+  const pendingPaneRef = useRef<string | null>(null);
+  const keyIdRef = useRef<string | null>(null);
   const layoutRef = useRef<LayoutDocument | null>(null);
   const runtimeRef = useRef<RuntimeSnapshot | null>(null);
   const sessionRef = useRef<string | null>(null);
@@ -115,6 +122,7 @@ export function App() {
   const applySpaceRef = useRef<(root: LayoutNode) => void>(() => {});
   layoutRef.current = layout;
   runtimeRef.current = runtime;
+  keyIdRef.current = keyId;
 
   useEffect(() => installContextMenuGuard(), []);
 
@@ -195,7 +203,15 @@ export function App() {
       api
         .runtime()
         .then((next) => {
-          if (!stopped) setRuntime(preferPendingSpace(next, pendingSpaceRef.current));
+          if (pendingPaneRef.current && next.focusedPaneId === pendingPaneRef.current) pendingPaneRef.current = null;
+          if (!stopped) {
+            setRuntime(
+              preferPendingPane(
+                preferPendingSpace(next, pendingSpaceRef.current, pendingPaneRef.current),
+                pendingPaneRef.current,
+              ),
+            );
+          }
         })
         .catch(() => {
           if (!stopped) {
@@ -284,39 +300,58 @@ export function App() {
     if (doc) showSpaceLayout(doc, root);
   };
 
-  /** Instant desk swap; Herdr focus runs in the background. */
-  const switchSpace = useCallback(
-    (workspaceId: string) => {
-      const doc = layoutRef.current;
-      if (!doc || !workspaceId) return;
-      const snapshot = runtimeRef.current;
-      const panes = snapshot?.panes ?? [];
-      const inSpace = panes.filter((pane) => pane.workspaceId === workspaceId);
-      const pane = inSpace.find((item) => item.focused) ?? inSpace[0] ?? null;
+  /** Instant desk swap; Herdr focus runs in the background. Returns the panel that shows the pane. */
+  const switchSpace = useCallback((workspaceId: string, paneId?: string): string | null => {
+    const doc = layoutRef.current;
+    if (!doc || !workspaceId) return null;
+    const snapshot = runtimeRef.current;
+    const panes = snapshot?.panes ?? [];
+    const inSpace = panes.filter((pane) => pane.workspaceId === workspaceId);
+    const chosen =
+      (paneId ? inSpace.find((pane) => pane.paneId === paneId) : null) ??
+      inSpace.find((pane) => pane.focused) ??
+      inSpace[0] ??
+      null;
+    const focusPane = chosen?.paneId ?? null;
 
-      if (spaceRef.current !== workspaceId) {
-        if (spaceRef.current) saveSpaceLayout(spaceRef.current, doc.root);
-        pendingSpaceRef.current = workspaceId;
-        spaceRef.current = workspaceId;
-        writeSpaceMap(workspaceId);
-        const root = bindTerminalPane(
-          layoutForSpace(workspaceId, seedSpaceLayout()),
-          pane?.paneId ?? null,
-        );
-        showSpaceLayout(doc, root);
-        if (snapshot) setRuntime(markWorkspaceFocused(snapshot, workspaceId, pane?.paneId ?? null));
-      } else {
-        pendingSpaceRef.current = workspaceId;
-      }
+    if (spaceRef.current === workspaceId && !paneId) {
+      pendingSpaceRef.current = workspaceId;
+      void (focusPane ? api.focus({ paneId: focusPane }) : api.focus({ workspaceId })).catch(() => undefined);
+      return null;
+    }
 
-      // Fire-and-forget: waiting on Herdr (or a stale cached runtime) used to snap the
-      // desk back to the previous space. Pending clears once focus is confirmed.
-      void (pane ? api.focus({ paneId: pane.paneId }) : api.focus({ workspaceId })).catch(
-        () => undefined,
-      );
-    },
-    [showSpaceLayout],
-  );
+    let landed = doc.root;
+    if (spaceRef.current !== workspaceId) {
+      if (spaceRef.current) saveSpaceLayout(spaceRef.current, doc.root);
+      pendingSpaceRef.current = workspaceId;
+      spaceRef.current = workspaceId;
+      writeSpaceMap(workspaceId);
+      setZoomedId(null);
+      landed = paneId
+        ? layoutForFocusedPane(layoutForSpace(workspaceId, seedSpaceLayout()), paneId)
+        : bindTerminalPane(layoutForSpace(workspaceId, seedSpaceLayout()), focusPane);
+      showSpaceLayout(doc, landed);
+      if (snapshot) setRuntime(markWorkspaceFocused(snapshot, workspaceId, focusPane));
+    } else if (paneId && focusPane) {
+      pendingSpaceRef.current = workspaceId;
+      landed = layoutForFocusedPane(doc.root, focusPane);
+      if (landed !== doc.root) showSpaceLayout(doc, landed);
+      if (snapshot) setRuntime(markWorkspaceFocused(snapshot, workspaceId, focusPane));
+    }
+
+    if (paneId) pendingPaneRef.current = focusPane;
+    void (focusPane ? api.focus({ paneId: focusPane }) : api.focus({ workspaceId })).catch(() => undefined);
+    const refs = panelRefs(listPanels(landed));
+    if (focusPane) return panelForPane(refs, focusPane, null)?.id ?? refs[0]?.id ?? null;
+    return refs[0]?.id ?? null;
+  }, [showSpaceLayout]);
+
+  useEffect(() => {
+    if (!layout) return;
+    const ids = listPanels(layout.root).map((panel) => panel.id);
+    if (keyId && ids.includes(keyId)) return;
+    setKeyId(ids[0] ?? null);
+  }, [layout, keyId]);
 
   const focusedSpaceId =
     runtime?.focusedWorkspaceId ||
@@ -606,6 +641,36 @@ export function App() {
     setOpenMenuToken((token) => token + 1);
   }
 
+  function focusAgentPane(paneId: string): string | null {
+    const snapshot = runtimeRef.current;
+    const doc = layoutRef.current;
+    if (!snapshot || !doc) return null;
+    const pane = snapshot.panes.find((item) => item.paneId === paneId);
+    if (!pane) {
+      void api.focus({ paneId }).catch(() => undefined);
+      return null;
+    }
+    if (spaceRef.current !== pane.workspaceId) return switchSpace(pane.workspaceId, pane.paneId);
+    const refs = panelRefs(listPanels(doc.root));
+    const target = panelForPane(refs, pane.paneId, keyIdRef.current);
+    if (target?.rebind) {
+      const node = findPanel(doc.root, target.id);
+      if (node && node.panel.type === "herdr") {
+        remember({ ...doc, root: setPanel(doc.root, target.id, { ...node.panel, paneId: pane.paneId }) });
+      }
+    }
+    pendingPaneRef.current = pane.paneId;
+    setRuntime(markWorkspaceFocused(snapshot, pane.workspaceId, pane.paneId));
+    void api.focus({ paneId: pane.paneId }).catch(() => undefined);
+    return target?.id ?? null;
+  }
+
+  function notify(message: string) {
+    setNotice(message);
+    window.clearTimeout(noticeRef.current);
+    noticeRef.current = window.setTimeout(() => setNotice(null), 2400);
+  }
+
   function addToChat(chatId: string, attachment: Attachment) {
     setInbox((current) => ({
       ...current,
@@ -637,15 +702,32 @@ export function App() {
       >
       <HostProvider
         runtime={runtime}
-        onRuntime={(next) => setRuntime(preferPendingSpace(next, pendingSpaceRef.current))}
-        onNotice={(message) => {
-          setNotice(message);
-          window.clearTimeout(noticeRef.current);
-          noticeRef.current = window.setTimeout(() => setNotice(null), 2400);
-        }}
-        onSwitchSpace={switchSpace}
+        onRuntime={(next) =>
+          setRuntime(
+            preferPendingPane(
+              preferPendingSpace(next, pendingSpaceRef.current, pendingPaneRef.current),
+              pendingPaneRef.current,
+            ),
+          )
+        }
+        onNotice={notify}
       >
+      <KeyedPanelProvider id={keyId} set={setKeyId}>
       <div className="app">
+        <DeskKeyboard
+          layout={layout.root}
+          runtime={runtime}
+          focusedId={keyId}
+          zoomedId={zoomedId}
+          help={help}
+          onFocus={setKeyId}
+          onZoom={setZoomedId}
+          onSpace={switchSpace}
+          onAgent={focusAgentPane}
+          onNotice={notify}
+          onToggleHelp={() => setHelp((open) => !open)}
+          onHelp={setHelp}
+        />
         <TopBar
           runtime={runtime}
           herdrCtl={herdrCtl}
@@ -704,6 +786,7 @@ export function App() {
             );
           }}
           onSelect={() => setSelecting((current) => !current)}
+          onShowKeys={() => setHelp(true)}
           onAddPanel={addPanel}
           onExitZoom={() => setZoomedId(null)}
         />
@@ -738,13 +821,7 @@ export function App() {
             }
             onCloseTab={(id, tabId) => edit(closePanelTab(layout.root, id, tabId))}
             onOpenSpace={switchSpace}
-            onFocusPane={(paneId) => {
-              void api.focus({ paneId });
-              const terminal = listPanels(layout.root).find((panel) => panel.panel.type === "herdr");
-              if (terminal && terminal.panel.type === "herdr" && terminal.panel.paneId !== paneId) {
-                edit(setPanel(layout.root, terminal.id, { ...terminal.panel, paneId }));
-              }
-            }}
+            onFocusPane={focusAgentPane}
           />
           </DeskProvider>
         </main>
@@ -794,6 +871,7 @@ export function App() {
           />
         ) : null}
       </div>
+      </KeyedPanelProvider>
       </HostProvider>
       </PanelActionsProvider>
     </DesignProvider>

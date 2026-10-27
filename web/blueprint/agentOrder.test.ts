@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { agentSortLabel, nextAgentSort, orderAgents, type AgentListRow } from "../src/agentOrder";
+import { agentSortLabel, listedAgents, nextAgentSort, orderAgents, type AgentListRow } from "../src/agentOrder";
 
 const rows: AgentListRow[] = [
   { paneId: "p-work", workspaceId: "beta", status: "working", title: "beta" },
@@ -19,6 +19,24 @@ describe("the agents heading cycles the same orders as the Herdr sidebar", () =>
   it("keeps agents from the same space together, in the spaces list order", () => {
     const ordered = orderAgents(rows, "spaces", ["alpha", "beta"]);
     expect(ordered.map((row) => row.paneId)).toEqual(["p-block", "p-done", "p-work"]);
+  });
+
+  it("includes a pane that has an agent even when the agent list omitted it", () => {
+    const listed = listedAgents(
+      [{ paneId: "p-block", agentStatus: "blocked", agent: "claude" }],
+      [
+        { paneId: "p-block", workspaceId: "alpha", agentStatus: "blocked", agent: "claude" },
+        { paneId: "p-extra", workspaceId: "beta", agentStatus: "working", agentName: "cursor" },
+      ],
+      [
+        { workspaceId: "alpha", label: "Alpha" },
+        { workspaceId: "beta", label: "Beta" },
+      ],
+    );
+    expect(listed.map((row) => [row.paneId, row.title])).toEqual([
+      ["p-block", "Alpha"],
+      ["p-extra", "Beta"],
+    ]);
   });
 
   it("puts an agent that needs attention ahead of the others", () => {

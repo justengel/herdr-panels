@@ -94,6 +94,18 @@ Every panel title bar shows that panel's name, and the close button sits at the 
 - Typing `exit` in a shell closes that panel after Herdr drops the pane. A panel pointed at a pane that was already gone stays open so you can pick another pane.
 - Resizing a shell panel changes its columns and rows. The glyphs stay the same size and the text stays at the top. Keystrokes follow Herdr's live screen, including the cursor.
 
+### Keyboard
+
+The desk can be driven from the keyboard. **Keys** in the top bar lists the shortcuts, and so does Prefix+? (the prefix defaults to Ctrl+B, the same one Herdr uses).
+
+Prefix+H, J, K, and L still move between Herdr panes. Focusing a desk panel is one shortcut with two chords by default: Alt+Shift+Arrow and Prefix+Arrow. Prefix+Alt+Arrow swaps that panel with the neighbor in that direction. The focused panel has an accent bar on its title. Prefix+Tab cycles panels. Prefix+Z zooms that panel.
+
+Prefix+Alt+N and Prefix+Alt+P move between spaces. Prefix+Shift+1 through 9 jumps to a space. Prefix+Alt+Period and Prefix+Alt+Comma move between agents, and Prefix+Alt+1 through 9 jumps to an agent. Prefix+G focuses the address bar. Prefix+A opens the Agents list, and Prefix+B or Prefix+W opens the Spaces list. Up and Down move in those lists. Enter opens the highlighted row. Prefix+Alt+W closes the focused panel. The last panel stays.
+
+Keybinds, then Panels, lists every desk shortcut. Change records the keys you press. An action with more than one chord stores them as a comma-separated list. Reset puts the usual chords back. Those shortcuts belong to this window.
+
+A browser page keeps keys to itself. Click the panel title to use the desk shortcuts again. Opening and resizing stay on the pointer, or on `herdr-panels panel` for an agent.
+
 ### Design mode
 
 The Design button turns the workspace into an editor:

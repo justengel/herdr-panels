@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import type { PanelConfig, TabEdge } from "../types";
 import type { MenuEntry } from "../viewMenu";
 import { fitFlyout, useKeepMenuOnScreen, type FlyoutBox } from "../menuPlace";
+import { useKeyedPanel } from "../deskKeyboard";
 import { usePanelActions, usePanelDrag } from "../panelActions";
 
 interface Props {
@@ -83,6 +84,7 @@ export function PanelChrome({
 }: Props) {
   const panelActions = usePanelActions();
   const drag = usePanelDrag();
+  const keyed = useKeyedPanel();
   const [menu, setMenu] = useState<{ left?: number; right?: number; top: number } | null>(null);
   const [flyout, setFlyout] = useState<FlyoutKind | null>(null);
   const [flyoutBox, setFlyoutBox] = useState<FlyoutBox | null>(null);
@@ -198,7 +200,13 @@ export function PanelChrome({
     );
   }, [flyout]);
   const dragging = Boolean(panelId && drag.draggingId === panelId);
-  const classes = ["panel", className, plain ? "is-plain" : "", dragging ? "is-drag-source" : ""]
+  const classes = [
+    "panel",
+    className,
+    plain ? "is-plain" : "",
+    dragging ? "is-drag-source" : "",
+    panelId && keyed.id === panelId ? "is-keyed" : "",
+  ]
     .filter(Boolean)
     .join(" ");
   const viewEntries = entries.filter((entry) => entry.section === "view");
@@ -314,7 +322,11 @@ export function PanelChrome({
       className={classes}
       data-panel-id={panelId}
       data-kind={kind}
-      onClick={onClick}
+      tabIndex={-1}
+      onClick={(event) => {
+        onClick?.(event);
+        if (panelId) keyed.set(panelId);
+      }}
     >
       {plain ? (
         <div className="plain-actions">

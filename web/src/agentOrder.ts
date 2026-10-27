@@ -17,6 +17,43 @@ export function nextAgentSort(sort: string): AgentSort {
   return sort === "priority" ? "spaces" : "priority";
 }
 
+export function listedAgents(
+  agents: { paneId: string; agentStatus?: string }[],
+  panes: {
+    paneId: string;
+    workspaceId?: string;
+    agentStatus?: string;
+    agent?: string | null;
+    agentName?: string | null;
+  }[],
+  workspaces: { workspaceId: string; label: string }[],
+): AgentListRow[] {
+  const listed = new Set(agents.map((agent) => agent.paneId));
+  const titleFor = (workspaceId: string | undefined, paneId: string) => {
+    const space = workspaces.find((item) => item.workspaceId === workspaceId);
+    return space?.label || workspaceId || paneId;
+  };
+  return [
+    ...agents.map((agent) => {
+      const pane = panes.find((item) => item.paneId === agent.paneId);
+      return {
+        paneId: agent.paneId,
+        workspaceId: pane?.workspaceId ?? "",
+        status: agent.agentStatus || "unknown",
+        title: titleFor(pane?.workspaceId, agent.paneId),
+      };
+    }),
+    ...panes
+      .filter((pane) => (pane.agent || pane.agentName) && !listed.has(pane.paneId))
+      .map((pane) => ({
+        paneId: pane.paneId,
+        workspaceId: pane.workspaceId ?? "",
+        status: pane.agentStatus || "unknown",
+        title: titleFor(pane.workspaceId, pane.paneId),
+      })),
+  ];
+}
+
 export function orderAgents<T extends AgentListRow>(rows: T[], sort: string, workspaceOrder: string[]): T[] {
   const place = new Map(workspaceOrder.map((id, index) => [id, index]));
   const seen = new Map(rows.map((row, index) => [row.paneId, index]));

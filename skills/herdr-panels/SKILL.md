@@ -14,6 +14,8 @@ Prefer `herdr-panels panel` and `herdr-panels plugin`. Those commands attach the
 
 The viewer is usually `http://127.0.0.1:4737`. If it was started elsewhere, use the address in `server.json` in the viewer config directory. Run `herdr-panels panel list` before changing the desk. Address a panel by its unique title or its id. Names are compared without case. If two panels share a name, the call fails with `more than one panel has that name`; rename one first. Panel commands edit the focused space of the current Herdr session's desk, including the pins that space shows.
 
+The person at the desk can focus panels, swap a focused panel with its neighbor, and switch spaces and agents from the keyboard. Keep arranging the desk with the panel commands. Do not send keystrokes to change the layout.
+
 ## Arrange the desk
 
 ```text

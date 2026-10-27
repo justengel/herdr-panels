@@ -1,5 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
 import type { HerdrConfig, HerdrField, HerdrIntegration } from "../api";
+import {
+  DESK_ACTIONS,
+  bindingPlaceholder,
+  isDeskKey,
+  resolveDeskBindings,
+  sameBindingList,
+  summarizeBindings,
+} from "../deskKeys";
+import { KeyCapture } from "./KeyCapture";
 import { IndicatorSample } from "./StatusMark";
 
 const ORDER = [
@@ -104,6 +113,9 @@ export function HerdrSettings({
   onSaveSettings,
   onSaveKeys,
   onIntegration,
+  deskBindings,
+  deskOverrides,
+  onDeskBinding,
 }: {
   config: HerdrConfig;
   mode: "settings" | "keybinds";
@@ -112,6 +124,9 @@ export function HerdrSettings({
   onSaveSettings: (settings: Record<string, string | number | boolean>) => Promise<void>;
   onSaveKeys: (keys: Record<string, string>) => Promise<void>;
   onIntegration: (target: string, action: "install" | "uninstall") => Promise<void>;
+  deskBindings: Record<string, string>;
+  deskOverrides: Record<string, string>;
+  onDeskBinding: (id: string, value: string | null) => void;
 }) {
   const tabs = useMemo(() => tabsFor(config.settings), [config.settings]);
   const [tab, setTab] = useState(tabs[0] ?? "theme");
@@ -119,6 +134,8 @@ export function HerdrSettings({
   const [settings, setSettings] = useState(config.settings);
   const [keys, setKeys] = useState(config.keys);
   const [query, setQuery] = useState("");
+  const [keyTab, setKeyTab] = useState<"herdr" | "panels">("herdr");
+  const [editing, setEditing] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -130,11 +147,12 @@ export function HerdrSettings({
   }, [tab, tabs]);
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
+      if (editing) return;
       if (event.key === "Escape") onClose();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  }, [editing, onClose]);
 
   async function chooseTheme(name: string) {
     const previous = theme;
@@ -197,17 +215,30 @@ export function HerdrSettings({
     setSettings((current) => current.map((item) => (item.key === field.key ? { ...item, value } : item)));
   }
 
+  function setKeyValue(key: string, value: string) {
+    setKeys((current) => current.map((item) => (item.key === key ? { ...item, value } : item)));
+  }
+
   const fields = settings.filter((field) => field.group === tab);
-  const shownKeys = keys.filter((field) => {
-    const needle = query.trim().toLowerCase();
+  const needle = query.trim().toLowerCase();
+  const matchesKey = (field: HerdrField) =>
+    !needle ||
+    field.label.toLowerCase().includes(needle) ||
+    field.key.toLowerCase().includes(needle) ||
+    String(field.value ?? "").toLowerCase().includes(needle);
+  const shownHerdrKeys = keys.filter((field) => !isDeskKey(field.key) && matchesKey(field));
+  const shownDeskActions = DESK_ACTIONS.filter((action) => {
     if (!needle) return true;
+    const text = deskBindings[action.id] ?? "";
     return (
-      field.label.toLowerCase().includes(needle) ||
-      field.key.toLowerCase().includes(needle) ||
-      String(field.value ?? "").toLowerCase().includes(needle)
+      action.does.toLowerCase().includes(needle) ||
+      action.id.includes(needle) ||
+      text.toLowerCase().includes(needle) ||
+      summarizeBindings(text).toLowerCase().includes(needle)
     );
   });
-  const needsApply = mode === "keybinds" || (tab !== "integrations" && fields.length > 0);
+  const editingAction = DESK_ACTIONS.find((action) => action.id === editing) ?? null;
+  const needsApply = mode === "keybinds" ? keyTab === "herdr" : tab !== "integrations" && fields.length > 0;
 
   return (
     <div className="settings-backdrop" onMouseDown={onClose}>
@@ -216,8 +247,9 @@ export function HerdrSettings({
         onMouseDown={(event) => event.stopPropagation()}
         onSubmit={(event) => {
           event.preventDefault();
-          if (mode === "keybinds") void saveKeys();
-          else if (needsApply) void saveGroup();
+          if (mode === "keybinds") {
+            if (keyTab === "herdr") void saveKeys();
+          } else if (needsApply) void saveGroup();
         }}
       >
         <header>
@@ -242,17 +274,44 @@ export function HerdrSettings({
             ))}
           </div>
         ) : (
-          <input
-            className="settings-filter"
-            aria-label="Filter keybinds"
-            placeholder="Filter keybinds"
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-          />
+          <>
+            <div className="settings-tabs" role="tablist" aria-label="Keybind groups">
+              <button
+                type="button"
+                role="tab"
+                aria-selected={keyTab === "herdr"}
+                className={keyTab === "herdr" ? "on" : undefined}
+                onClick={() => setKeyTab("herdr")}
+              >
+                Herdr
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={keyTab === "panels"}
+                className={keyTab === "panels" ? "on" : undefined}
+                onClick={() => setKeyTab("panels")}
+              >
+                Panels
+              </button>
+            </div>
+            <input
+              className="settings-filter"
+              aria-label="Filter keybinds"
+              placeholder="Filter keybinds"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+            />
+          </>
         )}
-        {mode === "keybinds" ? (
+        {mode === "keybinds" && keyTab === "herdr" ? (
           <p className="settings-note">
-            These shortcuts run in this window. They are saved in Herdr, so a Herdr terminal uses the same keys. Shortcuts that only the terminal uses are omitted.
+            These shortcuts are saved in Herdr, so a Herdr terminal uses them too. Panel shortcuts are on the Panels tab. Shortcuts that only the terminal uses are omitted.
+          </p>
+        ) : null}
+        {mode === "keybinds" && keyTab === "panels" ? (
+          <p className="settings-note">
+            One row is one action. Several chords are separated by commas, so Alt+Shift+Arrows and Prefix+Arrows are a single shortcut. Change records the keys you press. Saved in this browser. Reset puts the usual chords back.
           </p>
         ) : null}
         {mode === "settings" && BLURB[tab] ? <p className="settings-note">{BLURB[tab]}</p> : null}
@@ -301,22 +360,61 @@ export function HerdrSettings({
               </div>
             ))
           : null}
-        {mode === "keybinds" ? (
+        {mode === "keybinds" && keyTab === "herdr" ? (
           <section>
-            {shownKeys.map((field) => (
+            {shownHerdrKeys.map((field) => (
               <label className="setting-line" key={field.key}>
                 <span>{field.label}</span>
                 <input
                   aria-label={field.label}
                   value={String(field.value ?? "")}
+                  placeholder={bindingPlaceholder(field.key) || undefined}
                   spellCheck={false}
-                  onChange={(event) =>
-                    setKeys((current) => current.map((item) => (item.key === field.key ? { ...item, value: event.target.value } : item)))
-                  }
+                  onChange={(event) => setKeyValue(field.key, event.target.value)}
                 />
               </label>
             ))}
           </section>
+        ) : null}
+        {mode === "keybinds" && keyTab === "panels" ? (
+          <section>
+            {shownDeskActions.map((action) => {
+              const value = deskBindings[action.id] ?? "";
+              const label = summarizeBindings(value) || "None";
+              return (
+                <div className="setting-line" key={action.id}>
+                  <span>{action.does}</span>
+                  <button
+                    type="button"
+                    className="key-edit"
+                    aria-label={`Change ${action.does}: ${label}`}
+                    onClick={() => setEditing(action.id)}
+                  >
+                    <span className="key-chord">{label}</span>
+                    <span className="key-edit-action">Change</span>
+                  </button>
+                </div>
+              );
+            })}
+          </section>
+        ) : null}
+        {editingAction ? (
+          <KeyCapture
+            action={editingAction}
+            value={deskBindings[editingAction.id] ?? ""}
+            fallback={fallbackFor(editingAction.id, deskOverrides, config.keys)}
+            prefixBinding={String(config.keys.find((field) => field.key === "prefix")?.value || "ctrl+b")}
+            taken={DESK_ACTIONS.filter((action) => action.id !== editingAction.id).map((action) => ({
+              chords: deskBindings[action.id] ?? "",
+              does: action.does,
+            }))}
+            onClose={() => setEditing(null)}
+            onSave={(value) => {
+              const fallback = fallbackFor(editingAction.id, deskOverrides, config.keys);
+              onDeskBinding(editingAction.id, sameBindingList(value, fallback) ? null : value);
+              setEditing(null);
+            }}
+          />
         ) : null}
         {error ? <p className="settings-error">{error}</p> : null}
         {needsApply ? (
@@ -334,6 +432,12 @@ export function HerdrSettings({
       </form>
     </div>
   );
+}
+
+function fallbackFor(id: string, overrides: Record<string, string>, keys: HerdrField[]): string {
+  const rest = { ...overrides };
+  delete rest[id];
+  return resolveDeskBindings(rest, keys)[id] ?? "";
 }
 
 function tabsFor(settings: HerdrField[]): string[] {

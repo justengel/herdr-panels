@@ -38,17 +38,24 @@ export function expandBinding(binding: string): Chord[] {
   return chord.key ? [chord] : [];
 }
 
-export function eventKey(event: KeyboardEvent): string {
+export function eventKey(event: { key: string }): string {
   const raw = event.key.length === 1 ? event.key.toLowerCase() : event.key.toLowerCase();
   return KEY_ALIAS[raw] ?? raw;
 }
 
-export function chordMatches(chord: Chord, event: KeyboardEvent, prefix: boolean): boolean {
+export function chordMatches(
+  chord: Chord,
+  event: { key: string; code?: string; ctrlKey: boolean; altKey: boolean; shiftKey: boolean; metaKey: boolean },
+  prefix: boolean,
+): boolean {
   if (chord.prefix !== prefix) return false;
   if (chord.ctrl !== event.ctrlKey || chord.alt !== event.altKey || chord.meta !== event.metaKey) return false;
   const key = eventKey(event);
-  if (key !== chord.key && !(chord.key === "?" && key === "/")) return false;
+  const digit = event.code?.match(/^Digit([1-9])$/)?.[1];
+  const keyOk = key === chord.key || (chord.key === "?" && key === "/") || (digit !== undefined && chord.key === digit);
+  if (!keyOk) return false;
   if (chord.shift) return event.shiftKey;
   if (/^[a-z]$/.test(chord.key) && event.shiftKey) return false;
+  if (/^[1-9]$/.test(chord.key) && event.shiftKey) return false;
   return true;
 }

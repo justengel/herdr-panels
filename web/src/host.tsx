@@ -1,5 +1,17 @@
-import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { api, type HerdrConfig, type HerdrField } from "./api";
+import {
+  asDeskCommand,
+  DESK_ACTIONS,
+  effectiveBinding,
+  isDeskKey,
+  matchDesk,
+  missingBindings,
+  readDeskOverrides,
+  resolveDeskBindings,
+  writeDeskOverrides,
+  type DeskCommand,
+} from "./deskKeys";
 import { chordMatches, eventKey, expandBinding } from "./herdrKeys";
 import { HerdrSettings } from "./components/HerdrSettings";
 import { applyTheme } from "./themes";
@@ -17,6 +29,8 @@ interface HostValue {
   updateReady: () => void;
   detachView: () => void;
   consume: (event: KeyboardEvent) => boolean;
+  /** True after the prefix key, before the following key. Reads the live flag, not the painted one. */
+  prefixArmed: () => boolean;
   createSpace: (label?: string) => Promise<void>;
   renameSpace: (workspaceId: string, label: string) => Promise<void>;
   closeSpace: (workspaceId: string) => Promise<void>;
@@ -25,6 +39,10 @@ interface HostValue {
   saveKeys: (keys: Record<string, string>) => Promise<void>;
   setIntegration: (target: string, action: "install" | "uninstall") => Promise<void>;
   setAgentOrder: (sort: "spaces" | "priority") => Promise<void>;
+  registerDesk: (handler: (command: DeskCommand) => void) => void;
+  deskBindings: Record<string, string>;
+  deskOverrides: Record<string, string>;
+  setDeskBinding: (id: string, value: string | null) => void;
 }
 
 const HostContext = createContext<HostValue | null>(null);
@@ -39,14 +57,11 @@ export function HostProvider({
   runtime,
   onRuntime,
   onNotice,
-  onSwitchSpace,
   children,
 }: {
   runtime: RuntimeSnapshot | null;
   onRuntime: (runtime: RuntimeSnapshot) => void;
   onNotice: (message: string) => void;
-  /** Instant local space swap; used instead of awaiting Herdr focus. */
-  onSwitchSpace?: (workspaceId: string) => void;
   children: ReactNode;
 }) {
   const [config, setConfig] = useState<HerdrConfig | null>(null);
@@ -59,12 +74,28 @@ export function HostProvider({
   const runtimeRef = useRef(runtime);
   const noticeRef = useRef(onNotice);
   const runtimeCb = useRef(onRuntime);
-  const switchSpaceCb = useRef(onSwitchSpace);
+  const deskHandler = useRef<(command: DeskCommand) => void>(() => {});
+  const registerDesk = useCallback((handler: (command: DeskCommand) => void) => {
+    deskHandler.current = handler;
+  }, []);
+  const [deskOverrides, setDeskOverrides] = useState(() => readDeskOverrides(browserStorage()));
+  const deskOverridesRef = useRef(deskOverrides);
+  deskOverridesRef.current = deskOverrides;
+  const setDeskBinding = useCallback((id: string, value: string | null) => {
+    if (!DESK_ACTIONS.some((action) => action.id === id)) return;
+    setDeskOverrides((current) => {
+      const next = { ...current };
+      if (value === null) delete next[id];
+      else next[id] = value;
+      writeDeskOverrides(browserStorage(), next);
+      return next;
+    });
+  }, []);
+  const deskBindings = useMemo(() => resolveDeskBindings(deskOverrides, config?.keys), [deskOverrides, config]);
   configRef.current = config;
   runtimeRef.current = runtime;
   noticeRef.current = onNotice;
   runtimeCb.current = onRuntime;
-  switchSpaceCb.current = onSwitchSpace;
 
   useEffect(() => {
     void api
@@ -85,7 +116,6 @@ export function HostProvider({
     const workspaceId = current?.focusedWorkspaceId || undefined;
     const tabId = current?.focusedTabId || undefined;
     const paneId = current?.focusedPaneId;
-    const spaces = current?.workspaces ?? [];
     const tabs = (current?.tabs ?? []).filter((tab) => !workspaceId || tab.workspaceId === workspaceId);
     const step = (items: { id: string }[], currentId: string | undefined, delta: number) => {
       if (items.length === 0) return undefined;
@@ -101,27 +131,23 @@ export function HostProvider({
       else if (action === "close_workspace") setCloseTick((tick) => tick + 1);
       else if (action === "settings") setSettingsView("settings");
       else if (action === "previous_workspace" || action === "next_workspace") {
-        const id = step(
-          spaces.map((space) => ({ id: space.workspaceId })),
-          workspaceId,
-          action === "next_workspace" ? 1 : -1,
-        );
-        if (id) {
-          if (switchSpaceCb.current) switchSpaceCb.current(id);
-          else {
-            await api.focus({ workspaceId: id });
-            await refresh();
-          }
-        }
+        deskHandler.current({ action: "cycle-space", delta: action === "next_workspace" ? 1 : -1 });
       } else if (action === "switch_workspace" && index) {
-        const space = spaces[index - 1];
-        if (space) {
-          if (switchSpaceCb.current) switchSpaceCb.current(space.workspaceId);
-          else {
-            await api.focus({ workspaceId: space.workspaceId });
-            await refresh();
-          }
-        }
+        deskHandler.current({ action: "space", index });
+      } else if (action === "zoom") {
+        deskHandler.current({ action: "zoom" });
+      } else if (action === "cycle_pane_next" || action === "cycle_pane_previous") {
+        deskHandler.current({ action: "cycle-panel", delta: action === "cycle_pane_next" ? 1 : -1 });
+      } else if (action === "help") {
+        deskHandler.current({ action: "help" });
+      } else if (action === "goto") {
+        deskHandler.current({ action: "address" });
+      } else if (action === "workspace_picker" || action === "toggle_sidebar") {
+        deskHandler.current({ action: "spaces" });
+      } else if (action === "next_agent" || action === "previous_agent") {
+        deskHandler.current({ action: "cycle-agent", delta: action === "next_agent" ? 1 : -1 });
+      } else if (action === "focus_agent" && index) {
+        deskHandler.current({ action: "agent", index });
       } else if (action === "new_tab") {
         await api.herdrAction({ action: "tab.create", workspaceId });
         await refresh();
@@ -169,6 +195,20 @@ export function HostProvider({
   const consumeRef = useRef<(event: KeyboardEvent) => boolean>(() => false);
   consumeRef.current = (event) => {
     if (event.key === "F12" || event.isComposing) return false;
+    if (foreignDialog()) {
+      if (event.key === "Escape") return false;
+      event.preventDefault();
+      return true;
+    }
+    const bindings = resolveDeskBindings(deskOverridesRef.current, configRef.current?.keys);
+    const direct = asDeskCommand(matchDesk(bindings, event, false));
+    if (direct) {
+      prefixRef.current = false;
+      setPrefix(false);
+      event.preventDefault();
+      deskHandler.current(direct);
+      return true;
+    }
     const doc = configRef.current;
     if (!doc) return false;
     const prefixBinding = fieldValue(doc.keys, "prefix") || "ctrl+b";
@@ -185,14 +225,39 @@ export function HostProvider({
       event.preventDefault();
       return true;
     }
+    if (prefixRef.current) {
+      const prefixed = asDeskCommand(matchDesk(bindings, event, true));
+      if (prefixed) {
+        prefixRef.current = false;
+        setPrefix(false);
+        event.preventDefault();
+        deskHandler.current(prefixed);
+        return true;
+      }
+    }
+    const seen = new Set<string>();
     for (const field of doc.keys) {
-      if (field.key === "prefix" || typeof field.value !== "string" || !field.value) continue;
-      for (const chord of expandBinding(field.value)) {
+      seen.add(field.key);
+      if (field.key === "prefix" || isDeskKey(field.key) || typeof field.value !== "string") continue;
+      const value = effectiveBinding(field.key, field.value);
+      if (!value) continue;
+      for (const chord of expandBinding(value)) {
         if (!chordMatches(chord, event, prefixRef.current)) continue;
         prefixRef.current = false;
         setPrefix(false);
         event.preventDefault();
         void runAction(field.key, chord.index);
+        return true;
+      }
+    }
+    for (const [key, value] of missingBindings()) {
+      if (seen.has(key) || isDeskKey(key) || !value) continue;
+      for (const chord of expandBinding(value)) {
+        if (!chordMatches(chord, event, prefixRef.current)) continue;
+        prefixRef.current = false;
+        setPrefix(false);
+        event.preventDefault();
+        void runAction(key, chord.index);
         return true;
       }
     }
@@ -208,7 +273,7 @@ export function HostProvider({
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       const target = event.target;
-      if (target instanceof Element && target.closest("input, textarea, select, .xterm, .herdr-settings")) return;
+      if (target instanceof Element && target.closest("input, textarea, select, .xterm, .herdr-settings, .key-capture-backdrop")) return;
       consumeRef.current(event);
     };
     window.addEventListener("keydown", onKey);
@@ -309,6 +374,7 @@ export function HostProvider({
     updateReady,
     detachView,
     consume: (event) => consumeRef.current(event),
+    prefixArmed: () => prefixRef.current,
     createSpace,
     renameSpace,
     closeSpace,
@@ -317,6 +383,10 @@ export function HostProvider({
     saveKeys,
     setIntegration,
     setAgentOrder,
+    registerDesk,
+    deskBindings,
+    deskOverrides,
+    setDeskBinding,
   };
 
   return (
@@ -332,10 +402,25 @@ export function HostProvider({
           onSaveSettings={saveSettings}
           onSaveKeys={saveKeys}
           onIntegration={setIntegration}
+          deskBindings={deskBindings}
+          deskOverrides={deskOverrides}
+          onDeskBinding={setDeskBinding}
         />
       ) : null}
     </HostContext.Provider>
   );
+}
+
+function browserStorage(): Pick<Storage, "getItem" | "setItem"> | null {
+  try {
+    return typeof localStorage === "undefined" ? null : localStorage;
+  } catch {
+    return null;
+  }
+}
+
+function foreignDialog(): boolean {
+  return Boolean(document.querySelector(".settings-backdrop, .dialog-backdrop:not(.key-help)"));
 }
 
 function fieldValue(fields: HerdrField[], key: string): string {

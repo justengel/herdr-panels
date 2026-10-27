@@ -288,12 +288,27 @@ export function markWorkspaceFocused(
 export function preferPendingSpace(
   runtime: RuntimeSnapshot,
   pendingWorkspaceId: string | null,
+  pendingPaneId?: string | null,
 ): RuntimeSnapshot {
   if (!pendingWorkspaceId) return runtime;
-  if (runtime.focusedWorkspaceId === pendingWorkspaceId) return runtime;
+  if (
+    runtime.focusedWorkspaceId === pendingWorkspaceId &&
+    (!pendingPaneId || runtime.focusedPaneId === pendingPaneId)
+  ) {
+    return runtime;
+  }
   const inSpace = runtime.panes.filter((pane) => pane.workspaceId === pendingWorkspaceId);
-  const pane = inSpace.find((item) => item.focused) ?? inSpace[0] ?? null;
+  const requested = pendingPaneId ? inSpace.find((pane) => pane.paneId === pendingPaneId) : null;
+  const pane = requested ?? inSpace.find((item) => item.focused) ?? inSpace[0] ?? null;
   return markWorkspaceFocused(runtime, pendingWorkspaceId, pane?.paneId ?? null);
+}
+
+/** Keep a keyboard-chosen pane focused until Herdr's snapshot agrees. */
+export function preferPendingPane(runtime: RuntimeSnapshot, pendingPaneId: string | null): RuntimeSnapshot {
+  if (!pendingPaneId || runtime.focusedPaneId === pendingPaneId) return runtime;
+  const pane = runtime.panes.find((item) => item.paneId === pendingPaneId);
+  if (!pane) return runtime;
+  return markWorkspaceFocused(runtime, pane.workspaceId, pendingPaneId);
 }
 
 /** Bind the first Terminal panel to a pane without waiting on Herdr. */

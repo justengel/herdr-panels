@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { markWorkspaceFocused, preferPendingSpace } from "../src/spaceLayout";
+import { markWorkspaceFocused, preferPendingPane, preferPendingSpace } from "../src/spaceLayout";
 import type { RuntimeSnapshot } from "../src/types";
 
 const runtime: RuntimeSnapshot = {
@@ -49,5 +49,25 @@ describe("space switch while Herdr catches up", () => {
 
   it("passes through when nothing is pending", () => {
     expect(preferPendingSpace(runtime, null)).toBe(runtime);
+  });
+
+  it("uses the requested pane when that space has several", () => {
+    const two = {
+      ...runtime,
+      panes: [...runtime.panes, { ...runtime.panes[1], paneId: "w2:p2", focused: false, title: "b2" }],
+    };
+    const next = preferPendingSpace(two, "ws-b", "w2:p2");
+    expect(next.focusedWorkspaceId).toBe("ws-b");
+    expect(next.focusedPaneId).toBe("w2:p2");
+    expect(next.panes.find((pane) => pane.paneId === "w2:p2")?.focused).toBe(true);
+  });
+
+  it("keeps a requested pane focused until Herdr agrees", () => {
+    const stale = markWorkspaceFocused(runtime, "ws-a", "w2:p1");
+    const next = preferPendingPane(stale, "w1:p1");
+    expect(next.focusedPaneId).toBe("w1:p1");
+    expect(next.panes.find((pane) => pane.paneId === "w1:p1")?.focused).toBe(true);
+    expect(preferPendingPane(runtime, "w1:p1")).toBe(runtime);
+    expect(preferPendingPane(runtime, null)).toBe(runtime);
   });
 });

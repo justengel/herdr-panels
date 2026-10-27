@@ -439,13 +439,8 @@ const TUI_SECTIONS: &[&str] = &["ui.toast.herdr", "ui.toast.clipboard"];
 /// runs are kept, because they are stored in the same Herdr file.
 const TUI_KEYBINDS: &[&str] = &[
     "clear_pane",
-    "cycle_pane_next",
-    "cycle_pane_previous",
     "detach",
     "edit_scrollback",
-    "focus_agent",
-    "goto",
-    "help",
     "last_pane",
     "move_tab_next",
     "move_tab_previous",
@@ -456,10 +451,8 @@ const TUI_KEYBINDS: &[&str] = &[
     "navigate_workspace_down",
     "navigate_workspace_up",
     "new_worktree",
-    "next_agent",
     "open_notification_target",
     "open_worktree",
-    "previous_agent",
     "remote_image_paste",
     "remove_worktree",
     "rename_pane",
@@ -469,10 +462,7 @@ const TUI_KEYBINDS: &[&str] = &[
     "resize_pane_left",
     "resize_pane_right",
     "resize_pane_up",
-    "toggle_sidebar",
     "type",
-    "workspace_picker",
-    "zoom",
 ];
 
 fn tui_only(section: &str, key: &str) -> bool {
@@ -1247,9 +1237,12 @@ mod tests {
         assert!(!tui_only("terminal", "default_shell"));
         assert!(!tui_only("session", "resume_agents_on_restore"));
         assert!(!tui_only("ui.sound", "enabled"));
-        assert!(tui_key("zoom"));
-        assert!(tui_key("toggle_sidebar"));
+        assert!(!tui_key("zoom"));
+        assert!(!tui_key("toggle_sidebar"));
+        assert!(!tui_key("help"));
+        assert!(!tui_key("next_agent"));
         assert!(tui_key("type"));
+        assert!(tui_key("detach"));
         assert!(!tui_key("prefix"));
         assert!(!tui_key("new_workspace"));
         assert!(!tui_key("split_vertical"));

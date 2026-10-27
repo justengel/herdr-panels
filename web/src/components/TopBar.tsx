@@ -16,6 +16,7 @@ interface Props {
   onRenameSession: (name: string) => void;
   onCloseSession: () => void;
   onSelect: () => void;
+  onShowKeys: () => void;
   onAddPanel: () => void;
   onExitZoom: () => void;
   onHerdrAction: (action: HerdrStatusAction) => void;
@@ -34,6 +35,7 @@ export function TopBar({
   onRenameSession,
   onCloseSession,
   onSelect,
+  onShowKeys,
   onAddPanel,
   onExitZoom,
   onHerdrAction,
@@ -150,6 +152,9 @@ export function TopBar({
         </button>
       ) : null}
       <div className="topbar-spacer" />
+      <button type="button" className="quiet" title="Keyboard shortcuts" onClick={onShowKeys}>
+        Keys
+      </button>
       <button
         type="button"
         className="quiet"

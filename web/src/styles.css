@@ -1020,6 +1020,65 @@ body.panel-dragging, body.panel-dragging * { cursor: grabbing !important; user-s
   color: var(--muted);
   font-size: 13px;
 }
+.setting-line input { width: 100%; }
+.setting-keys { display: flex; flex-direction: column; gap: 6px; }
+.key-chord {
+  color: var(--text);
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 12px;
+}
+.key-edit {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  text-align: left;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  color: inherit;
+  border-radius: 4px;
+  padding: 4px 8px;
+  cursor: pointer;
+}
+.key-edit .key-chord { white-space: normal; }
+.key-edit-action { color: var(--muted); font-size: 11px; flex: 0 0 auto; }
+.key-capture-backdrop { z-index: 80; }
+.key-capture-dialog { width: min(520px, calc(100vw - 32px)); }
+.key-chips {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.key-chips li {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  padding: 2px 4px 2px 8px;
+  background: var(--bg);
+}
+.key-chips kbd { font-family: ui-monospace, Consolas, monospace; font-size: 12px; }
+.key-chips button {
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 0 4px;
+}
+.key-capture-backdrop .dialog-actions button {
+  border: 1px solid var(--line-strong);
+  background: var(--bg);
+  border-radius: 4px;
+  padding: 4px 10px;
+  cursor: pointer;
+}
+.key-capture-status { margin: 0; min-height: 1.2em; font-size: 13px; }
 .choice-list { display: flex; flex-direction: column; gap: 4px; margin-top: 8px; }
 .choice-list button {
   display: flex;
@@ -1250,7 +1309,30 @@ body.panel-dragging, body.panel-dragging * { cursor: grabbing !important; user-s
   cursor: pointer;
 }
 
-.panel.selected { border-color: var(--accent); }
+.panel.selected,
+.panel.is-keyed { border-color: var(--accent); }
+.panel.is-keyed > .panel-header { box-shadow: inset 3px 0 0 var(--accent); }
+.panel:focus,
+.panel:focus-visible { outline: none; }
+
+.key-help-dialog { width: min(640px, calc(100vw - 48px)); max-height: calc(100vh - 48px); }
+.key-help-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.key-help-list li {
+  display: grid;
+  grid-template-columns: minmax(11rem, 18rem) 1fr;
+  gap: 12px;
+  align-items: baseline;
+}
+.key-help-list kbd { font-family: inherit; font-size: 13px; }
+.key-help-list span { color: var(--muted); font-size: 13px; }
 
 .fill { position: relative; width: 100%; height: 100%; }
 
