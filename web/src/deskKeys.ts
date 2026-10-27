@@ -157,7 +157,7 @@ export const DESK_ACTIONS: DeskAction[] = [
   },
   {
     id: "zoom",
-    does: "Zoom the focused panel, or show the whole desk",
+    does: "Fill the screen with the focused panel, or show the whole desk",
     defaults: "prefix+z",
     herdr: ["zoom"],
     once: true,

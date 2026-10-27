@@ -12,3 +12,8 @@ commands.allow = ["close_browser"]
 identifier = "allow-set-browser-select"
 description = "Turn element selection on or off inside browser panels."
 commands.allow = ["set_browser_select"]
+
+[[permission]]
+identifier = "allow-set-display-zoom"
+description = "Scale the desktop window and every browser panel together."
+commands.allow = ["set_display_zoom"]

@@ -132,6 +132,21 @@ async fn handle_client(
             json!({"type": "resized", "cols": cols, "rows": rows}).to_string(),
         ));
     }
+    if value.get("type").and_then(Value::as_str) == Some("scroll") {
+        let direction = value.get("direction").and_then(Value::as_str).unwrap_or("");
+        let source = value
+            .get("source")
+            .and_then(Value::as_str)
+            .unwrap_or("wheel");
+        let lines = dimension(&value, "lines")
+            .ok_or_else(|| Fault::Size("lines must be a number".into()))?;
+        state
+            .controls
+            .scroll(pane_id, direction, lines, source)
+            .await
+            .map_err(Fault::Size)?;
+        return Ok(None);
+    }
     let client = state.runtime.client().clone();
     apply_text(&client, pane_id, text)
         .await

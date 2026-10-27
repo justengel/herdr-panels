@@ -76,7 +76,7 @@ export function DesignBar(props: Props) {
               Close
             </button>
             <button type="button" onClick={() => props.onZoom(props.zoomedId === panel.id ? null : panel.id)}>
-              {props.zoomedId === panel.id ? "Exit zoom" : "Zoom"}
+              {props.zoomedId === panel.id ? "Show the desk" : "Fill screen"}
             </button>
             {herdrPane ? (
               <label className="check">

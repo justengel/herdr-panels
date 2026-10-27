@@ -1776,6 +1776,7 @@ dependencies = [
  "tauri-build",
  "tokio",
  "url",
+ "windows",
 ]
 
 [[package]]

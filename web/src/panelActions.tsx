@@ -11,6 +11,9 @@ export interface PanelActions {
   edge: (id: string, edge: TabEdge) => void;
   place: (sourceId: string, targetId: string, place: PanelPlace) => void;
   rename: (id: string, title: string) => void;
+  /** Fill the screen with this panel, or show the whole desk when it already does. */
+  fill: (id: string) => void;
+  filledId: string | null;
 }
 
 interface DragState {

@@ -169,6 +169,39 @@ impl PaneControls {
         }
     }
 
+    /// Ask Herdr to move the pane's viewport. The live frame that comes back is the scrolled screen.
+    pub async fn scroll(
+        &self,
+        pane_id: &str,
+        direction: &str,
+        lines: u16,
+        source: &str,
+    ) -> Result<(), String> {
+        if direction != "up" && direction != "down" {
+            return Err("scroll direction must be up or down".into());
+        }
+        if source != "wheel" && source != "page_key" {
+            return Err("scroll source must be wheel or page_key".into());
+        }
+        if !is_pane_id(pane_id) {
+            return Err("invalid pane id".into());
+        }
+        let lines = lines.clamp(1, 200);
+        let tx = {
+            let map = self.inner.lock().await;
+            let Some(slot) = map.get(pane_id) else {
+                return Ok(());
+            };
+            slot.io.as_ref().map(|io| io.tx.clone())
+        };
+        let Some(tx) = tx else {
+            return Ok(());
+        };
+        tx.send(scroll_command(direction, lines, source))
+            .await
+            .map_err(|_| "terminal size controller closed".to_string())
+    }
+
     async fn spawn_into(&self, pane_id: &str, cols: u16, rows: u16) -> Result<(), String> {
         let (frames, replay) = {
             let map = self.inner.lock().await;
@@ -444,6 +477,16 @@ async fn write_commands(mut stdin: ChildStdin, mut rx: mpsc::Receiver<String>) {
     }
 }
 
+pub fn scroll_command(direction: &str, lines: u16, source: &str) -> String {
+    json!({
+        "type": "terminal.scroll",
+        "direction": direction,
+        "lines": lines,
+        "source": source,
+    })
+    .to_string()
+}
+
 pub fn resize_command(cols: u16, rows: u16) -> String {
     json!({
         "type": "terminal.resize",
@@ -518,6 +561,21 @@ mod tests {
         assert!(replay.push(0, true, "stale".into()).is_none());
         assert_eq!(replay.bump(), 2);
         assert!(replay.frames.is_empty());
+    }
+
+    #[test]
+    fn scroll_command_names_the_direction_and_source() {
+        let value: serde_json::Value =
+            serde_json::from_str(&scroll_command("up", 3, "wheel")).unwrap();
+        assert_eq!(value["type"], "terminal.scroll");
+        assert_eq!(value["direction"], "up");
+        assert_eq!(value["lines"], 3);
+        assert_eq!(value["source"], "wheel");
+        let page: serde_json::Value =
+            serde_json::from_str(&scroll_command("down", 24, "page_key")).unwrap();
+        assert_eq!(page["source"], "page_key");
+        assert_eq!(page["direction"], "down");
+        assert_eq!(page["lines"], 24);
     }
 
     #[test]

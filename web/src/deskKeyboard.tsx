@@ -285,6 +285,7 @@ export function DeskKeyboard({
         <p className="settings-note">
           Prefix is {formatChord(prefix)}. Press it, then the key. Prefix+H, J, K, and L still move between Herdr panes.
           Prefix+1 to 9 still switches tabs. A browser page keeps its own keys; click the panel title to use these shortcuts again.
+          Ctrl+wheel, Ctrl+Plus, and Ctrl+Minus scale the panels. The session bar stays the same size. Ctrl+0 returns to 100%.
         </p>
         <ul className="key-help-list">
           {deskHelpRows(host.deskBindings).map((row) => (

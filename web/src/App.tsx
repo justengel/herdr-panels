@@ -29,6 +29,7 @@ import { DesignBar } from "./components/DesignBar";
 import { ElementSelect } from "./components/ElementSelect";
 import { DeskKeyboard, KeyedPanelProvider } from "./deskKeyboard";
 import { layoutForFocusedPane, panelForPane, panelRefs } from "./deskKeys";
+import { installDisplayZoom } from "./displayZoom";
 import { HostProvider } from "./host";
 import { readAddressBarChoices } from "./addressBar";
 import { readRawChoices } from "./rawText";
@@ -117,6 +118,7 @@ export function App() {
   const runtimeRef = useRef<RuntimeSnapshot | null>(null);
   const sessionRef = useRef<string | null>(null);
   const deskGeneration = useRef(0);
+  useEffect(() => installDisplayZoom(), []);
   const acceptDeskSaves = useRef(false);
   const deskSaveTimer = useRef(0);
   const applySpaceRef = useRef<(root: LayoutNode) => void>(() => {});
@@ -698,6 +700,8 @@ export function App() {
           edge: (id, edge) => edit(setTabEdge(layout.root, id, edge)),
           place: (sourceId, targetId, place) => edit(movePanel(layout.root, sourceId, targetId, place)),
           rename: (id, title) => edit(mapPanel(layout.root, id, (panel) => ({ ...panel, title: title || null }))),
+          fill: (id) => setZoomedId((current) => (current === id ? null : id)),
+          filledId: zoomedId,
         }}
       >
       <HostProvider
@@ -786,7 +790,6 @@ export function App() {
             );
           }}
           onSelect={() => setSelecting((current) => !current)}
-          onShowKeys={() => setHelp(true)}
           onAddPanel={addPanel}
           onExitZoom={() => setZoomedId(null)}
         />

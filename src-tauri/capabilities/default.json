@@ -12,6 +12,7 @@
     "core:default",
     "allow-place-browser",
     "allow-close-browser",
-    "allow-set-browser-select"
+    "allow-set-browser-select",
+    "allow-set-display-zoom"
   ]
 }

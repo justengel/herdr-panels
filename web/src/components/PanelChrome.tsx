@@ -348,6 +348,7 @@ export function PanelChrome({
           >
             <GearIcon />
           </button>
+          <FillButton panelId={panelId} title={title} />
           {canClose ? (
             <button
               type="button"
@@ -397,6 +398,7 @@ export function PanelChrome({
             >
               <GearIcon />
             </button>
+            <FillButton panelId={panelId} title={title} />
             {canClose ? (
               <button
                 type="button"
@@ -728,6 +730,44 @@ function GearIcon() {
         fillRule="evenodd"
         d="M6.61 3.35 6.99.87 9.01.87 9.39 3.35 10.3 3.73 12.32 2.24 13.76 3.68 12.27 5.7 12.65 6.61 15.13 6.99 15.13 9.01 12.65 9.39 12.27 10.3 13.76 12.32 12.32 13.76 10.3 12.27 9.39 12.65 9.01 15.13 6.99 15.13 6.61 12.65 5.7 12.27 3.68 13.76 2.24 12.32 3.73 10.3 3.35 9.39.87 9.01.87 6.99 3.35 6.61 3.73 5.7 2.24 3.68 3.68 2.24 5.7 3.73ZM8 5.65a2.35 2.35 0 1 1 0 4.7 2.35 2.35 0 1 1 0-4.7Z"
       />
+    </svg>
+  );
+}
+
+function FillButton({ panelId, title }: { panelId?: string; title: string }) {
+  const panelActions = usePanelActions();
+  if (!panelId) return null;
+  const filled = panelActions.filledId === panelId;
+  return (
+    <button
+      type="button"
+      className="panel-expand"
+      aria-pressed={filled}
+      aria-label={filled ? "Show the whole desk" : `Fill the screen with ${title}`}
+      title={filled ? "Show the whole desk" : "Fill the screen"}
+      onClick={(event) => {
+        event.stopPropagation();
+        panelActions.fill(panelId);
+      }}
+    >
+      {filled ? <RestoreIcon /> : <ExpandIcon />}
+    </button>
+  );
+}
+
+function ExpandIcon() {
+  return (
+    <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+      <rect x="2.75" y="2.75" width="10.5" height="10.5" fill="none" stroke="currentColor" strokeWidth="1.5" />
+    </svg>
+  );
+}
+
+function RestoreIcon() {
+  return (
+    <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+      <path fill="none" stroke="currentColor" strokeWidth="1.5" d="M5.25 2.75h8v8h-8z" />
+      <path fill="none" stroke="currentColor" strokeWidth="1.5" d="M2.75 5.25h8v8h-8z" />
     </svg>
   );
 }

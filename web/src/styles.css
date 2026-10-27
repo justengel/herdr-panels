@@ -37,15 +37,23 @@ button, select, input { font: inherit; color: inherit; }
   min-height: 0;
 }
 
+.topbar-slot {
+  flex: 0 0 calc(44px * var(--topbar-zoom, 1));
+  height: calc(44px * var(--topbar-zoom, 1));
+  overflow: hidden;
+}
+
 .topbar {
   height: 44px;
-  flex: 0 0 44px;
+  width: 100%;
   display: flex;
   align-items: center;
   gap: 16px;
   padding: 0 14px;
   background: var(--bg-elev);
   border-bottom: 1px solid var(--line);
+  /* Window zoom scales the webview. Draw the session bar back to its 100% size. */
+  zoom: var(--topbar-zoom, 1);
 }
 
 .brand {
@@ -319,7 +327,7 @@ button.status:hover:not(:disabled) {
 .panel-header input,
 .panel-header select { cursor: pointer; }
 
-.grip, .panel-close, .tab-gear-button {
+.grip, .panel-close, .panel-expand, .tab-gear-button {
   flex: 0 0 auto;
   width: 22px;
   height: 22px;
@@ -331,7 +339,7 @@ button.status:hover:not(:disabled) {
 
 .grip { cursor: grab; letter-spacing: -0.15em; }
 .grip::before { content: "⋮⋮"; font-size: 12px; }
-.grip:hover, .panel-close:hover, .tab-gear-button:hover { color: var(--text); }
+.grip:hover, .panel-close:hover, .panel-expand:hover, .tab-gear-button:hover { color: var(--text); }
 body.panel-dragging, body.panel-dragging * { cursor: grabbing !important; user-select: none; }
 .panel.is-drag-source { opacity: 0.45; }
 
@@ -822,21 +830,57 @@ body.panel-dragging, body.panel-dragging * { cursor: grabbing !important; user-s
 }
 .plain-actions .grip,
 .plain-actions .tab-gear-button,
+.plain-actions .panel-expand,
 .plain-actions .panel-close {
   background: var(--bg-panel);
   border-radius: 4px;
 }
-.panel.is-plain .side-heading { padding-right: 86px; }
+.panel.is-plain .side-heading { padding-right: 124px; }
 
 .file-text {
   margin: 0;
   padding: 12px 16px;
   overflow: auto;
   height: 100%;
+  min-width: 0;
+  min-height: 0;
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
   font-family: ui-monospace, Consolas, monospace;
   font-size: 12px;
   line-height: 1.45;
+}
+
+.file-text,
+.markdown,
+.markdown pre,
+.chat-log {
+  scrollbar-width: auto;
+  scrollbar-color: #8b93a1 #12151c;
+}
+
+.file-text::-webkit-scrollbar,
+.markdown::-webkit-scrollbar,
+.markdown pre::-webkit-scrollbar,
+.chat-log::-webkit-scrollbar {
+  width: 14px;
+  height: 14px;
+}
+
+.file-text::-webkit-scrollbar-thumb,
+.markdown::-webkit-scrollbar-thumb,
+.markdown pre::-webkit-scrollbar-thumb,
+.chat-log::-webkit-scrollbar-thumb {
+  background: #8b93a1;
+  border: 3px solid #12151c;
+  border-radius: 8px;
+}
+
+.file-text::-webkit-scrollbar-track,
+.markdown::-webkit-scrollbar-track,
+.markdown pre::-webkit-scrollbar-track,
+.chat-log::-webkit-scrollbar-track {
+  background: #12151c;
 }
 
 .side-pane {
@@ -1201,7 +1245,10 @@ body.panel-dragging, body.panel-dragging * { cursor: grabbing !important; user-s
 
 .markdown {
   height: 100%;
+  min-width: 0;
+  min-height: 0;
   overflow: auto;
+  overflow-wrap: anywhere;
   padding: 18px 22px 32px;
   line-height: 1.55;
 }
@@ -1219,6 +1266,8 @@ body.panel-dragging, body.panel-dragging * { cursor: grabbing !important; user-s
 }
 .markdown pre {
   overflow: auto;
+  overflow-wrap: normal;
+  white-space: pre;
   padding: 12px;
   background: #0d0f13;
   border: 1px solid var(--line);
@@ -1239,6 +1288,7 @@ body.panel-dragging, body.panel-dragging * { cursor: grabbing !important; user-s
 
 .term-shell {
   position: relative;
+  display: flex;
   width: 100%;
   height: 100%;
   overflow: hidden;
@@ -1249,13 +1299,38 @@ body.panel-dragging, body.panel-dragging * { cursor: grabbing !important; user-s
 .term-shell:focus-visible { box-shadow: inset 0 0 0 1px var(--accent); }
 
 .term-stage {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
   overflow: hidden;
 }
+
+.term-stage .xterm-viewport {
+  overflow: hidden !important;
+}
+
+.term-scroll {
+  flex: 0 0 14px;
+  position: relative;
+  height: 100%;
+  background: #12151c;
+  touch-action: none;
+  cursor: default;
+}
+
+.term-scroll-thumb {
+  position: absolute;
+  left: 2px;
+  right: 2px;
+  border-radius: 5px;
+  background: #8b93a1;
+  pointer-events: none;
+}
+
+.term-scroll:active .term-scroll-thumb,
+.term-scroll-thumb:hover { background: #c5ccd6; }
 
 .term-status {
   position: absolute;
@@ -1473,12 +1548,15 @@ body.panel-dragging, body.panel-dragging * { cursor: grabbing !important; user-s
 }
 
 .tab-gear-button,
+.panel-expand,
 .panel-close {
   display: inline-flex;
   align-items: center;
   justify-content: center;
 }
+.panel-expand[aria-pressed="true"] { color: var(--accent); }
 .tab-gear-button svg,
+.panel-expand svg,
 .panel-close svg {
   display: block;
   width: 16px;

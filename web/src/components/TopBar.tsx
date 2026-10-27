@@ -16,7 +16,6 @@ interface Props {
   onRenameSession: (name: string) => void;
   onCloseSession: () => void;
   onSelect: () => void;
-  onShowKeys: () => void;
   onAddPanel: () => void;
   onExitZoom: () => void;
   onHerdrAction: (action: HerdrStatusAction) => void;
@@ -35,7 +34,6 @@ export function TopBar({
   onRenameSession,
   onCloseSession,
   onSelect,
-  onShowKeys,
   onAddPanel,
   onExitZoom,
   onHerdrAction,
@@ -56,6 +54,7 @@ export function TopBar({
           : "Working…"
     : status.label;
   return (
+    <div className="topbar-slot">
     <header className="topbar">
       <div className="brand">
         <img className="mark" src="/icon.svg" alt="" />
@@ -148,13 +147,10 @@ export function TopBar({
       {notice ? <span className="notice">{notice}</span> : null}
       {zoomed ? (
         <button type="button" className="quiet" onClick={onExitZoom}>
-          Exit zoom
+          Show all panels
         </button>
       ) : null}
       <div className="topbar-spacer" />
-      <button type="button" className="quiet" title="Keyboard shortcuts" onClick={onShowKeys}>
-        Keys
-      </button>
       <button
         type="button"
         className="quiet"
@@ -185,5 +181,6 @@ export function TopBar({
         </span>
       )}
     </header>
+    </div>
   );
 }

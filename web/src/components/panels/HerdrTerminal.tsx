@@ -2,6 +2,17 @@ import { useEffect, useRef, useState } from "react";
 import { Terminal } from "@xterm/xterm";
 import { api, wsUrl } from "../../api";
 import { useHost } from "../../host";
+import {
+  applyScroll,
+  pageScroll,
+  previewScroll,
+  type ScrollPlace,
+  screenMoved,
+  scrollFromThumb,
+  scrollMetrics,
+  viewBox,
+  wheelScroll,
+} from "../../terminalView";
 
 interface Props {
   paneId: string | null;
@@ -31,6 +42,14 @@ export function HerdrTerminal({ paneId, source, lines, onGone }: Props) {
   const socketRef = useRef<WebSocket | null>(null);
   const bufferRef = useRef("");
   const flushTimer = useRef(0);
+  const placeRef = useRef<ScrollPlace>({ fromEnd: 0, extent: 0 });
+  const rowsRef = useRef(1);
+  const dragRef = useRef<{ y: number; top: number } | null>(null);
+  const pendingRef = useRef<{ direction: "up" | "down"; lines: number; place: ScrollPlace } | null>(null);
+  const pendingTimer = useRef(0);
+  const [place, setPlace] = useState<ScrollPlace>({ fromEnd: 0, extent: 0 });
+  const [gridRows, setGridRows] = useState(1);
+  const [trackPx, setTrackPx] = useState(0);
   const seenRef = useRef(false);
   const goneRef = useRef(false);
   const goneHandler = useRef(onGone);
@@ -38,6 +57,10 @@ export function HerdrTerminal({ paneId, source, lines, onGone }: Props) {
   const [status, setStatus] = useState("Connecting");
 
   useEffect(() => {
+    placeRef.current = { fromEnd: 0, extent: 0 };
+    pendingRef.current = null;
+    window.clearTimeout(pendingTimer.current);
+    setPlace({ fromEnd: 0, extent: 0 });
     const shell = shellRef.current;
     const stage = stageRef.current;
     seenRef.current = false;
@@ -90,13 +113,25 @@ export function HerdrTerminal({ paneId, source, lines, onGone }: Props) {
       const host = shellRef.current;
       if (!current || !host) return;
       const cell = readCell(current);
-      const next = fitCells(host.clientWidth, host.clientHeight, cell.w, cell.h);
+      const next = fitCells(host.clientWidth - 14, host.clientHeight, cell.w, cell.h);
       if (!next) return;
-      if (current.cols !== next.cols || current.rows !== next.rows) current.resize(next.cols, next.rows);
-      wanted = next;
+      const shown = viewBox(next, 0, 0) ?? next;
+      const sameGrid = current.cols === shown.cols && current.rows === shown.rows;
+      const sameRequest = wanted !== null && wanted.cols === shown.cols && wanted.rows === shown.rows;
+      if (!sameGrid) current.resize(shown.cols, shown.rows);
+      wanted = shown;
+      rowsRef.current = shown.rows;
+      setGridRows((rows) => (rows === shown.rows ? rows : shown.rows));
+      setTrackPx((px) => (px === host.clientHeight ? px : host.clientHeight));
+      if (sameRequest) return;
       window.clearTimeout(sizeTimer);
       sizeTimer = window.setTimeout(flushSize, 80);
     };
+
+    const onZoom = () => {
+      window.requestAnimationFrame(() => window.requestAnimationFrame(() => applySize()));
+    };
+    window.addEventListener("herdr-zoom", onZoom);
 
     const observer = new ResizeObserver(() => applySize());
     observer.observe(shell);
@@ -114,6 +149,19 @@ export function HerdrTerminal({ paneId, source, lines, onGone }: Props) {
     if (source) params.set("source", source);
     if (lines) params.set("lines", String(lines));
 
+    let drawn = "";
+    let shown: string | null = null;
+    let paint = 0;
+    let painting = false;
+    const readScreen = () => {
+      const buffer = term.buffer.active;
+      const rows: string[] = [];
+      for (let row = 0; row < term.rows; row += 1) {
+        const line = buffer.getLine(buffer.baseY + row);
+        rows.push(line ? line.translateToString(true) : "");
+      }
+      return rows.join("\n");
+    };
     const connect = () => {
       if (stopped) return;
       setStatus("Connecting");
@@ -142,11 +190,26 @@ export function HerdrTerminal({ paneId, source, lines, onGone }: Props) {
           const frame = message as ScreenMessage;
           seenRef.current = true;
           gotFrame = true;
-          const cols = frame.cols ?? 0;
-          const rows = frame.rows ?? 0;
-          if (frame.full) term.reset();
-          if (cols > 1 && rows > 0 && (term.cols !== cols || term.rows !== rows)) term.resize(cols, rows);
-          if (frame.text) term.write(frame.text);
+          const text = frame.text ?? "";
+          const finish = (token: number) => {
+            if (stopped || token !== paint) return;
+            painting = false;
+            const next = readScreen();
+            const previous = shown;
+            shown = next;
+            if (previous === null) return;
+            settleScroll(screenMoved(previous, next));
+          };
+          if (text !== drawn) {
+            drawn = text;
+            const token = ++paint;
+            painting = true;
+            if (frame.full) term.reset();
+            if (text) term.write(text, () => finish(token));
+            else finish(token);
+          } else if (!painting) {
+            finish(paint);
+          }
           if (!sizeProblem.current) setStatus("");
         } else if (message.type === "error") {
           const text = (message as ErrorMessage).message;
@@ -184,7 +247,9 @@ export function HerdrTerminal({ paneId, source, lines, onGone }: Props) {
       window.clearTimeout(seedTimer);
       window.clearTimeout(sizeTimer);
       window.removeEventListener("herdr-theme", onTheme);
+      window.removeEventListener("herdr-zoom", onZoom);
       window.clearTimeout(flushTimer.current);
+      window.clearTimeout(pendingTimer.current);
       observer.disconnect();
       socket?.close();
       socketRef.current = null;
@@ -212,6 +277,69 @@ export function HerdrTerminal({ paneId, source, lines, onGone }: Props) {
     flushTimer.current = window.setTimeout(flushText, 16);
   }
 
+  function commitPlace(next: ScrollPlace) {
+    placeRef.current = next;
+    setPlace(next);
+  }
+
+  function settleScroll(moved: boolean) {
+    const pending = pendingRef.current;
+    if (!pending) return;
+    const atTop = pending.direction === "up" && pending.place.fromEnd >= pending.place.extent && pending.place.extent > 0;
+    const atBottom = pending.direction === "down" && pending.place.fromEnd <= 0;
+    if (!moved && !atTop && !atBottom) return;
+    window.clearTimeout(pendingTimer.current);
+    pendingRef.current = null;
+    if (moved && pending.direction === "up" && pending.place.extent > 0 && pending.place.fromEnd < pending.place.extent) {
+      const next = Math.min(pending.place.extent, pending.place.fromEnd + pending.lines);
+      commitPlace({ fromEnd: next, extent: pending.place.extent });
+      return;
+    }
+    commitPlace(applyScroll(pending.place, pending.direction, pending.lines, moved));
+  }
+
+  function giveUp() {
+    const pending = pendingRef.current;
+    pendingRef.current = null;
+    if (!pending) return;
+    const probingTop = pending.direction === "up" && pending.place.fromEnd >= pending.place.extent;
+    const probingBottom = pending.direction === "down" && pending.place.fromEnd <= 0;
+    if (probingTop || probingBottom) {
+      commitPlace(applyScroll(pending.place, pending.direction, pending.lines, false));
+      return;
+    }
+    commitPlace(pending.place);
+  }
+
+  function emitScroll(direction: "up" | "down", lines: number, source: "wheel" | "page_key") {
+    let left = Math.max(0, Math.round(lines));
+    while (left > 0) {
+      const chunk = Math.min(200, left);
+      send({ type: "scroll", direction, lines: chunk, source });
+      left -= chunk;
+    }
+  }
+
+  function queueScroll(direction: "up" | "down", lines: number, source: "wheel" | "page_key") {
+    const step = Math.max(0, Math.round(lines) || 0);
+    if (!step) return;
+    const current = placeRef.current;
+    const pending = pendingRef.current;
+    if (direction === "down" && current.fromEnd <= 0) return;
+    if (direction === "up" && current.extent > 0 && current.fromEnd >= current.extent && pending?.direction === "up") return;
+    if (pending && pending.direction === direction) {
+      pendingRef.current = { place: pending.place, direction, lines: pending.lines + step };
+    } else {
+      pendingRef.current = { place: current, direction, lines: step };
+    }
+    commitPlace(previewScroll(current, direction, step));
+    emitScroll(direction, step, source);
+    window.clearTimeout(pendingTimer.current);
+    pendingTimer.current = window.setTimeout(giveUp, 800);
+  }
+
+  const thumb = scrollMetrics(trackPx, gridRows, place.fromEnd, place.extent);
+
   return (
     <div
       className="term-shell"
@@ -230,6 +358,14 @@ export function HerdrTerminal({ paneId, source, lines, onGone }: Props) {
           if (selected) void navigator.clipboard.writeText(selected);
           event.preventDefault();
           event.stopPropagation();
+          return;
+        }
+        const page = pageScroll(event.key, term?.rows ?? 1);
+        if (page && !event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey) {
+          event.preventDefault();
+          event.stopPropagation();
+          flushText();
+          queueScroll(page.direction, page.lines, "page_key");
           return;
         }
         event.preventDefault();
@@ -259,8 +395,57 @@ export function HerdrTerminal({ paneId, source, lines, onGone }: Props) {
       onCompositionEnd={(event) => {
         if (event.data) queueText(event.data);
       }}
+      onWheelCapture={(event) => {
+        if (event.ctrlKey || event.metaKey) return;
+        const gesture = wheelScroll(event.deltaY, event.deltaMode);
+        if (!gesture) return;
+        event.preventDefault();
+        event.stopPropagation();
+        queueScroll(gesture.direction, gesture.lines, "wheel");
+      }}
     >
       <div className="term-stage" ref={stageRef} />
+      <div
+        className="term-scroll"
+        role="scrollbar"
+        aria-orientation="vertical"
+        aria-valuemin={0}
+        aria-valuemax={place.extent}
+        aria-valuenow={place.fromEnd}
+        aria-label="Terminal scroll"
+        onPointerDown={(event) => {
+          const track = event.currentTarget;
+          const metrics = scrollMetrics(track.clientHeight, rowsRef.current, placeRef.current.fromEnd, placeRef.current.extent);
+          const local = event.clientY - track.getBoundingClientRect().top;
+          if (local >= metrics.top && local <= metrics.top + metrics.height) {
+            dragRef.current = { y: event.clientY, top: metrics.top };
+            track.setPointerCapture(event.pointerId);
+            return;
+          }
+          const page = Math.max(1, rowsRef.current);
+          const direction = local < metrics.top ? "up" : "down";
+          queueScroll(direction, page, "page_key");
+        }}
+        onPointerMove={(event) => {
+          const drag = dragRef.current;
+          if (!drag) return;
+          const track = event.currentTarget.clientHeight;
+          const current = placeRef.current;
+          const height = scrollMetrics(track, rowsRef.current, current.fromEnd, current.extent).height;
+          const next = scrollFromThumb(track, height, drag.top + (event.clientY - drag.y), current.extent);
+          const delta = next - current.fromEnd;
+          if (delta === 0) return;
+          queueScroll(delta > 0 ? "up" : "down", Math.abs(delta), "wheel");
+        }}
+        onPointerUp={() => {
+          dragRef.current = null;
+        }}
+        onPointerCancel={() => {
+          dragRef.current = null;
+        }}
+      >
+        <div className="term-scroll-thumb" style={{ top: thumb.top, height: thumb.height }} />
+      </div>
       {status ? <div className="term-status">{status}</div> : null}
     </div>
   );
