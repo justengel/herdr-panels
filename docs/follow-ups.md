@@ -2,7 +2,7 @@
 
 Recorded 2026-10-27 from the review before the first public release. Closed items are here so this list stays the place to come back to.
 
-## Done in 0.1.0
+## Done in 0.1.1
 
 - The release binary contains the built page and the examples. Moving the program away from this checkout no longer shows the setup page, and the first start can still seed a config directory.
 - GitHub Actions runs the page tests and `cargo test` on Ubuntu and Windows. A version tag builds Linux x64, Windows x64, and macOS Apple Silicon archives and attaches them to a GitHub Release.
