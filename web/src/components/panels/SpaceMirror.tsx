@@ -16,6 +16,7 @@ export function SpaceMirror({
   const desk = useDesk();
   const host = useHost();
   const [picked, setPicked] = useState<string | null>(null);
+  const [menu, setMenu] = useState<{ tabId: string; x: number; y: number } | null>(null);
   const workspaceId =
     desk.focusedWorkspaceId ||
     workspaces.find((item) => item.focused)?.workspaceId ||
@@ -51,6 +52,12 @@ export function SpaceMirror({
               setPicked(tab.tabId);
               desk.onFocusTab(tab.tabId);
             }}
+            onContextMenu={(event) => {
+              event.preventDefault();
+              setPicked(tab.tabId);
+              desk.onFocusTab(tab.tabId);
+              setMenu({ tabId: tab.tabId, x: event.clientX, y: event.clientY });
+            }}
           >
             {tab.label || tab.tabId}
           </button>
@@ -65,6 +72,31 @@ export function SpaceMirror({
           +
         </button>
       </div>
+      {menu ? (
+        <>
+          <button type="button" className="menu-dismiss" aria-label="Close menu" onClick={() => setMenu(null)} />
+          <div
+            className="panel-menu"
+            role="menu"
+            style={{
+              left: Math.min(menu.x, window.innerWidth - 160),
+              top: Math.min(menu.y, window.innerHeight - 48),
+            }}
+          >
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                const tabId = menu.tabId;
+                setMenu(null);
+                void host.closeTab(tabId);
+              }}
+            >
+              Close
+            </button>
+          </div>
+        </>
+      ) : null}
       <div className="space-panes">
         {visible.length === 0 ? <div className="empty">This space has no panes.</div> : null}
         {visible.map((pane) => (

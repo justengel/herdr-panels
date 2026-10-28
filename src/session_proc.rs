@@ -71,8 +71,10 @@ pub async fn close_session(name: &str) -> Result<(), String> {
 }
 
 fn stop_session(name: &str) -> Result<(), String> {
-    let output = Command::new("herdr")
-        .args(["session", "stop", name])
+    let mut command = Command::new("herdr");
+    command.args(["session", "stop", name]);
+    crate::quiet_process::quiet(&mut command);
+    let output = command
         .output()
         .map_err(|err| format!("could not stop the session: {err}"))?;
     if output.status.success() {
@@ -98,13 +100,7 @@ fn spawn_server(name: &str) -> Result<(), String> {
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x08000000;
-        const CREATE_NEW_PROCESS_GROUP: u32 = 0x00000200;
-        command.creation_flags(CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP);
-    }
+    crate::quiet_process::quiet(&mut command);
     command
         .spawn()
         .map_err(|err| format!("could not start the session: {err}"))?;

@@ -436,7 +436,8 @@ fn git_cache() -> &'static std::sync::Mutex<Vec<GitFace>> {
 }
 
 fn git_face_uncached(dir: &str) -> (Option<String>, bool) {
-    let output = std::process::Command::new("git")
+    let mut command = std::process::Command::new("git");
+    command
         .args([
             "-C",
             dir,
@@ -447,8 +448,9 @@ fn git_face_uncached(dir: &str) -> (Option<String>, bool) {
         ])
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
-        .output();
+        .stderr(std::process::Stdio::null());
+    crate::quiet_process::quiet(&mut command);
+    let output = command.output();
     let Ok(output) = output else {
         return (None, false);
     };

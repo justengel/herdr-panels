@@ -1,12 +1,61 @@
+#![cfg_attr(windows, windows_subsystem = "windows")]
+
 mod browser;
 
 use std::net::{SocketAddr, TcpStream};
 use std::time::Duration;
 
 fn main() {
+    // cargo run keeps a console open and closing it kills this window.
+    // Hand the real window to a process that is not attached to that console.
+    if hand_off_terminal() {
+        return;
+    }
     let url = viewer_target();
-    ensure_viewer(&url);
+    if !ensure_viewer(&url) {
+        return;
+    }
     browser::run();
+}
+
+/// Start an independent copy and let this process exit.
+///
+/// `cargo run` is a console program. It waits, and its messages show in that
+/// console. Closing the console then closes the window. The copy is not part
+/// of that console, so the first process can exit and cargo can return.
+fn hand_off_terminal() -> bool {
+    #[cfg(windows)]
+    {
+        if std::env::var_os("HERDR_PANELS_DETACHED").is_some() {
+            return false;
+        }
+        let Ok(exe) = std::env::current_exe() else {
+            return false;
+        };
+        let mut command = std::process::Command::new(exe);
+        command
+            .args(std::env::args().skip(1))
+            .env("HERDR_PANELS_DETACHED", "1")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        use std::os::windows::process::CommandExt;
+        const DETACHED_PROCESS: u32 = 0x00000008;
+        const CREATE_NEW_PROCESS_GROUP: u32 = 0x00000200;
+        const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x01000000;
+        command.creation_flags(
+            DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_BREAKAWAY_FROM_JOB,
+        );
+        if command.spawn().is_ok() {
+            return true;
+        }
+        command.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP);
+        return command.spawn().is_ok();
+    }
+    #[cfg(not(windows))]
+    {
+        false
+    }
 }
 
 fn viewer_target() -> String {
@@ -23,16 +72,90 @@ fn viewer_target() -> String {
     }
 }
 
-fn ensure_viewer(url: &str) {
+/// Start a viewer in this process, or keep one that reports this build.
+/// Returns false when the window should not open.
+fn ensure_viewer(url: &str) -> bool {
     let Ok((host, port)) = endpoint(url) else {
-        eprintln!("desktop shell could not use {url}");
-        return;
+        tell(&format!("This window could not use {url}."));
+        return false;
     };
     let addr = SocketAddr::from((host, port));
-    if !should_start_viewer(port_open(addr)) {
-        eprintln!("desktop shell using the viewer at {url}");
-        return;
+    let open = port_open(addr);
+    let (status, body) = if open {
+        fetch_health(url)
+    } else {
+        (None, String::new())
+    };
+    match herdr_panels::launch::viewer_launch(open, status, &body, herdr_panels::BUILD_ID) {
+        herdr_panels::launch::ViewerLaunch::Attach
+        | herdr_panels::launch::ViewerLaunch::LeaveForeign => true,
+        herdr_panels::launch::ViewerLaunch::Unread => {
+            tell(&format!(
+                "A viewer is already running at {url}, and this window could not read its build. Stop that viewer and start the desktop again."
+            ));
+            false
+        }
+        herdr_panels::launch::ViewerLaunch::Replace => match stop_other_build(port) {
+            Ok(()) => {
+                if !wait_until_closed(addr) {
+                    tell(&format!(
+                        "A viewer from another build is still running at {url}. Stop that process and start the desktop again."
+                    ));
+                    return false;
+                }
+                start_viewer_thread(url, addr);
+                true
+            }
+            Err(err) => {
+                tell(&format!(
+                    "A viewer from another build is running at {url}. {err}"
+                ));
+                false
+            }
+        },
+        herdr_panels::launch::ViewerLaunch::Start => {
+            start_viewer_thread(url, addr);
+            true
+        }
     }
+}
+
+fn fetch_health(url: &str) -> (Option<u16>, String) {
+    let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    else {
+        return (None, String::new());
+    };
+    let config_dir = herdr_panels::config::prepare_config_dir(None).ok();
+    let token = config_dir
+        .as_deref()
+        .and_then(herdr_panels::launch::existing_token);
+    runtime.block_on(async {
+        match herdr_panels::launch::read_health(url, token.as_deref()).await {
+            Some((status, body)) => (Some(status), body),
+            None => (None, String::new()),
+        }
+    })
+}
+
+fn stop_other_build(port: u16) -> Result<(), String> {
+    let config_dir =
+        herdr_panels::config::prepare_config_dir(None).map_err(|err| err.to_string())?;
+    herdr_panels::self_update::stop_mismatched_viewer(&config_dir, port)
+}
+
+fn wait_until_closed(addr: SocketAddr) -> bool {
+    for _ in 0..50 {
+        if !port_open(addr) {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    !port_open(addr)
+}
+
+fn start_viewer_thread(url: &str, addr: SocketAddr) {
     let url_owned = url.to_string();
     std::thread::spawn(move || {
         let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -52,7 +175,6 @@ fn ensure_viewer(url: &str) {
     });
     for _ in 0..50 {
         if port_open(addr) {
-            eprintln!("desktop shell started the viewer at {url}");
             return;
         }
         std::thread::sleep(Duration::from_millis(100));
@@ -60,10 +182,29 @@ fn ensure_viewer(url: &str) {
     eprintln!("desktop shell could not reach {url}");
 }
 
-/// The desktop program starts a viewer only when its address is closed.
-/// That viewer runs in this process, so closing the window stops it.
-fn should_start_viewer(port_is_open: bool) -> bool {
-    !port_is_open
+fn tell(message: &str) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        use windows::core::PCWSTR;
+        use windows::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONWARNING, MB_OK};
+        let mut text: Vec<u16> = std::ffi::OsStr::new(message).encode_wide().collect();
+        text.push(0);
+        let mut title: Vec<u16> = std::ffi::OsStr::new("Herdr Panels").encode_wide().collect();
+        title.push(0);
+        unsafe {
+            let _ = MessageBoxW(
+                None,
+                PCWSTR(text.as_ptr()),
+                PCWSTR(title.as_ptr()),
+                MB_OK | MB_ICONWARNING,
+            );
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        eprintln!("{message}");
+    }
 }
 
 async fn start_viewer_in(config_dir: std::path::PathBuf, url: &str) -> Result<(), String> {
@@ -108,9 +249,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_desktop_program_starts_a_viewer_only_when_its_port_is_closed() {
-        assert!(should_start_viewer(false));
-        assert!(!should_start_viewer(true));
+    fn the_desktop_keeps_a_matching_viewer_and_replaces_a_different_build() {
+        use herdr_panels::launch::{viewer_launch, ViewerLaunch};
+        assert_eq!(viewer_launch(false, None, "", "abc"), ViewerLaunch::Start);
+        assert_eq!(
+            viewer_launch(true, Some(200), r#"{"ok":true,"build":"abc"}"#, "abc"),
+            ViewerLaunch::Attach
+        );
+        assert_eq!(
+            viewer_launch(true, Some(200), r#"{"ok":true,"build":"old"}"#, "abc"),
+            ViewerLaunch::Replace
+        );
     }
 
     #[tokio::test]

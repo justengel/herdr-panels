@@ -276,9 +276,12 @@ pub fn open_browser(url: &str) {
     let result = {
         #[cfg(windows)]
         {
-            std::process::Command::new("cmd")
-                .args(["/C", "start", "", url])
-                .spawn()
+            {
+                let mut command = std::process::Command::new("cmd");
+                command.args(["/C", "start", "", url]);
+                crate::quiet_process::quiet(&mut command);
+                command.spawn()
+            }
         }
         #[cfg(target_os = "macos")]
         {
@@ -321,6 +324,7 @@ mod tests {
         let mut command = if cfg!(windows) {
             let mut command = std::process::Command::new("cmd");
             command.args(["/C", "exit", "0"]);
+            crate::quiet_process::quiet(&mut command);
             command
         } else {
             std::process::Command::new("true")

@@ -96,15 +96,20 @@ pub fn existing_token(config_dir: &Path) -> Option<String> {
 }
 
 pub async fn inspect(url: &str, token: Option<&str>) -> Probe {
-    let client = match reqwest::Client::builder()
+    match read_health(url, token).await {
+        Some((status, body)) => classify_health(status, &body),
+        None => Probe::Down,
+    }
+}
+
+/// `GET /api/health`, including the body the desktop uses to compare builds.
+pub async fn read_health(url: &str, token: Option<&str>) -> Option<(u16, String)> {
+    let client = reqwest::Client::builder()
         .connect_timeout(Duration::from_millis(250))
         .timeout(Duration::from_millis(800))
         .no_proxy()
         .build()
-    {
-        Ok(client) => client,
-        Err(_) => return Probe::Down,
-    };
+        .ok()?;
     let request = client.get(format!("{url}/api/health"));
     let request = if let Some(token) = token {
         request.header(
@@ -114,14 +119,10 @@ pub async fn inspect(url: &str, token: Option<&str>) -> Probe {
     } else {
         request
     };
-    match request.send().await {
-        Ok(response) => {
-            let status = response.status().as_u16();
-            let body = response.text().await.unwrap_or_default();
-            classify_health(status, &body)
-        }
-        Err(_) => Probe::Down,
-    }
+    let response = request.send().await.ok()?;
+    let status = response.status().as_u16();
+    let body = response.text().await.unwrap_or_default();
+    Some((status, body))
 }
 
 fn health_ok(body: &str) -> bool {
@@ -141,6 +142,74 @@ fn loopback_http(url: &str) -> Option<String> {
         _ => return None,
     }
     Some(parsed.as_str().trim_end_matches('/').to_string())
+}
+
+/// What the desktop should do with the address it is about to open.
+#[derive(Debug, PartialEq, Eq)]
+pub enum ViewerLaunch {
+    /// Nothing is listening. Start a viewer in this process.
+    Start,
+    /// A herdr-panels viewer from this build is already listening.
+    Attach,
+    /// A herdr-panels viewer from another build is listening. Stop it, then start one.
+    Replace,
+    /// Something else is listening. Leave it alone.
+    LeaveForeign,
+    /// The port is open, and this program could not read a herdr-panels build from it.
+    Unread,
+}
+
+/// `status` is the HTTP status from `/api/health`. `None` means the request did not complete.
+pub fn viewer_launch(port_open: bool, status: Option<u16>, body: &str, ours: &str) -> ViewerLaunch {
+    if !port_open {
+        return ViewerLaunch::Start;
+    }
+    let Some(status) = status else {
+        return ViewerLaunch::Unread;
+    };
+    if status == 200 && health_ok(body) {
+        return match health_build_matches(body, ours) {
+            Some(true) => ViewerLaunch::Attach,
+            _ => ViewerLaunch::Replace,
+        };
+    }
+    if status == 401 && body.contains("viewer token is required") {
+        return ViewerLaunch::Unread;
+    }
+    ViewerLaunch::LeaveForeign
+}
+
+fn health_build_matches(body: &str, ours: &str) -> Option<bool> {
+    let value: serde_json::Value = serde_json::from_str(body).ok()?;
+    let build = value.get("build")?.as_str().filter(|build| !build.is_empty())?;
+    Some(build == ours)
+}
+
+/// The herdr-panels process to stop. A recorded git or other program is ignored.
+pub fn stale_viewer_pid(
+    recorded: Option<u32>,
+    recorded_image: Option<&str>,
+    listeners: &[(u32, &str)],
+) -> Result<u32, &'static str> {
+    if let (Some(pid), Some(image)) = (recorded, recorded_image) {
+        if viewer_process(image) {
+            return Ok(pid);
+        }
+    }
+    let ours: Vec<u32> = listeners
+        .iter()
+        .filter(|(_, image)| viewer_process(image))
+        .map(|(pid, _)| *pid)
+        .collect();
+    match ours.as_slice() {
+        [pid] => Ok(*pid),
+        [] => Err("a viewer is still running, and its process was not found"),
+        _ => Err("more than one herdr-panels process is listening"),
+    }
+}
+
+fn viewer_process(path: &str) -> bool {
+    crate::self_update::server_image(path) || crate::self_update::desktop_image(path)
 }
 
 fn one_line(body: &str) -> String {
@@ -338,5 +407,103 @@ mod tests {
 
         server.abort();
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_closed_port_starts_a_viewer() {
+        assert_eq!(
+            viewer_launch(false, None, "", "abc"),
+            ViewerLaunch::Start
+        );
+    }
+
+    #[test]
+    fn a_matching_build_stays_up() {
+        assert_eq!(
+            viewer_launch(true, Some(200), r#"{"ok":true,"build":"abc"}"#, "abc"),
+            ViewerLaunch::Attach
+        );
+    }
+
+    #[test]
+    fn a_different_build_is_replaced() {
+        assert_eq!(
+            viewer_launch(true, Some(200), r#"{"ok":true,"build":"old"}"#, "abc"),
+            ViewerLaunch::Replace
+        );
+    }
+
+    #[test]
+    fn a_viewer_from_before_builds_were_recorded_is_replaced() {
+        assert_eq!(
+            viewer_launch(true, Some(200), r#"{"ok":true}"#, "abc"),
+            ViewerLaunch::Replace
+        );
+    }
+
+    #[test]
+    fn a_stranger_on_the_port_is_left_alone() {
+        assert_eq!(
+            viewer_launch(true, Some(200), "nope", "abc"),
+            ViewerLaunch::LeaveForeign
+        );
+    }
+
+    #[test]
+    fn a_viewer_that_rejects_the_token_is_not_stopped() {
+        assert_eq!(
+            viewer_launch(
+                true,
+                Some(401),
+                r#"{"error":"viewer token is required"}"#,
+                "abc"
+            ),
+            ViewerLaunch::Unread
+        );
+    }
+
+    #[test]
+    fn an_unanswered_port_is_not_stopped() {
+        assert_eq!(viewer_launch(true, None, "", "abc"), ViewerLaunch::Unread);
+    }
+
+    #[test]
+    fn the_recorded_desktop_process_is_the_one_to_stop() {
+        let pid = stale_viewer_pid(Some(10), Some(r"C:\app\herdr-panels-desktop.exe"), &[]).unwrap();
+        assert_eq!(pid, 10);
+    }
+
+    #[test]
+    fn a_recorded_program_that_is_not_herdr_panels_is_not_stopped() {
+        let err = stale_viewer_pid(
+            Some(10),
+            Some(r"C:\Windows\System32\git.exe"),
+            &[(10, r"C:\Windows\System32\git.exe")],
+        );
+        assert!(err.is_err(), "{err:?}");
+    }
+
+    #[test]
+    fn one_listening_herdr_panels_process_is_stopped_when_the_record_is_missing() {
+        let pid = stale_viewer_pid(
+            None,
+            None,
+            &[(4, "other.exe"), (9, r"C:\app\herdr-panels.exe")],
+        )
+        .unwrap();
+        assert_eq!(pid, 9);
+    }
+
+    #[test]
+    fn two_listening_viewers_are_not_guessed() {
+        let err = stale_viewer_pid(
+            None,
+            None,
+            &[
+                (1, "herdr-panels.exe"),
+                (2, "herdr-panels-desktop.exe"),
+            ],
+        );
+        assert!(err.is_err(), "{err:?}");
     }
 }

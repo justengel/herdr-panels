@@ -490,7 +490,7 @@ async fn setup_page() -> Html<&'static str> {
 }
 
 async fn health() -> Json<Value> {
-    Json(json!({"ok": true}))
+    Json(json!({ "ok": true, "build": crate::BUILD_ID }))
 }
 
 #[derive(Serialize)]
@@ -1437,6 +1437,9 @@ struct HerdrAction {
     label: Option<String>,
     #[serde(default)]
     direction: Option<String>,
+    /// Space that the dragged space should sit in front of. Absent means the end of the list.
+    #[serde(default)]
+    before_workspace_id: Option<String>,
 }
 
 async fn herdr_action(
@@ -1470,6 +1473,20 @@ async fn herdr_action(
             client
                 .call("workspace.close", json!({ "workspace_id": workspace_id }))
                 .await
+        }
+        "workspace.move_block" => {
+            let workspace_id = required(body.workspace_id, "a space")?;
+            let mut params = json!({ "workspace_ids": [workspace_id.clone()] });
+            if let Some(before) = body
+                .before_workspace_id
+                .filter(|before| !before.trim().is_empty())
+            {
+                if before == workspace_id {
+                    return Err(ApiError::bad("a space cannot move before itself"));
+                }
+                params["before_workspace_id"] = json!(before);
+            }
+            client.call("workspace.move_block", params).await
         }
         "tab.create" => {
             let mut params = json!({ "focus": true });

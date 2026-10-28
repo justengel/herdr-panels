@@ -36,8 +36,11 @@ interface HostValue {
   createSpace: (label?: string) => Promise<void>;
   /** Create a Herdr tab in this space, the same action as the TUI new-tab key. */
   newTab: (workspaceId?: string) => Promise<void>;
+  closeTab: (tabId: string) => Promise<void>;
   renameSpace: (workspaceId: string, label: string) => Promise<void>;
   closeSpace: (workspaceId: string) => Promise<void>;
+  /** Move one space before another. A null anchor puts it at the end of the list. */
+  moveSpace: (workspaceId: string, beforeWorkspaceId: string | null) => Promise<boolean>;
   applyThemeNow: (name: string) => Promise<void>;
   saveSettings: (settings: Record<string, string | number | boolean>) => Promise<void>;
   saveKeys: (keys: Record<string, string>) => Promise<void>;
@@ -47,6 +50,7 @@ interface HostValue {
   deskBindings: Record<string, string>;
   deskOverrides: Record<string, string>;
   setDeskBinding: (id: string, value: string | null) => void;
+  notify: (message: string) => void;
 }
 
 const HostContext = createContext<HostValue | null>(null);
@@ -369,6 +373,15 @@ export function HostProvider({
     };
   }, [config]);
 
+  async function closeTab(tabId: string) {
+    try {
+      await api.herdrAction({ action: "tab.close", tabId });
+      await refresh();
+    } catch (err) {
+      noticeRef.current(err instanceof Error ? err.message : String(err));
+    }
+  }
+
   async function newTab(workspaceId?: string) {
     const space = workspaceId || runtimeRef.current?.focusedWorkspaceId || undefined;
     try {
@@ -406,6 +419,21 @@ export function HostProvider({
       noticeRef.current("Space closed");
     } catch (err) {
       noticeRef.current(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  async function moveSpace(workspaceId: string, beforeWorkspaceId: string | null): Promise<boolean> {
+    try {
+      await api.herdrAction({
+        action: "workspace.move_block",
+        workspaceId,
+        ...(beforeWorkspaceId ? { beforeWorkspaceId } : {}),
+      });
+      await refresh();
+      return true;
+    } catch (err) {
+      noticeRef.current(err instanceof Error ? err.message : String(err));
+      return false;
     }
   }
 
@@ -476,8 +504,10 @@ export function HostProvider({
     prefixArmed: () => prefixRef.current,
     createSpace,
     newTab,
+    closeTab,
     renameSpace,
     closeSpace,
+    moveSpace,
     applyThemeNow,
     saveSettings,
     saveKeys,
@@ -487,6 +517,7 @@ export function HostProvider({
     deskBindings,
     deskOverrides,
     setDeskBinding,
+    notify: (message) => noticeRef.current(message),
   };
 
   return (

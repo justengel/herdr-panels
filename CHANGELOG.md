@@ -4,6 +4,18 @@
 
 `herdr-panels update` stops a running viewer and starts the new program on the same address. An open desktop window is closed and opened again so it loads the new page. The viewer records its process id in `server.json`. The open desk reloads its plugin list, so `herdr-panels plugin install` shows up without restarting the viewer. `herdr-panels plugin uninstall <id>` removes that plugin, and the desk drops it from the menu. A terminal panel has a + on its Herdr tab strip that opens a new tab. The Herdr status dot is blue when an update is available.
 
+The desktop window no longer installs a system-wide keyboard or mouse hook, and it opens without a console. It handles keys and the wheel only for its own windows, so Synergy still receives typing for the other machine. Herdr, git, and other console programs the desk starts stay windowless, so Windows Terminal does not flash open and closed. `cargo run` starts the window and returns, and closing that terminal does not close the window.
+
+Spaces in the side list can be dragged into a new order. Herdr keeps that order. A click still opens the space.
+
+Typing in a terminal returns to the live input. Ctrl, Alt, Shift, and the Windows key stay on the key, including Ctrl+Enter, Ctrl+[, and Alt+., so the program handles them the way it does in Herdr. A shell keeps the highlight on the text you can edit. A program that asked for modified keys, such as Claude, gets Shift+Enter as a new line.
+
+The desktop window stops a herdr-panels viewer from a different build and starts its own. A viewer from the same build stays up, and a second window uses it. If that viewer will not exit, the window does not open.
+
+A terminal panel shows the screen Herdr sends and does not keep its own scrollback. The scrollbar asks Herdr to move the pane and does not keep a second copy of the history. The wheel and Page Up or Page Down ask Herdr to scroll, three lines per notch, the same as Herdr's mouse wheel. Finishing a selection says Copied to clipboard. A click is sent to the program, so Claude's prompt at the top can scroll to that prompt when the program is listening for the mouse. Right-click a Herdr tab and choose Close.
+
+Selecting text in a terminal copies it, the same way Herdr does when you finish a mouse selection. The clipboard gets plain text and a preformatted HTML copy, so spaces and line breaks survive a paste into a page. Shift with the arrow keys, Home, or End extends that highlight. Backspace or Delete removes it when it is on the cursor's line, and typing replaces it. A highlight elsewhere is only copied; it does not delete the command. Ctrl+C still copies, and Ctrl+V or Shift+Insert pastes. Scrolling moves the highlight with the text. Resizing the panel clears it, so it does not stick to the wrong cells. In the address bar, Backspace or Delete removes the highlighted stretch.
+
 A link in a note, an HTML panel, or a plugin opens outside the desk. In the desktop window that is the system browser. In a browser tab it is a new tab of that browser. Only `http` and `https` are opened. `target="_blank"` and `window.open` do this without a plugin permission, because the person clicked a link. `links:open` enables `herdrPanels.openExternal(url)` for a button that chooses the address in script, and install asks before granting it. `examples/plugins/desk-sample` has an Open in browser button that calls it for `https://example.com`. `herdr-panels panel open` with an `http` or `https` address still adds a browser panel. That is a new panel, not a tab.
 
 ## 0.1.6 - 2026-10-28

@@ -69,6 +69,11 @@ function spliceText(value: string, start: number, end: number, insert: string): 
   return { value: value.slice(0, from) + insert + value.slice(to), caret: from + insert.length };
 }
 
+/** Backspace or Delete with a highlight removes that stretch and leaves the caret where it started. */
+export function removeSelectedText(value: string, start: number, end: number): { value: string; caret: number } {
+  return spliceText(value, start, end, "");
+}
+
 export function addressOf(panel: PanelConfig): string {
   switch (panel.type) {
     case "markdown":
@@ -282,8 +287,18 @@ export function LocationBar({
   }
 
   function onAddressKey(event: React.KeyboardEvent<HTMLInputElement>) {
-    if (event.altKey || event.nativeEvent.isComposing || event.repeat) return;
+    if (event.altKey || event.nativeEvent.isComposing) return;
     const input = event.currentTarget;
+    const start = input.selectionStart ?? 0;
+    const end = input.selectionEnd ?? 0;
+    if (start !== end && (event.key === "Backspace" || event.key === "Delete") && !event.ctrlKey && !event.metaKey && !event.shiftKey) {
+      event.preventDefault();
+      event.stopPropagation();
+      const next = removeSelectedText(input.value, start, end);
+      edit(next.value, next.caret, true);
+      return;
+    }
+    if (event.repeat) return;
     const command = event.ctrlKey || event.metaKey;
     const key = event.key.toLowerCase();
     if (command && event.key === "Insert") {

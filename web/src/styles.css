@@ -1230,9 +1230,13 @@ body.panel-dragging, body.panel-dragging * { cursor: grabbing !important; user-s
   background: transparent;
   color: inherit;
   text-align: left;
-  cursor: pointer;
+  cursor: grab;
 }
 .space-row.is-current, .space-row:hover { background: #2a3140; }
+.space-row.is-drag-source { opacity: 0.45; }
+.space-row.drop-before { box-shadow: inset 0 2px 0 var(--accent); }
+.side-list.drop-end .space-row:last-child { box-shadow: inset 0 -2px 0 var(--accent); }
+body.space-dragging, body.space-dragging * { cursor: grabbing !important; user-select: none; }
 .space-row .dot {
   width: 8px;
   height: 8px;
@@ -1323,8 +1327,9 @@ body.panel-dragging, body.panel-dragging * { cursor: grabbing !important; user-s
 }
 
 .term-scroll {
-  flex: 0 0 14px;
   position: relative;
+  flex: 0 0 14px;
+  width: 14px;
   height: 100%;
   background: #12151c;
   touch-action: none;
@@ -1333,15 +1338,11 @@ body.panel-dragging, body.panel-dragging * { cursor: grabbing !important; user-s
 
 .term-scroll-thumb {
   position: absolute;
-  left: 2px;
-  right: 2px;
-  border-radius: 5px;
+  left: 3px;
+  right: 3px;
+  border-radius: 8px;
   background: #8b93a1;
-  pointer-events: none;
 }
-
-.term-scroll:active .term-scroll-thumb,
-.term-scroll-thumb:hover { background: #c5ccd6; }
 
 .term-status {
   position: absolute;

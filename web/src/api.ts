@@ -190,6 +190,7 @@ export const api = {
     paneId?: string;
     label?: string;
     direction?: string;
+    beforeWorkspaceId?: string;
   }) =>
     request<{ ok: boolean }>("/api/herdr/action", {
       method: "POST",

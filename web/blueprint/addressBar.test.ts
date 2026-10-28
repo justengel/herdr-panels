@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { removeSelectedText } from "../src/components/LocationBar";
 import {
   addressBarSurfaceId,
   applyAddressBarChoices,
@@ -12,6 +13,13 @@ import type { LayoutNode, PanelConfig } from "../src/types";
 const notes: PanelConfig = { type: "markdown", path: "notes/a.md" };
 const files: PanelConfig = { type: "explorer", path: "C:\\work" };
 const own: PanelConfig = { type: "plugin", plugin: "atlas" };
+
+describe("address field editing", () => {
+  it("removes the highlighted stretch and leaves the caret at its start", () => {
+    expect(removeSelectedText("hello", 1, 4)).toEqual({ value: "ho", caret: 1 });
+    expect(removeSelectedText("hello", 4, 1)).toEqual({ value: "ho", caret: 1 });
+  });
+});
 
 describe("address bar visibility", () => {
   it("shows the bar on a document until the panel hides it", () => {

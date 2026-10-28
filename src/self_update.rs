@@ -693,18 +693,41 @@ pub fn update_result_lines(
     lines
 }
 
+/// Stop the herdr-panels process listening for a viewer from another build.
+/// A recorded pid is used only when that process is herdr-panels or the desktop.
+pub fn stop_mismatched_viewer(config_dir: &Path, port: u16) -> Result<(), String> {
+    let recorded = recorded_pid(config_dir);
+    let image = recorded.and_then(process_image);
+    let listeners = listener_pids(port);
+    let pairs: Vec<(u32, String)> = listeners
+        .into_iter()
+        .filter_map(|pid| process_image(pid).map(|image| (pid, image)))
+        .collect();
+    let listed: Vec<(u32, &str)> = pairs
+        .iter()
+        .map(|(pid, image)| (*pid, image.as_str()))
+        .collect();
+    let pid = crate::launch::stale_viewer_pid(recorded, image.as_deref(), &listed)?;
+    if pid == std::process::id() {
+        return Err("refusing to stop this process".into());
+    }
+    stop_process(pid)
+}
+
 pub fn stop_process(pid: u32) -> Result<(), String> {
     if !process_running(pid) {
         return Ok(());
     }
     #[cfg(windows)]
     {
-        let status = std::process::Command::new("taskkill")
+        let mut command = std::process::Command::new("taskkill");
+        command
             .args(["/PID", &pid.to_string(), "/F"])
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
+            .stderr(std::process::Stdio::null());
+        crate::quiet_process::quiet(&mut command);
+        let status = command.status()
             .map_err(|err| format!("could not stop process {pid}: {err}"))?;
         if !status.success() && process_running(pid) {
             return Err(format!("could not stop process {pid}"));

@@ -202,6 +202,40 @@ impl PaneControls {
             .map_err(|_| "terminal size controller closed".to_string())
     }
 
+    /// Forward a click or drag. Herdr delivers it only when the program asked for the mouse.
+    pub async fn mouse(
+        &self,
+        pane_id: &str,
+        action: &str,
+        button: &str,
+        column: u16,
+        row: u16,
+        modifiers: u8,
+    ) -> Result<(), String> {
+        if !matches!(action, "down" | "up" | "drag" | "move") {
+            return Err("mouse action must be down, up, drag, or move".into());
+        }
+        if !matches!(button, "left" | "right" | "middle") {
+            return Err("mouse button must be left, right, or middle".into());
+        }
+        if !is_pane_id(pane_id) {
+            return Err("invalid pane id".into());
+        }
+        let tx = {
+            let map = self.inner.lock().await;
+            let Some(slot) = map.get(pane_id) else {
+                return Ok(());
+            };
+            slot.io.as_ref().map(|io| io.tx.clone())
+        };
+        let Some(tx) = tx else {
+            return Ok(());
+        };
+        tx.send(mouse_command(action, button, column, row, modifiers))
+            .await
+            .map_err(|_| "terminal size controller closed".to_string())
+    }
+
     async fn spawn_into(&self, pane_id: &str, cols: u16, rows: u16) -> Result<(), String> {
         let (frames, replay) = {
             let map = self.inner.lock().await;
@@ -346,6 +380,7 @@ async fn spawn_control(
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
+    crate::quiet_process::quiet_async(&mut command);
     let mut child = command
         .spawn()
         .map_err(|err| format!("could not start herdr to size the shell: {err}"))?;
@@ -477,6 +512,18 @@ async fn write_commands(mut stdin: ChildStdin, mut rx: mpsc::Receiver<String>) {
     }
 }
 
+pub fn mouse_command(action: &str, button: &str, column: u16, row: u16, modifiers: u8) -> String {
+    json!({
+        "type": "terminal.mouse",
+        "action": action,
+        "button": button,
+        "column": column,
+        "row": row,
+        "modifiers": modifiers,
+    })
+    .to_string()
+}
+
 pub fn scroll_command(direction: &str, lines: u16, source: &str) -> String {
     json!({
         "type": "terminal.scroll",
@@ -518,6 +565,18 @@ const MAX_ROWS: u16 = 200;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mouse_command_uses_herdr_names() {
+        let value: serde_json::Value =
+            serde_json::from_str(&mouse_command("down", "left", 10, 5, 0)).unwrap();
+        assert_eq!(value["type"], "terminal.mouse");
+        assert_eq!(value["action"], "down");
+        assert_eq!(value["button"], "left");
+        assert_eq!(value["column"], 10);
+        assert_eq!(value["row"], 5);
+        assert_eq!(value["modifiers"], 0);
+    }
 
     #[test]
     fn resize_command_is_one_json_object() {

@@ -2,10 +2,14 @@ import { describe, expect, it } from "vitest";
 import {
   applyScroll,
   fitScale,
+  inputScroll,
   pageScroll,
   previewScroll,
   screenMoved,
+  scrollDragTarget,
   scrollFromThumb,
+  scrollThumb,
+  viewportShift,
   scrollMetrics,
   viewBox,
   wheelScroll,
@@ -40,12 +44,35 @@ describe("terminal view", () => {
     expect(scrollFromThumb(400, top.height, top.top, 40)).toBe(40);
   });
 
+  it("parks a short thumb at the live end until the pane's range is known", () => {
+    expect(scrollThumb(400, 40, 0, 0)).toEqual({ top: 372, height: 28 });
+    expect(scrollThumb(20, 40, 0, 0)).toEqual({ top: 0, height: 20 });
+    const known = scrollThumb(400, 20, 40, 40);
+    expect(known.top).toBe(0);
+    expect(known.height).toBeCloseTo((20 / 60) * 400, 5);
+  });
+
+  it("maps a thumb drag onto Herdr's range, and probes one line per cell before that", () => {
+    expect(scrollDragTarget(0, 0, -51, 17, 400, 372, 28)).toBe(3);
+    expect(scrollDragTarget(0, 0, 34, 17, 400, 372, 28)).toBe(0);
+    expect(scrollDragTarget(40, 40, 0, 17, 400, 0, (20 / 60) * 400)).toBe(40);
+    const height = (20 / 60) * 400;
+    const travel = 400 - height;
+    expect(scrollDragTarget(40, 40, travel, 17, 400, 0, height)).toBe(0);
+  });
+
   it("keeps the thumb size while a scroll is still inside the known range", () => {
     expect(previewScroll({ fromEnd: 0, extent: 0 }, "up", 3)).toEqual({ fromEnd: 0, extent: 0 });
     expect(previewScroll({ fromEnd: 40, extent: 40 }, "up", 3)).toEqual({ fromEnd: 40, extent: 40 });
     const moved = previewScroll({ fromEnd: 10, extent: 40 }, "up", 3);
     expect(moved).toEqual({ fromEnd: 13, extent: 40 });
     expect(previewScroll(moved, "down", 20)).toEqual({ fromEnd: 0, extent: 40 });
+  });
+
+  it("jumps back to the live input from any distance above it", () => {
+    expect(inputScroll({ fromEnd: 0, extent: 40 })).toBe(0);
+    expect(inputScroll({ fromEnd: 3, extent: 40 })).toBe(200);
+    expect(inputScroll({ fromEnd: 480, extent: 480 })).toBe(480);
   });
 
   it("ignores a clock tick and notices a page that shifted", () => {
@@ -86,6 +113,14 @@ describe("terminal view", () => {
     expect(pageScroll("PageDown", 24)).toEqual({ direction: "down", lines: 24, source: "page_key" });
     expect(pageScroll("ArrowUp", 24)).toBeNull();
     expect(pageScroll("PageUp", 0)).toEqual({ direction: "up", lines: 1, source: "page_key" });
+  });
+
+  it("sees how many rows a scrolled screen moved", () => {
+    const before = ["prompt", "name    size", "foo     12", "bar     4", "next"];
+    expect(viewportShift(before, ["older", "prompt", "name    size", "foo     12", "bar     4"])).toBe(1);
+    expect(viewportShift(before, ["name    size", "foo     12", "bar     4", "next", "newer"])).toBe(-1);
+    expect(viewportShift(before, ["prompt", "name    size", "foo     99", "bar     4", "next"])).toBeNull();
+    expect(viewportShift(before, before)).toBeNull();
   });
 });
 

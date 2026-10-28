@@ -32,6 +32,7 @@ pub mod plugin_files;
 pub mod plugin_grant;
 pub mod plugins;
 pub mod proxy;
+pub mod quiet_process;
 pub mod self_update;
 pub mod server;
 pub mod session;
@@ -42,3 +43,7 @@ pub mod terminal_size;
 pub mod watch;
 
 pub use server::{build_app, serve};
+
+/// Identity of this build of the viewer. `/api/health` reports it.
+/// The desktop starts its own viewer when a running one reports a different value.
+pub const BUILD_ID: &str = env!("HERDR_PANELS_BUILD");

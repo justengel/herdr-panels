@@ -148,10 +148,10 @@ fn catalog() -> Arc<Catalog> {
 }
 
 fn default_config_text() -> String {
-    match std::process::Command::new("herdr")
-        .arg("--default-config")
-        .output()
-    {
+    let mut command = std::process::Command::new("herdr");
+    command.arg("--default-config");
+    crate::quiet_process::quiet(&mut command);
+    match command.output() {
         Ok(output) if output.status.success() => {
             String::from_utf8_lossy(&output.stdout).into_owned()
         }
@@ -1024,6 +1024,7 @@ async fn reload(session: Option<&str>) -> Result<(), String> {
     }
     command.env_remove("HERDR_SOCKET_PATH");
     command.args(["server", "reload-config"]);
+    crate::quiet_process::quiet_async(&mut command);
     let output = command.output().await.map_err(|err| err.to_string())?;
     if output.status.success() {
         return Ok(());

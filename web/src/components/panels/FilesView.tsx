@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { createPortal } from "react-dom";
 import type { PaneView, WorkspaceView } from "../../types";
 import { useHost } from "../../host";
 import { useKeepMenuOnScreen } from "../../menuPlace";
+import { dropBeforeId, movedSpaceOrder, sameSpaceOrder } from "../../spaceDrag";
 import { StatusMark } from "../StatusMark";
 
 const RANK = ["working", "blocked", "idle", "done", "unknown"];
@@ -34,8 +35,13 @@ export function FilesView({
       ];
   const tokens = new Set(rows.flat());
   const menuRef = useRef<HTMLDivElement>(null);
+  const listRef = useRef<HTMLUListElement>(null);
+  const gesture = useRef<{ id: string; y: number; dragging: boolean } | null>(null);
+  const skipClick = useRef(false);
   const seenRename = useRef(0);
   const seenClose = useRef(0);
+  const [drag, setDrag] = useState<{ id: string; beforeId: string | null } | null>(null);
+  const [order, setOrder] = useState<string[] | null>(null);
   const [menu, setMenu] = useState<SpaceMenu | null>(null);
   const menuBox = useKeepMenuOnScreen(
     menuRef,
@@ -57,7 +63,8 @@ export function FilesView({
             branch: null,
             dirty: false,
           }));
-  const current = spaces.find((space) => space.focused) ?? spaces[0];
+  const shown = order ? applySpaceOrder(spaces, order) : spaces;
+  const current = shown.find((space) => space.focused) ?? shown[0];
   const subject = spaces.find((space) => space.workspaceId === subjectId) ?? current;
   useEffect(() => {
     if (!host.renameTick || host.renameTick === seenRename.current) return;
@@ -74,6 +81,17 @@ export function FilesView({
     setSubjectId(current?.workspaceId ?? null);
     setMode("close");
   }, [host.closeTick, current?.workspaceId]);
+  useEffect(() => {
+    if (!order) return;
+    const ids = spaces.map((space) => space.workspaceId);
+    const sameSet = ids.length === order.length && ids.every((id) => order.includes(id));
+    if (!sameSet || ids.every((id, index) => id === order[index])) setOrder(null);
+  }, [spaces, order]);
+  useEffect(() => {
+    if (!drag) return;
+    document.body.classList.add("space-dragging");
+    return () => document.body.classList.remove("space-dragging");
+  }, [drag]);
   useEffect(() => {
     if (!menu) return;
     const close = (event: PointerEvent) => {
@@ -112,6 +130,72 @@ export function FilesView({
     });
   }
 
+  function measure(y: number, draggedId: string): string | null {
+    const list = listRef.current;
+    if (!list) return null;
+    const rows = [...list.querySelectorAll<HTMLElement>("[data-workspace-id]")].map((node) => {
+      const box = node.getBoundingClientRect();
+      return { id: node.dataset.workspaceId ?? "", top: box.top, bottom: box.bottom };
+    });
+    return dropBeforeId(rows, y, draggedId);
+  }
+
+  function onSpacePointerDown(event: ReactPointerEvent<HTMLButtonElement>) {
+    if (event.button !== 0) return;
+    const id = event.currentTarget.dataset.workspaceId;
+    if (!id) return;
+    skipClick.current = false;
+    gesture.current = { id, y: event.clientY, dragging: false };
+    const move = (ev: PointerEvent) => {
+      const start = gesture.current;
+      if (!start || start.id !== id) return;
+      if (!start.dragging && Math.abs(ev.clientY - start.y) < 5) return;
+      start.dragging = true;
+      const beforeId = measure(ev.clientY, start.id);
+      setDrag((currentDrag) =>
+        currentDrag?.id === start.id && currentDrag.beforeId === beforeId
+          ? currentDrag
+          : { id: start.id, beforeId },
+      );
+    };
+    const end = (ev: PointerEvent) => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", end);
+      window.removeEventListener("pointercancel", cancel);
+      finishDrag(ev.clientY);
+    };
+    const cancel = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", end);
+      window.removeEventListener("pointercancel", cancel);
+      gesture.current = null;
+      setDrag(null);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", end);
+    window.addEventListener("pointercancel", cancel);
+    try {
+      event.currentTarget.setPointerCapture(event.pointerId);
+    } catch {
+      // The pointer can already be gone. Window listeners still follow the drag.
+    }
+  }
+
+  function finishDrag(y: number) {
+    const start = gesture.current;
+    gesture.current = null;
+    if (!start?.dragging) return;
+    skipClick.current = true;
+    const beforeId = measure(y, start.id);
+    setDrag(null);
+    const ids = shown.map((space) => space.workspaceId);
+    if (sameSpaceOrder(ids, start.id, beforeId)) return;
+    setOrder(movedSpaceOrder(ids, start.id, beforeId));
+    void host.moveSpace(start.id, beforeId).then((ok) => {
+      if (!ok) setOrder(null);
+    });
+  }
+
   function begin(next: "rename" | "close") {
     const workspaceId = menu?.workspaceId ?? current?.workspaceId ?? null;
     const space = spaces.find((item) => item.workspaceId === workspaceId) ?? current;
@@ -132,15 +216,30 @@ export function FilesView({
         openMenu(event, workspaceId);
       }}
     >
-      {spaces.length === 0 ? <div className="side-list" /> : (
-        <ul className="side-list">
-          {spaces.map((space) => (
+      {shown.length === 0 ? <div className="side-list" /> : (
+        <ul ref={listRef} className={drag && drag.beforeId === null ? "side-list drop-end" : "side-list"}>
+          {shown.map((space) => (
             <li key={space.workspaceId}>
               <button
                 type="button"
                 data-workspace-id={space.workspaceId}
-                className={space.focused ? "space-row is-current" : "space-row"}
-                onClick={() => onOpen(space.workspaceId)}
+                className={[
+                  "space-row",
+                  space.focused ? "is-current" : "",
+                  drag?.id === space.workspaceId ? "is-drag-source" : "",
+                  drag?.beforeId === space.workspaceId ? "drop-before" : "",
+                ]
+                  .filter(Boolean)
+                  .join(" ")}
+                onPointerDown={onSpacePointerDown}
+                onClick={(event) => {
+                  if (skipClick.current) {
+                    skipClick.current = false;
+                    event.preventDefault();
+                    return;
+                  }
+                  onOpen(space.workspaceId);
+                }}
               >
                 {tokens.has("state_icon") ? (
                   <StatusMark status={spaceStatus(space, panes)} symbols={symbols} />
@@ -270,6 +369,16 @@ export function FilesView({
         : null}
     </div>
   );
+}
+
+function applySpaceOrder<T extends { workspaceId: string }>(spaces: T[], order: string[]): T[] {
+  const byId = new Map(spaces.map((space) => [space.workspaceId, space]));
+  const placed = order.flatMap((id) => {
+    const space = byId.get(id);
+    return space ? [space] : [];
+  });
+  const extra = spaces.filter((space) => !order.includes(space.workspaceId));
+  return [...placed, ...extra];
 }
 
 interface SpaceMenu {

@@ -6,8 +6,8 @@ use serde_json::{json, Value};
 use tokio::sync::mpsc;
 
 use crate::herdr::HerdrClient;
-use crate::keys::{map_key, ClientInput, KeyAction};
-use crate::layout::{is_pane_id, is_safe_key, HerdrSource};
+use crate::keys::{is_terminal_key, map_key, ClientInput, KeyAction};
+use crate::layout::{is_pane_id, HerdrSource};
 use crate::server::AppState;
 use crate::session::PaneView;
 
@@ -143,6 +143,25 @@ async fn handle_client(
         state
             .controls
             .scroll(pane_id, direction, lines, source)
+            .await
+            .map_err(Fault::Size)?;
+        return Ok(None);
+    }
+    if value.get("type").and_then(Value::as_str) == Some("mouse") {
+        let action = value.get("action").and_then(Value::as_str).unwrap_or("");
+        let button = value.get("button").and_then(Value::as_str).unwrap_or("left");
+        let column = dimension(&value, "column")
+            .ok_or_else(|| Fault::Size("column must be a number".into()))?;
+        let row =
+            dimension(&value, "row").ok_or_else(|| Fault::Size("row must be a number".into()))?;
+        let modifiers = value
+            .get("modifiers")
+            .and_then(Value::as_u64)
+            .unwrap_or(0)
+            .min(255) as u8;
+        state
+            .controls
+            .mouse(pane_id, action, button, column, row, modifiers)
             .await
             .map_err(Fault::Size)?;
         return Ok(None);
@@ -301,7 +320,7 @@ async fn send_keys(client: &HerdrClient, pane_id: &str, keys: &[String]) -> Resu
     if keys.is_empty() {
         return Ok(());
     }
-    if keys.len() > 8 || keys.iter().any(|key| !is_safe_key(key)) {
+    if keys.len() > 8 || keys.iter().any(|key| !is_terminal_key(key)) {
         return Err("unsupported key".into());
     }
     client

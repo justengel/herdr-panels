@@ -6,8 +6,7 @@ export interface ScrollGesture {
 
 /**
  * The grid to draw. The panel's fitted size wins, so the program wraps to the
- * pane after it is expanded, restored, or the window scale changes. Adopting a
- * larger frame leaves the input drawn under the scrollbar.
+ * pane after it is expanded, restored, or the window scale changes.
  */
 export function viewBox(
   fitted: { cols: number; rows: number } | null,
@@ -35,14 +34,22 @@ export function wheelScroll(deltaY: number, deltaMode: number): ScrollGesture | 
   return { direction: deltaY < 0 ? "up" : "down", lines, source: "wheel" };
 }
 
+/**
+ * Lines to move down so typing happens on the live screen. Zero when the view
+ * is already there. A short distance still jumps a full page, because the
+ * tracked distance can be short of the real one.
+ */
+export function inputScroll(place: ScrollPlace): number {
+  const above = Math.max(0, Math.round(place.fromEnd) || 0);
+  if (above <= 0) return 0;
+  return Math.max(above, 200);
+}
+
 export function pageScroll(key: string, rows: number): ScrollGesture | null {
   if (key !== "PageUp" && key !== "PageDown") return null;
   const lines = Math.max(1, Math.min(200, Math.floor(rows) || 1));
   return { direction: key === "PageUp" ? "up" : "down", lines, source: "page_key" };
 }
-
-/** Width of the scrollbar parked beside the cells, in CSS pixels. */
-export const SCROLLBAR_PX = 14;
 
 /** `fromEnd` is lines above the live screen. `extent` is how far up the pane can go. */
 export interface ScrollPlace {
@@ -122,6 +129,81 @@ export function scrollMetrics(
   const travel = Math.max(0, track - height);
   const top = above === 0 ? 0 : travel * (1 - at / above);
   return { top, height };
+}
+
+function blankLine(line: string): boolean {
+  return line.trim().length === 0;
+}
+
+/**
+ * How many rows the visible text moved down. Positive means older lines
+ * entered at the top. Null when the screen was edited in place.
+ */
+export function viewportShift(before: string[], after: string[]): number | null {
+  const rows = Math.max(before.length, after.length);
+  if (rows < 2) return null;
+  const score = (shift: number) => {
+    let matched = 0;
+    for (let i = 0; i < before.length; i += 1) {
+      const j = i + shift;
+      if (j < 0 || j >= after.length) continue;
+      if (blankLine(before[i]) || blankLine(after[j])) continue;
+      if (before[i] === after[j]) matched += 1;
+    }
+    return matched;
+  };
+  let best = 0;
+  let bestScore = score(0);
+  for (let distance = 1; distance < rows; distance += 1) {
+    for (const shift of [distance, -distance]) {
+      const matched = score(shift);
+      if (matched > bestScore) {
+        bestScore = matched;
+        best = shift;
+      }
+    }
+  }
+  if (best === 0 || bestScore < 2) return null;
+  return best;
+}
+
+/**
+ * The thumb to draw. A known range uses the pane's distance. Before that
+ * range is known, a short thumb sits at the live end so the bar can be dragged.
+ */
+export function scrollThumb(
+  track: number,
+  rows: number,
+  fromEnd: number,
+  extent: number,
+): { top: number; height: number } {
+  if (track < 1) return { top: 0, height: 0 };
+  if (extent <= 0) {
+    const height = Math.min(28, track);
+    return { top: Math.max(0, track - height), height };
+  }
+  return scrollMetrics(track, rows, fromEnd, extent);
+}
+
+/**
+ * Lines above the live screen that a thumb drag is asking for.
+ * A known range maps the thumb across that range. An unknown range moves
+ * one line per cell, and Herdr's next frame is what proves the distance.
+ */
+export function scrollDragTarget(
+  extent: number,
+  fromEnd: number,
+  dy: number,
+  cell: number,
+  track: number,
+  thumbTop: number,
+  thumbHeight: number,
+): number {
+  if (extent <= 0) {
+    const lines = Math.round(Math.abs(dy) / Math.max(1, cell));
+    return dy < 0 ? fromEnd + lines : Math.max(0, fromEnd - lines);
+  }
+  return scrollFromThumb(track, thumbHeight, thumbTop + dy, extent);
 }
 
 /** Convert a thumb top back into lines above the live end. */

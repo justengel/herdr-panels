@@ -120,9 +120,6 @@ async fn place_browser(
     finite_box(x, y, width, height)?;
     let zoom = current_zoom(&host);
     let (x, y, width, height) = scale_bounds(x, y, width, height, zoom);
-    eprintln!(
-        "browser {label} at {x:.0},{y:.0} {width:.0}x{height:.0} visible={visible}"
-    );
     let target = parsed.as_str().to_string();
     let mut guard = host.slots.lock().map_err(|_| "browser host is locked".to_string())?;
     if let Some(slot) = guard.get_mut(&label) {
@@ -590,6 +587,29 @@ pub fn route_desk_key(
     (armed, KeyRoute::Take { panel: browser_panel.map(str::to_string) })
 }
 
+fn is_modifier_key(key: &str) -> bool {
+    matches!(key, "Control" | "Shift" | "Alt" | "Meta")
+}
+
+/// Keep a key only while one of our own windows has the keyboard and a child is using it.
+/// Any other key is left alone. This is not a system-wide hook.
+pub fn capture_prefix(
+    pointer_over_desk: bool,
+    desk_front: bool,
+    frame_focused: bool,
+    panel: Option<&str>,
+    armed: bool,
+    chord: &PrefixChord,
+    snap: &KeySnap,
+) -> (bool, KeyRoute) {
+    let typing = !snap.up && !is_modifier_key(&snap.key);
+    if !pointer_over_desk || !desk_front || (panel.is_none() && !frame_focused) {
+        let armed = if typing { false } else { armed };
+        return (armed, KeyRoute::Leave);
+    }
+    route_desk_key(panel, frame_focused, armed, chord, snap)
+}
+
 /// `(armed afterwards, forward this key to the desk)`.
 pub fn child_key_action(armed: bool, chord: &PrefixChord, snap: &KeySnap) -> (bool, bool) {
     if snap.up || matches!(snap.key.as_str(), "Control" | "Shift" | "Alt" | "Meta") {
@@ -611,7 +631,7 @@ pub fn child_key_action(armed: bool, chord: &PrefixChord, snap: &KeySnap) -> (bo
 mod browser_wheel {
     use std::io::Write;
     use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
-    use std::sync::Mutex;
+    use std::sync::{Mutex, OnceLock};
     use std::time::Duration;
 
     use tauri::{AppHandle, Manager};
@@ -619,17 +639,15 @@ mod browser_wheel {
     use windows::Win32::Graphics::Gdi::ScreenToClient;
     use windows::Win32::UI::HiDpi::GetDpiForWindow;
     use windows::Win32::UI::Input::KeyboardAndMouse::{
-        GetAsyncKeyState, VK_CONTROL, VK_LWIN, VK_MENU, VK_RWIN, VK_SHIFT,
+        GetAsyncKeyState, GetFocus, VK_CONTROL, VK_LWIN, VK_MENU, VK_RWIN, VK_SHIFT,
     };
     use windows::Win32::UI::WindowsAndMessaging::{
-        CallNextHookEx, DispatchMessageW, GetAncestor, GetForegroundWindow, GetGUIThreadInfo, GetMessageW,
-        GetParent, GetWindowThreadProcessId, SetWindowsHookExW, TranslateMessage, WindowFromPoint, GA_ROOT,
-        GUITHREADINFO, HHOOK, KBDLLHOOKSTRUCT, MSG, MSLLHOOKSTRUCT, WH_KEYBOARD_LL, WH_MOUSE_LL, WM_LBUTTONDOWN,
-        WM_MOUSEWHEEL, WM_RBUTTONDOWN,
+        CallNextHookEx, GetAncestor, GetParent, GetWindowThreadProcessId, SetWindowsHookExW, WindowFromPoint, GA_ROOT,
+        HHOOK, MOUSEHOOKSTRUCT, MOUSEHOOKSTRUCTEX, WH_KEYBOARD, WH_MOUSE, WM_LBUTTONDOWN, WM_MOUSEWHEEL, WM_RBUTTONDOWN,
     };
 
     use super::{
-        css_from_client, key_from_vk, panel_id_from_browser, route_desk_key, zoom_wheel_steps, KeyRoute, KeySnap,
+        capture_prefix, css_from_client, key_from_vk, panel_id_from_browser, zoom_wheel_steps, KeyRoute, KeySnap,
         PrefixChord,
     };
 
@@ -640,6 +658,13 @@ mod browser_wheel {
     static FRAME_FOCUS: AtomicBool = AtomicBool::new(false);
     static BROWSERS: Mutex<Vec<(isize, String)>> = Mutex::new(Vec::new());
     static HELD: Mutex<Option<u16>> = Mutex::new(None);
+    static WORK: OnceLock<std::sync::mpsc::SyncSender<HookWork>> = OnceLock::new();
+
+    enum HookWork {
+        Eval(String),
+        Zoom(i32),
+        Click(POINT),
+    }
     static PREFIX: Mutex<(bool, PrefixChord)> = Mutex::new((
         false,
         PrefixChord {
@@ -660,46 +685,60 @@ mod browser_wheel {
                 std::thread::sleep(Duration::from_millis(100));
             }
             if DESK.load(Ordering::Relaxed) == 0 {
-                note("desktop zoom hook skipped: no window");
+                note("desktop input hook skipped: no window");
                 return;
             }
             if let Ok(mut slot) = APP.lock() {
-                *slot = Some(app);
+                *slot = Some(app.clone());
             }
-            unsafe {
-                match SetWindowsHookExW(WH_MOUSE_LL, Some(mouse_hook), None, 0) {
-                    Ok(hook) => {
-                        let _ = hook;
-                        note("desktop zoom hook installed");
+            let (tx, rx) = std::sync::mpsc::sync_channel(32);
+            let _ = WORK.set(tx);
+            std::thread::spawn(move || {
+                while let Ok(work) = rx.recv() {
+                    match work {
+                        HookWork::Eval(script) => relay_eval(script),
+                        HookWork::Zoom(steps) => emit(steps),
+                        HookWork::Click(pt) => {
+                            if let Some(script) = focus_script(pt) {
+                                relay_eval(script);
+                            }
+                        }
                     }
-                    Err(err) => note(&format!("desktop zoom hook failed: {err}")),
                 }
-                match SetWindowsHookExW(WH_KEYBOARD_LL, Some(key_hook), None, 0) {
-                    Ok(hook) => {
-                        let _ = hook;
-                        note("desktop prefix hook installed");
-                    }
-                    Err(err) => note(&format!("desktop prefix hook failed: {err}")),
-                }
-                let claim = APP.lock().ok().and_then(|guard| guard.clone());
-                if let Some(claim) = claim {
-                    std::thread::spawn(move || loop {
-                        mark_captured(&claim);
-                        std::thread::sleep(Duration::from_secs(2));
-                    });
-                }
-                loop {
-                    let mut msg = MSG::default();
-                    let status = GetMessageW(&mut msg, None, 0, 0);
-                    if status.0 <= 0 {
-                        break;
-                    }
-                    let _ = TranslateMessage(&msg);
-                    DispatchMessageW(&msg);
-                }
-                note("desktop zoom hook pump ended");
-            }
+            });
+            let claim = app.clone();
+            std::thread::spawn(move || loop {
+                mark_captured(&claim);
+                std::thread::sleep(Duration::from_secs(2));
+            });
+            let _ = app.run_on_main_thread(install_window_hooks);
         });
+    }
+
+    /// Hooks for this window's thread only. A system-wide hook would run ahead of Synergy.
+    fn install_window_hooks() {
+        let desk = DESK.load(Ordering::Relaxed);
+        if desk == 0 {
+            return;
+        }
+        let thread = unsafe { GetWindowThreadProcessId(HWND(desk as *mut std::ffi::c_void), None) };
+        if thread == 0 {
+            return;
+        }
+        unsafe {
+            match SetWindowsHookExW(WH_MOUSE, Some(mouse_hook), None, thread) {
+                Ok(hook) => {
+                    let _ = hook;
+                }
+                Err(err) => note(&format!("desktop mouse hook failed: {err}")),
+            }
+            match SetWindowsHookExW(WH_KEYBOARD, Some(key_hook), None, thread) {
+                Ok(hook) => {
+                    let _ = hook;
+                }
+                Err(err) => note(&format!("desktop key hook failed: {err}")),
+            }
+        }
     }
 
     fn remember_desk(app: &AppHandle) -> bool {
@@ -733,43 +772,45 @@ mod browser_wheel {
         });
     }
 
-    unsafe extern "system" fn mouse_hook(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
-        if code == 0 && (wparam.0 == WM_LBUTTONDOWN as usize || wparam.0 == WM_RBUTTONDOWN as usize) {
-            let info = unsafe { &*(lparam.0 as *const MSLLHOOKSTRUCT) };
-            if let Some(script) = focus_script(info.pt) {
-                relay_eval(script);
-            }
-        }
-        if code == 0 && wparam.0 == WM_MOUSEWHEEL as usize {
-            let info = unsafe { &*(lparam.0 as *const MSLLHOOKSTRUCT) };
-            let delta = (info.mouseData >> 16) as i16 as i32;
-            let ctrl = unsafe { GetAsyncKeyState(VK_CONTROL.0 as i32) } < 0;
-            let over = point_over_desk(info.pt);
-            let mut pending = PENDING.lock().unwrap_or_else(|err| err.into_inner());
-            let (next, steps) = zoom_wheel_steps(*pending, delta, ctrl, over);
-            *pending = next;
-            drop(pending);
-            if ctrl && over {
-                if steps != 0 {
-                    emit(steps);
-                }
-                return LRESULT(1);
-            }
-        }
-        unsafe { CallNextHookEx(None::<HHOOK>, code, wparam, lparam) }
+    fn enqueue(work: HookWork) -> bool {
+        WORK.get().is_some_and(|tx| tx.try_send(work).is_ok())
     }
 
-    fn point_over_desk(pt: POINT) -> bool {
-        let desk = DESK.load(Ordering::Relaxed);
-        if desk == 0 {
-            return false;
-        }
-        let hwnd = unsafe { WindowFromPoint(pt) };
+    fn hwnd_in_desk(hwnd: HWND) -> bool {
         if hwnd.0.is_null() {
             return false;
         }
-        let root = unsafe { GetAncestor(hwnd, GA_ROOT) };
-        root.0 as isize == desk
+        let desk = DESK.load(Ordering::Relaxed);
+        desk != 0 && unsafe { GetAncestor(hwnd, GA_ROOT) }.0 as isize == desk
+    }
+
+    unsafe extern "system" fn mouse_hook(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+        if code == 0 {
+            let info = unsafe { &*(lparam.0 as *const MOUSEHOOKSTRUCT) };
+            if hwnd_in_desk(info.hwnd) {
+                if wparam.0 == WM_LBUTTONDOWN as usize || wparam.0 == WM_RBUTTONDOWN as usize {
+                    let _ = enqueue(HookWork::Click(info.pt));
+                }
+                if wparam.0 == WM_MOUSEWHEEL as usize {
+                    let wheel = unsafe { &*(lparam.0 as *const MOUSEHOOKSTRUCTEX) };
+                    let delta = (wheel.mouseData >> 16) as i16 as i32;
+                    let ctrl = unsafe { GetAsyncKeyState(VK_CONTROL.0 as i32) } < 0;
+                    if let Ok(mut pending) = PENDING.try_lock() {
+                        let saved = *pending;
+                        let (next, steps) = zoom_wheel_steps(*pending, delta, ctrl, true);
+                        *pending = next;
+                        drop(pending);
+                        if ctrl && (steps == 0 || enqueue(HookWork::Zoom(steps))) {
+                            return LRESULT(1);
+                        }
+                        if let Ok(mut pending) = PENDING.try_lock() {
+                            *pending = saved;
+                        }
+                    }
+                }
+            }
+        }
+        unsafe { CallNextHookEx(None::<HHOOK>, code, wparam, lparam) }
     }
 
     fn emit(steps: i32) {
@@ -843,21 +884,16 @@ mod browser_wheel {
         *prefix = (false, chord);
     }
 
-    fn browser_panel(focus_root: isize) -> Option<String> {
-        let fg = unsafe { GetForegroundWindow() };
-        if fg.0.is_null() || unsafe { GetAncestor(fg, GA_ROOT) }.0 as isize != focus_root {
+    fn focused_browser_panel() -> Option<String> {
+        let focus = unsafe { GetFocus() };
+        if !hwnd_in_desk(focus) {
             return None;
         }
-        let mut info: GUITHREADINFO = unsafe { std::mem::zeroed() };
-        info.cbSize = std::mem::size_of::<GUITHREADINFO>() as u32;
-        let thread = unsafe { GetWindowThreadProcessId(fg, None) };
-        if unsafe { GetGUIThreadInfo(thread, &mut info) }.is_err() {
-            return None;
-        }
+        let desk = DESK.load(Ordering::Relaxed);
         let browsers = BROWSERS.lock().unwrap_or_else(|err| err.into_inner());
-        let mut current = info.hwndFocus.0 as isize;
+        let mut current = focus.0 as isize;
         for _ in 0..24 {
-            if current == 0 || current == focus_root {
+            if current == 0 || current == desk {
                 return None;
             }
             if let Some((_, label)) = browsers.iter().find(|(hwnd, _)| *hwnd == current) {
@@ -870,18 +906,12 @@ mod browser_wheel {
         None
     }
 
-    fn desk_is_foreground() -> bool {
-        let desk = DESK.load(Ordering::Relaxed);
-        if desk == 0 {
-            return false;
-        }
-        let fg = unsafe { GetForegroundWindow() };
-        !fg.0.is_null() && unsafe { GetAncestor(fg, GA_ROOT) }.0 as isize == desk
-    }
-
-    fn take_child_key(vk: u16, up: bool) -> Option<String> {
+    /// True when this window keeps the key. Other programs never reach this hook.
+    fn take_child_key(vk: u16, up: bool) -> bool {
         let (key, code) = key_from_vk(vk);
-        let mut held = HELD.lock().unwrap_or_else(|err| err.into_inner());
+        let Ok(mut held) = HELD.try_lock() else {
+            return false;
+        };
         let repeat = !up && *held == Some(vk);
         if up {
             if *held == Some(vk) {
@@ -891,10 +921,6 @@ mod browser_wheel {
             *held = Some(vk);
         }
         drop(held);
-        if !desk_is_foreground() {
-            return None;
-        }
-        let panel = browser_panel(DESK.load(Ordering::Relaxed));
         let snap = KeySnap {
             key,
             code,
@@ -906,28 +932,37 @@ mod browser_wheel {
             repeat,
             up,
         };
-        let mut prefix = PREFIX.lock().unwrap_or_else(|err| err.into_inner());
+        let Ok(mut prefix) = PREFIX.try_lock() else {
+            return false;
+        };
         if prefix.1.key.is_empty() {
             prefix.1.key = "b".into();
             prefix.1.ctrl = true;
         }
-        let frame = FRAME_FOCUS.load(Ordering::Relaxed);
-        if panel.is_none() && !frame {
-            if !up && !matches!(snap.key.as_str(), "Control" | "Shift" | "Alt" | "Meta") {
-                prefix.0 = false;
-            }
-            return None;
-        }
-        let (armed, route) = route_desk_key(panel.as_deref(), frame, prefix.0, &prefix.1, &snap);
-        prefix.0 = armed;
-        drop(prefix);
+        let panel = focused_browser_panel();
+        let ours = hwnd_in_desk(unsafe { GetFocus() });
+        let (armed, route) = capture_prefix(
+            ours,
+            ours,
+            FRAME_FOCUS.load(Ordering::Relaxed),
+            panel.as_deref(),
+            prefix.0,
+            &prefix.1,
+            &snap,
+        );
         let KeyRoute::Take { panel } = route else {
-            return None;
+            prefix.0 = armed;
+            return false;
         };
-        Some(match panel {
+        let script = match panel {
             Some(panel) => relay_script(&panel, &snap),
             None => relay_key_script(&snap),
-        })
+        };
+        if !enqueue(HookWork::Eval(script)) {
+            return false;
+        }
+        prefix.0 = armed;
+        true
     }
 
     fn relay_key_script(snap: &KeySnap) -> String {
@@ -961,15 +996,12 @@ mod browser_wheel {
     }
 
     unsafe extern "system" fn key_hook(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
-        if code == 0 {
-            let info = unsafe { &*(lparam.0 as *const KBDLLHOOKSTRUCT) };
-            let up = info.flags.0 & 0x80 != 0;
-            if let Some(script) = take_child_key(info.vkCode as u16, up) {
-                relay_eval(script);
+        if code == 0 && hwnd_in_desk(unsafe { GetFocus() }) {
+            let up = (lparam.0 as u32) & 0x8000_0000 != 0;
+            if take_child_key(wparam.0 as u16, up) {
                 return LRESULT(1);
             }
         }
-        let _ = wparam;
         unsafe { CallNextHookEx(None::<HHOOK>, code, wparam, lparam) }
     }
 
@@ -1059,6 +1091,29 @@ mod tests {
             route_desk_key(Some("panel-1"), false, false, &chord, &prefix),
             (true, KeyRoute::Take { panel: Some("panel-1".into()) })
         );
+        let outside = capture_prefix(false, true, true, None, false, &chord, &prefix);
+        assert_eq!(outside.1, KeyRoute::Leave);
+        let away = capture_prefix(true, false, true, Some("panel-1"), true, &chord, &letter);
+        assert_eq!(away, (false, KeyRoute::Leave));
+        assert_eq!(
+            capture_prefix(true, true, true, None, false, &chord, &prefix).1,
+            KeyRoute::Take { panel: None }
+        );
+        assert_eq!(
+            capture_prefix(true, true, true, None, true, &chord, &letter).1,
+            KeyRoute::Take { panel: None }
+        );
+        let held_ctrl = KeySnap {
+            key: "Control".into(),
+            code: "ControlLeft".into(),
+            ctrl: true,
+            alt: false,
+            shift: false,
+            meta: false,
+            repeat: false,
+            up: false,
+        };
+        assert_eq!(capture_prefix(false, true, true, None, true, &chord, &held_ctrl).0, true);
         assert_eq!(key_from_vk(0x42), ("b".into(), "KeyB".into()));
         assert_eq!(key_from_vk(0xBC), (",".into(), "Comma".into()));
         assert_eq!(css_from_client(200, 100, 96, 1.0), Some((200.0, 100.0)));

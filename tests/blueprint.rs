@@ -205,6 +205,7 @@ async fn the_viewer_stays_up_when_herdr_is_offline() {
     let (status, health) = desk.call("GET", "/api/health", None).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(health["ok"], true);
+    assert_eq!(health["build"], herdr_panels::BUILD_ID);
 
     let (status, runtime) = desk.call("GET", "/api/runtime", None).await;
     assert_eq!(status, StatusCode::OK);
