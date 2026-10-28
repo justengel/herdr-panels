@@ -164,6 +164,9 @@ pub enum PanelConfig {
             skip_serializing_if = "Option::is_none"
         )]
         address_bar: Option<bool>,
+        /// When set, the panel may type into a Herdr pane and focus one. Off unless chosen.
+        #[serde(default, skip_serializing_if = "is_false")]
+        control: bool,
     },
     Files,
     Agents,
@@ -512,6 +515,23 @@ pub fn is_pane_id(id: &str) -> bool {
         && id
             .chars()
             .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, ':' | '_' | '-'))
+}
+
+/// Herdr pane ids look like `w8:pG`: a workspace part and a pane part.
+pub fn is_herdr_pane_id(id: &str) -> bool {
+    let Some((workspace, pane)) = id.split_once(':') else {
+        return false;
+    };
+    let Some(workspace) = workspace.strip_prefix('w') else {
+        return false;
+    };
+    let Some(pane) = pane.strip_prefix('p') else {
+        return false;
+    };
+    !workspace.is_empty()
+        && !pane.is_empty()
+        && workspace.chars().all(|ch| ch.is_ascii_alphanumeric())
+        && pane.chars().all(|ch| ch.is_ascii_alphanumeric())
 }
 
 pub fn is_safe_key(key: &str) -> bool {

@@ -5,6 +5,7 @@ use axum::response::IntoResponse;
 
 use crate::server::AppState;
 
+const FRAME_KEYS: &str = include_str!("../assets/frame-keys.js");
 const FRAME_SELECT: &str = include_str!("../assets/frame-select.js");
 const BRIDGE: &str = include_str!("../assets/panel-bridge.js");
 const MAX_FILE: usize = 8 * 1024 * 1024;
@@ -74,18 +75,31 @@ pub async fn handle(State(state): State<AppState>, uri: Uri) -> Response<Body> {
     response
 }
 
-pub fn inject_bridge(html: &str) -> String {
-    if html.contains("/* hwp-bridge */") {
+/// Let a plugin or HTML panel report the prefix key. The page still receives every other key.
+pub fn inject_frame_keys(html: &str) -> String {
+    if html.contains("/* hwp-frame-keys */") {
         return html.to_string();
     }
+    insert_script(html, &format!("<script>{FRAME_KEYS}</script>"))
+}
+
+pub fn inject_bridge(html: &str) -> String {
+    let html = inject_frame_keys(html);
+    if html.contains("/* hwp-bridge */") {
+        return html;
+    }
     let script = format!("<script>{FRAME_SELECT}\n{BRIDGE}</script>");
+    insert_script(&html, &script)
+}
+
+fn insert_script(html: &str, script: &str) -> String {
     let lower = html.to_ascii_lowercase();
     if let Some(start) = lower.find("<head") {
         if let Some(end) = lower[start..].find('>') {
             let at = start + end + 1;
             let mut out = String::with_capacity(html.len() + script.len());
             out.push_str(&html[..at]);
-            out.push_str(&script);
+            out.push_str(script);
             out.push_str(&html[at..]);
             return out;
         }

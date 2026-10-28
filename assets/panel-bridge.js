@@ -51,6 +51,17 @@
     sendText: (paneId, text) => call("sendText", { paneId, text }),
     sendKeys: (paneId, keys) => call("sendKeys", { paneId, keys }),
     readPane: (paneId, source) => call("readPane", { paneId, source: source || "visible" }),
+    focusPane: (paneId) => call("focusPane", { paneId }),
+    listPanels: () => call("listPanels"),
+    openPanel: (target, options) => call("openPanel", Object.assign({ target }, options || {})),
+    updatePanel: (panelId, options) => call("updatePanel", Object.assign({ panelId }, options || {})),
+    closePanel: (panelId) => call("closePanel", { panelId }),
+    movePanel: (panelId, target, place) => call("movePanel", { panelId, target, place: place || "swap" }),
+    resizePanel: (panelId, ratio) => call("resizePanel", { panelId, ratio }),
+    fillPanel: (panelId) => call("fillPanel", { panelId }),
+    showDesk: () => call("showDesk"),
+    setZoom: (scale) => call("setZoom", { scale }),
+    scrollPane: (paneId, direction, lines) => call("scrollPane", { paneId, direction, lines }),
   };
 
   window.addEventListener("message", (event) => {

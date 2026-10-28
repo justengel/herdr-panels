@@ -1368,6 +1368,7 @@ body.panel-dragging, body.panel-dragging * { cursor: grabbing !important; user-s
 }
 
 .quiet:hover, .design-bar button:hover, .chat-compose button:hover { border-color: var(--accent); }
+.topbar .quiet:disabled { opacity: 0.4; cursor: default; }
 
 .quiet[aria-pressed="true"] {
   background: var(--accent);

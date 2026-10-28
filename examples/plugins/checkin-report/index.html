@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Check-in report</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #101318;
+        --ink: #e7e1d6;
+        --muted: #b7b1a6;
+        --line: #2a3140;
+        --urgent: #e15b64;
+        --nudge: #e2b657;
+        --digest: #7f8ea3;
+        --ok: #7dcea0;
+        --idle: #8b93a1;
+        --blocked: #e15b64;
+        --working: #e2b657;
+        --done: #7aa2f7;
+      }
+      body {
+        margin: 0;
+        padding: 22px 24px 32px;
+        background: var(--bg);
+        color: var(--ink);
+        font: 14px/1.45 "Segoe UI", sans-serif;
+      }
+      h1 { font-size: 20px; margin: 0; }
+      h2 { font-size: 13px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); margin: 22px 0 8px; }
+      .meta { color: var(--muted); margin-top: 4px; }
+      .empty { color: var(--muted); margin-top: 28px; }
+      .banner {
+        margin-top: 14px;
+        padding: 10px 12px;
+        border: 1px solid var(--urgent);
+        border-radius: 8px;
+        color: #ffd5d8;
+        background: #2a1518;
+      }
+      .finding, .session {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 4px 12px;
+        padding: 10px 0;
+        border-top: 1px solid var(--line);
+      }
+      .subject { font-weight: 600; }
+      .detail, .quiet { color: var(--muted); }
+      .new {
+        display: inline-block;
+        margin-left: 8px;
+        padding: 0 6px;
+        border-radius: 999px;
+        background: #3a2e16;
+        color: var(--nudge);
+        font-size: 11px;
+      }
+      a, button.link {
+        color: #9ec1ff;
+        background: none;
+        border: 0;
+        padding: 0;
+        font: inherit;
+        cursor: pointer;
+        text-align: left;
+      }
+      .dot {
+        display: inline-block;
+        width: 8px;
+        height: 8px;
+        margin-right: 8px;
+        border-radius: 50%;
+        background: var(--idle);
+        vertical-align: middle;
+      }
+      .dot.working { background: var(--working); }
+      .dot.blocked { background: var(--blocked); }
+      .dot.done { background: var(--done); }
+      .dot.idle, .dot.unknown { background: var(--idle); }
+    </style>
+  </head>
+  <body>
+    <h1>Check-in</h1>
+    <div id="meta" class="meta">Waiting for the report.</div>
+    <div id="root"></div>
+    <script>
+      const REPORT = "/home/engel/projects/checkin/state/report.json";
+      const PANE = /^w[0-9A-Za-z]+:p[0-9A-Za-z]+$/;
+      const ORDER = ["urgent", "nudge", "digest"];
+
+      const meta = document.getElementById("meta");
+      const root = document.getElementById("root");
+
+      function empty(text) {
+        root.replaceChildren();
+        meta.textContent = text;
+      }
+
+      function text(value) {
+        return value == null ? "" : String(value);
+      }
+
+      function errorLine(item) {
+        if (typeof item === "string") return item;
+        if (item && typeof item === "object") {
+          return text(item.message || item.detail || item.error) || JSON.stringify(item);
+        }
+        return text(item);
+      }
+
+      function focus(paneId) {
+        const bridge = window.herdrPanels;
+        if (!bridge || typeof bridge.focusPane !== "function") {
+          meta.textContent = "This panel cannot focus a pane until the layout sets control.";
+          return;
+        }
+        bridge.focusPane(paneId).catch((error) => {
+          meta.textContent = error && error.message ? error.message : "Could not focus that pane.";
+        });
+      }
+
+      function linkFor(url) {
+        if (PANE.test(url)) {
+          const button = document.createElement("button");
+          button.type = "button";
+          button.className = "link";
+          button.textContent = "Focus " + url;
+          button.addEventListener("click", () => focus(url));
+          return button;
+        }
+        if (/^https?:\/\//i.test(url)) {
+          const anchor = document.createElement("a");
+          anchor.href = url;
+          anchor.target = "_blank";
+          anchor.rel = "noreferrer";
+          anchor.textContent = url;
+          return anchor;
+        }
+        return document.createTextNode(text(url));
+      }
+
+      function render(report) {
+        root.replaceChildren();
+        const kind = text(report.kind) || "update";
+        const at = text(report.at);
+        meta.textContent = [kind, at, report.present === false ? "not at the desk" : ""]
+          .filter(Boolean)
+          .join(" · ");
+
+        const errors = Array.isArray(report.errors) ? report.errors.filter((item) => item != null && text(item) !== "") : [];
+        if (errors.length) {
+          const banner = document.createElement("div");
+          banner.className = "banner";
+          banner.textContent = errors.map(errorLine).join(" ");
+          root.appendChild(banner);
+        }
+
+        const findings = Array.isArray(report.findings) ? report.findings : [];
+        const groups = new Map();
+        for (const finding of findings) {
+          const urgency = text(finding && finding.urgency) || "digest";
+          if (!groups.has(urgency)) groups.set(urgency, []);
+          groups.get(urgency).push(finding);
+        }
+        const names = [...groups.keys()].sort((left, right) => {
+          const a = ORDER.indexOf(left);
+          const b = ORDER.indexOf(right);
+          return (a < 0 ? ORDER.length : a) - (b < 0 ? ORDER.length : b);
+        });
+        for (const name of names) {
+          const heading = document.createElement("h2");
+          heading.textContent = name;
+          root.appendChild(heading);
+          for (const finding of groups.get(name)) {
+            const row = document.createElement("article");
+            row.className = "finding";
+            const title = document.createElement("div");
+            title.className = "subject";
+            title.textContent = text(finding.subject) || "Finding";
+            if (finding.new === true) {
+              const mark = document.createElement("span");
+              mark.className = "new";
+              mark.textContent = "new";
+              title.appendChild(mark);
+            }
+            const detail = document.createElement("div");
+            detail.className = "detail";
+            const bits = [finding.author, finding.detail].map(text).filter(Boolean);
+            detail.textContent = bits.join(" — ");
+            row.append(title, linkFor(text(finding.url)), detail);
+            root.appendChild(row);
+          }
+        }
+
+        const sessions = Array.isArray(report.sessions) ? report.sessions : [];
+        if (sessions.length) {
+          const heading = document.createElement("h2");
+          heading.textContent = "Sessions";
+          root.appendChild(heading);
+          for (const session of sessions) {
+            const row = document.createElement("article");
+            row.className = "session";
+            const title = document.createElement("div");
+            const dot = document.createElement("span");
+            const status = text(session.status) || "unknown";
+            dot.className = "dot " + status;
+            title.append(dot, document.createTextNode(text(session.title) || text(session.workspace) || "Session"));
+            const quiet = document.createElement("div");
+            quiet.className = "quiet";
+            quiet.textContent = [session.workspace, session.last_prompted ? "prompted " + session.last_prompted : ""]
+              .map(text)
+              .filter(Boolean)
+              .join(" · ");
+            const pane = text(session.pane);
+            row.append(title, pane && PANE.test(pane) ? linkFor(pane) : document.createTextNode(pane), quiet);
+            root.appendChild(row);
+          }
+        }
+
+        if (!findings.length && !sessions.length && !errors.length) {
+          const note = document.createElement("p");
+          note.className = "empty";
+          note.textContent = "Nothing in this report.";
+          root.appendChild(note);
+        }
+      }
+
+      function showFile(message) {
+        if (!message || message.path !== REPORT) return;
+        if (message.error === "not_found") {
+          empty("No report yet.");
+          return;
+        }
+        if (message.error) {
+          empty("The report could not be read.");
+          return;
+        }
+        let report;
+        try {
+          report = JSON.parse(message.content || "");
+        } catch {
+          empty("The report is not valid JSON.");
+          return;
+        }
+        if (!report || typeof report !== "object" || Array.isArray(report)) {
+          empty("The report is not valid JSON.");
+          return;
+        }
+        render(report);
+      }
+
+      function ask() {
+        parent.postMessage({ source: "hwp-plugin", type: "watch", path: REPORT }, "*");
+      }
+
+      window.addEventListener("message", (event) => {
+        const message = event.data;
+        if (!message || message.source !== "hwp-host") return;
+        if (message.type === "open") ask();
+        if (message.type === "file") showFile(message);
+      });
+
+      ask();
+    </script>
+  </body>
+</html>

@@ -131,7 +131,7 @@ Every panel title bar shows that panel's name, and the close button sits at the 
 
 The desk can be driven from the keyboard. **Keys** in the top bar lists the shortcuts, and so does Prefix+? (the prefix defaults to Ctrl+B, the same one Herdr uses).
 
-Prefix+H, J, K, and L still move between Herdr panes. Focusing a desk panel is one shortcut with two chords by default: Alt+Shift+Arrow and Prefix+Arrow. Prefix+Alt+Arrow swaps that panel with the neighbor in that direction. The focused panel has an accent bar on its title. Prefix+Tab cycles panels. Prefix+Z zooms that panel.
+Prefix+H, J, K, and L still move between Herdr panes. Focusing a desk panel is one shortcut with two chords by default: Alt+Shift+Arrow and Prefix+Arrow. Prefix+Alt+Arrow swaps that panel with the neighbor in that direction. The focused panel has an accent bar on its title. Prefix+Tab cycles panels. Prefix+F fills the screen with the focused panel, or shows the whole desk. Prefix+Z and Prefix+Shift+Z go back and forward in the selected panel, the same as the address bar buttons. Prefix+T reopens the last closed panel, and repeats for older ones. Those closed panels stay in this window, up to 30, and a restart clears them. The prefix works from a plugin, an HTML panel, and a browser panel. Ctrl+Z is left for the program inside a panel. Inside a terminal, Prefix+Z still belongs to Herdr.
 
 Prefix+Alt+N and Prefix+Alt+P move between spaces. Prefix+Shift+1 through 9 jumps to a space. Prefix+Alt+Period and Prefix+Alt+Comma move between agents, and Prefix+Alt+1 through 9 jumps to an agent. Prefix+G focuses the address bar. Prefix+A opens the Agents list, and Prefix+B or Prefix+W opens the Spaces list. Up and Down move in those lists. Enter opens the highlighted row. Prefix+Alt+W closes the focused panel. The last panel stays.
 
@@ -156,7 +156,7 @@ The Design button turns the workspace into an editor:
 <config>/plugins/<id>/index.html
 ```
 
-`plugin.json` has `id`, `title`, and `entry` (default `index.html`). `views` says which addresses a plugin can open, so it can sit beside Markdown or Text for that file. Leave `views` out and the plugin is its own panel. `addressBar` shows that bar, lets `modify` change it, or uses `replace` so the plugin can draw its own. The panel gear can show or hide the bar. Install the sample with `herdr-panels plugin install --example`, or install another directory with `herdr-panels plugin install <directory>`. The page loads it at `/plugins/<id>`. See `examples/plugins/README.md`.
+`plugin.json` has `id`, `title`, and `entry` (default `index.html`). `views` says which addresses a plugin can open, so it can sit beside Markdown or Text for that file. Leave `views` out and the plugin is its own panel. `addressBar` shows that bar, lets `modify` change it, or uses `replace` so the plugin can draw its own. The panel gear can show or hide the bar. An optional `permissions` list can ask for `herdr:read`, `herdr:control`, `panels:read`, `panels:control`, or `files:read`. `files:read` also needs a `files` list of absolute paths or directories. Install asks before granting those, unless you pass `--yes`. A plugin with no `permissions` is unchanged. Install the sample with `herdr-panels plugin install --example`, or install another directory with `herdr-panels plugin install <directory>`. The page loads it at `/plugins/<id>`. See `examples/plugins/README.md`.
 
 ### Agents
 
@@ -195,9 +195,12 @@ await herdrPanels.status()
 await herdrPanels.readPane("w1:p1")
 await herdrPanels.sendText("w1:p1", "echo hi")
 await herdrPanels.sendKeys("w1:p1", ["enter"])
+await herdrPanels.focusPane("w1:p1")
 ```
 
-`sendText` and `sendKeys` run only when that panel's JSON sets `"control": true`. Listing panes and reading a pane stay available. `examples/panels/session-board.html` is a working panel; its Send button needs that flag.
+`sendText`, `sendKeys`, and `focusPane` run only when that panel's JSON sets `"control": true`. Listing panes and reading a pane stay available. `examples/panels/session-board.html` is a working panel; its Send button needs that flag.
+
+A plugin with `herdr:read`, `herdr:control`, `panels:read`, or `panels:control` gets this same bridge, injected into its entry page. The frame still does not receive the viewer token, and it still cannot call `/api`. The server checks the declaration. `herdr:read` allows `listPanes`, `status`, and `readPane`. `herdr:control` allows `sendText`, `sendKeys`, `focusPane`, and `scrollPane`, and only on a panel whose layout sets `"control": true`. `scrollPane` moves that Herdr pane up or down by 1 to 200 lines, and the pane has to be open in the viewer. `panels:read` allows `listPanels`. `panels:control` allows `openPanel`, `updatePanel`, `closePanel`, `movePanel`, `resizePanel`, `fillPanel`, `showDesk`, and `setZoom`, the same edits as `herdr-panels panel`. `fillPanel` fills the screen with one panel. `showDesk` brings the desk back. `setZoom` sets the desktop window zoom to the nearest browser step, from 25% to 500%. A browser tab ignores it. Those calls do not type into a pane, and they cannot set `"control": true`. An HTML panel's bridge does not perform the desk calls. `files:read` is separate: the page asks with `postMessage` (`source: "hwp-plugin"`, `type: "watch"` or `"unwatch"`, and a `path` inside the declared `files` list). The server sends `{ source: "hwp-host", type: "file", path, content, mtime }` and sends it again when the file changes. `examples/plugins/checkin-report` is that kind of plugin.
 
 ### Security
 
@@ -205,7 +208,7 @@ The server refuses any non-loopback bind. The first start writes one viewer toke
 
 A browser `Origin`, when one is present, must be this viewer's own port on `localhost`, `127.0.0.1`, or `::1`, or the Vite dev server on port 5173. The shell page is not served to a `null` origin. Plugin files load in the viewer's own frames without the token, because those files are the installed plugin. Content files and the loopback proxy require the token. The page mints a separate pass for each content or proxy frame, and the frame address carries that pass so its own images and scripts still load. The pass is not the viewer token. It covers one content directory, or one loopback proxy target, and it cannot call the API. `/api/frame` does not follow a redirect that leaves the site it was asked about.
 
-The iframe proxy accepts only `localhost`, `127.0.0.1`, and `::1`, and it does not forward `Cookie`, `Authorization`, or `Set-Cookie`. Plugin frames and proxied frames are sandboxed. A remote page keeps its own origin so its cookies still work, and it cannot navigate the viewer window. An HTML panel can type into a pane only when `"control": true`.
+The iframe proxy accepts only `localhost`, `127.0.0.1`, and `::1`, and it does not forward `Cookie`, `Authorization`, or `Set-Cookie`. Plugin frames and proxied frames are sandboxed. A remote page keeps its own origin so its cookies still work, and it cannot navigate the viewer window. An HTML panel can type into a pane only when `"control": true`. A plugin can type, focus, or scroll a pane only when it declared `herdr:control` and that same flag is set on its panel. It can list or change panels on the desk, or set the desktop window zoom, only when it declared `panels:read` or `panels:control`. It can read a local file only when it declared `files:read` and the path stays inside the `files` list. The server checks that path on every read.
 
 ## Setup
 
@@ -242,6 +245,7 @@ herdr-panels panel zoom Notes
 herdr-panels plugin list
 herdr-panels plugin install --example
 herdr-panels plugin install <directory>
+herdr-panels plugin install <directory> --yes
 herdr-panels token rotate
 herdr-panels token set <value>
 ```

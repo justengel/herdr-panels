@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Desk sample</title>
+    <style>
+      :root { color-scheme: dark; }
+      body {
+        margin: 0;
+        padding: 22px 24px;
+        background: #101318;
+        color: #e7e1d6;
+        font: 14px/1.45 "Segoe UI", sans-serif;
+      }
+      p { color: #b7b1a6; }
+      button {
+        margin: 12px 8px 0 0;
+        padding: 6px 10px;
+        border: 1px solid #2a3140;
+        border-radius: 8px;
+        background: #1a2030;
+        color: #e7e1d6;
+        font: inherit;
+        cursor: pointer;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Desk sample</h1>
+    <p id="status">Checking the example panel.</p>
+    <button type="button" id="open">Open example</button>
+    <button type="button" id="below">Move below</button>
+    <button type="button" id="resize">Resize</button>
+    <button type="button" id="fill">Fill screen</button>
+    <button type="button" id="desk">Show the desk</button>
+    <button type="button" id="zoom">Zoom 125%</button>
+    <button type="button" id="zoom-reset">Zoom 100%</button>
+    <button type="button" id="close">Close</button>
+    <script>
+      const status = document.getElementById("status");
+      const EXAMPLE = "https://example.com";
+
+      function bridge() {
+        const api = window.herdrPanels;
+        if (!api || typeof api.listPanels !== "function") {
+          throw new Error("This plugin does not have the desk bridge.");
+        }
+        return api;
+      }
+
+      function panelsOf(listed) {
+        return Array.isArray(listed.panels) ? listed.panels : [];
+      }
+
+      function ours(panels) {
+        return panels.find((panel) => panel.type === "plugin" && panel.summary === "desk-sample");
+      }
+
+      function examples(panels) {
+        return panels.filter((panel) => panel.type === "iframe" && panel.summary === EXAMPLE);
+      }
+
+      async function refresh() {
+        const panels = panelsOf(await bridge().listPanels());
+        status.textContent = examples(panels).length ? "Example panel is open." : "Example panel is closed.";
+      }
+
+      async function run(action) {
+        try {
+          const note = await action();
+          if (typeof note === "string") status.textContent = note;
+          else await refresh();
+        } catch (error) {
+          status.textContent = error && error.message ? error.message : "The desk call failed.";
+        }
+      }
+
+      document.getElementById("open").addEventListener("click", () => run(async () => {
+        const panels = panelsOf(await bridge().listPanels());
+        if (examples(panels).length) return;
+        await bridge().openPanel(EXAMPLE, {
+          title: "Example",
+          direction: "right",
+        });
+      }));
+
+      document.getElementById("below").addEventListener("click", () => run(async () => {
+        const panels = panelsOf(await bridge().listPanels());
+        const self = ours(panels);
+        const found = examples(panels);
+        if (!found.length || !self) throw new Error("Open the example panel first.");
+        for (const panel of found) await bridge().movePanel(panel.id, self.id, "below");
+      }));
+
+      document.getElementById("resize").addEventListener("click", () => run(async () => {
+        const found = examples(panelsOf(await bridge().listPanels()));
+        if (!found.length) throw new Error("Open the example panel first.");
+        for (const panel of found) await bridge().resizePanel(panel.id, 0.33);
+      }));
+
+      document.getElementById("fill").addEventListener("click", () => run(async () => {
+        const panels = panelsOf(await bridge().listPanels());
+        const found = examples(panels);
+        const self = ours(panels);
+        const target = (found[0] && found[0].id) || (self && self.id);
+        if (!target) throw new Error("This panel is not on the desk.");
+        await bridge().fillPanel(target);
+        return "One panel fills the screen.";
+      }));
+
+      document.getElementById("desk").addEventListener("click", () => run(async () => {
+        await bridge().showDesk();
+      }));
+
+      document.getElementById("zoom").addEventListener("click", () => run(async () => {
+        const result = await bridge().setZoom(1.25);
+        return "Zoom is " + Math.round(Number(result.scale) * 100) + "%.";
+      }));
+
+      document.getElementById("zoom-reset").addEventListener("click", () => run(async () => {
+        const result = await bridge().setZoom(1);
+        return "Zoom is " + Math.round(Number(result.scale) * 100) + "%.";
+      }));
+
+      document.getElementById("close").addEventListener("click", () => run(async () => {
+        const found = examples(panelsOf(await bridge().listPanels()));
+        if (!found.length) throw new Error("Example panel is closed.");
+        for (const panel of found) await bridge().closePanel(panel.id);
+      }));
+
+      refresh().catch((error) => {
+        status.textContent = error && error.message ? error.message : "The desk call failed.";
+      });
+    </script>
+  </body>
+</html>

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { pluginAddressBar, readPluginAddressMessage } from "../src/pluginAddress";
+import { pluginAddressBar, readPluginAddressMessage, readPluginBridgeCall, readPluginFileCommand } from "../src/pluginAddress";
 
 describe("plugin address bar", () => {
   it("shows the bar and refuses changes when a plugin does not ask", () => {
@@ -62,6 +62,25 @@ describe("plugin address bar", () => {
     });
     expect(readPluginAddressMessage({ source: "hwp-plugin", type: "config", value: [] })).toBeNull();
     expect(readPluginAddressMessage({ source: "hwp-plugin", type: "config", value: { blob: "x".repeat(33000) } })).toBeNull();
+  });
+
+  it("reads a file watch and a bridge call", () => {
+    expect(readPluginFileCommand({ source: "hwp-plugin", type: "watch", path: "/tmp/report.json" })).toEqual({
+      type: "watch",
+      path: "/tmp/report.json",
+    });
+    expect(readPluginFileCommand({ source: "hwp-plugin", type: "unwatch", path: "/tmp/report.json" })).toEqual({
+      type: "unwatch",
+      path: "/tmp/report.json",
+    });
+    expect(readPluginFileCommand({ source: "hwp-plugin", type: "watch", path: "" })).toBeNull();
+    expect(readPluginFileCommand({ source: "hwp-host", type: "watch", path: "/tmp/a" })).toBeNull();
+    expect(readPluginBridgeCall({ source: "hwp-panel", id: 3, method: "focusPane", params: { paneId: "w8:pG" } })).toEqual({
+      id: 3,
+      method: "focusPane",
+      params: { paneId: "w8:pG" },
+    });
+    expect(readPluginBridgeCall({ source: "hwp-plugin", id: 3, method: "focusPane" })).toBeNull();
   });
 
   it("ignores other frames and unusable addresses", () => {

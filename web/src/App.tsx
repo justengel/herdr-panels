@@ -7,12 +7,15 @@ import {
   addPanelTab,
   assignContent,
   closePanelTab,
+  type ClosedPanel,
   defaultPanel,
+  describeClose,
   findPanel,
   freshPanelId,
   listPanels,
   mapPanel,
   movePanel,
+  reopenPanel,
   normalizeLayout,
   setGridTracks,
   setPanel,
@@ -30,6 +33,7 @@ import { ElementSelect } from "./components/ElementSelect";
 import { DeskKeyboard, KeyedPanelProvider } from "./deskKeyboard";
 import { layoutForFocusedPane, panelForPane, panelRefs } from "./deskKeys";
 import { installDisplayZoom } from "./displayZoom";
+import { pushClosedPanel, takeClosedPanel } from "./panelHistory";
 import { HostProvider } from "./host";
 import { readAddressBarChoices } from "./addressBar";
 import { readRawChoices } from "./rawText";
@@ -115,6 +119,7 @@ export function App() {
   const pendingPaneRef = useRef<string | null>(null);
   const keyIdRef = useRef<string | null>(null);
   const layoutRef = useRef<LayoutDocument | null>(null);
+  const closedRef = useRef<ClosedPanel[]>([]);
   const runtimeRef = useRef<RuntimeSnapshot | null>(null);
   const sessionRef = useRef<string | null>(null);
   const deskGeneration = useRef(0);
@@ -293,7 +298,8 @@ export function App() {
 
   /** Swap the desk for a space without waiting on Herdr or a layout save. */
   const showSpaceLayout = useCallback((doc: LayoutDocument, root: LayoutDocument["root"]) => {
-    setLayout({ ...doc, root: normalizeLayout(root) });
+    const shown = normalizeLayout(root);
+    setLayout({ ...doc, root: shown });
     setSelectedId(null);
     setOpenMenuId(null);
   }, []);
@@ -462,7 +468,7 @@ export function App() {
         acceptDeskSaves.current = true;
         if (!space) return;
         const after = layoutForSpace(space, seedSpaceLayout());
-        if (JSON.stringify(before) !== JSON.stringify(after)) applySpaceRef.current(after);
+        if (!before || JSON.stringify(before) !== JSON.stringify(after)) applySpaceRef.current(after);
         return;
       }
       if (msg.type === "layout" && msg.layout) {
@@ -545,6 +551,25 @@ export function App() {
     remember({ ...layout!, root: rootNext });
   }
 
+  function reopenClosed() {
+    const doc = layoutRef.current;
+    if (!doc) return;
+    const openIds = new Set(listPanels(doc.root).map((panel) => panel.id));
+    const taken = takeClosedPanel(closedRef.current, openIds);
+    rememberClosed(taken.stack);
+    if (!taken.closed) {
+      notify("No closed panel to restore");
+      return;
+    }
+    const root = reopenPanel(doc.root, taken.closed);
+    if (!root) {
+      notify("No closed panel to restore");
+      return;
+    }
+    edit(root);
+    setSelectedId(taken.closed.panel.id);
+  }
+
   function runHerdrAction(action: HerdrStatusAction) {
     if (herdrBusy) return;
     setHerdrBusy(true);
@@ -611,13 +636,19 @@ export function App() {
     return defaultPanel(type);
   }
 
+  function rememberClosed(next: ClosedPanel[]) {
+    closedRef.current = next;
+  }
+
   function close(id: string) {
     const spaceIds = runtimeRef.current?.workspaces.map((space) => space.workspaceId) ?? [];
+    const record = describeClose(layout!.root, id);
     const next = closePinned(layout!.root, id, spaceRef.current ?? "", spaceIds);
     if (!next) {
       setNotice("At least one panel stays open");
       return;
     }
+    if (record) rememberClosed(pushClosedPanel(closedRef.current, record));
     edit(next);
     setSelectedId(listPanels(next)[0]?.id ?? null);
     if (openMenuId === id) setOpenMenuId(null);
@@ -731,6 +762,7 @@ export function App() {
           onNotice={notify}
           onToggleHelp={() => setHelp((open) => !open)}
           onHelp={setHelp}
+          onReopen={reopenClosed}
         />
         <TopBar
           runtime={runtime}

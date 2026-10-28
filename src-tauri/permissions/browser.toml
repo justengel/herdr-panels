@@ -17,3 +17,13 @@ commands.allow = ["set_browser_select"]
 identifier = "allow-set-display-zoom"
 description = "Scale the desktop window and every browser panel together."
 commands.allow = ["set_display_zoom"]
+
+[[permission]]
+identifier = "allow-set-desk-prefix"
+description = "Tell the desktop window which prefix chord a browser panel should hand to the desk."
+commands.allow = ["set_desk_prefix"]
+
+[[permission]]
+identifier = "allow-set-frame-focus"
+description = "Tell the desktop window when a plugin or HTML frame has the keyboard."
+commands.allow = ["set_frame_focus"]

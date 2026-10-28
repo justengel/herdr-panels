@@ -12,6 +12,8 @@ import {
   writeDeskOverrides,
   type DeskCommand,
 } from "./deskKeys";
+import { desktopHost } from "./desktopBrowser";
+import { frameOwnsKeys, framePrefix, readFrameKey, type FrameKey } from "./frameKeys";
 import { chordMatches, eventKey, expandBinding } from "./herdrKeys";
 import { HerdrSettings } from "./components/HerdrSettings";
 import { applyTheme } from "./themes";
@@ -70,6 +72,7 @@ export function HostProvider({
   const [renameTick, setRenameTick] = useState(0);
   const [closeTick, setCloseTick] = useState(0);
   const prefixRef = useRef(false);
+  const frameToken = useRef(crypto.randomUUID());
   const configRef = useRef<HerdrConfig | null>(null);
   const runtimeRef = useRef(runtime);
   const noticeRef = useRef(onNotice);
@@ -279,6 +282,91 @@ export function HostProvider({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);
+
+  useEffect(() => {
+    const relay = (key: FrameKey) => {
+      consumeRef.current(
+        new KeyboardEvent("keydown", {
+          key: key.key,
+          code: key.code,
+          ctrlKey: key.ctrlKey,
+          altKey: key.altKey,
+          shiftKey: key.shiftKey,
+          metaKey: key.metaKey,
+          repeat: key.repeat,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    };
+    const page = window as Window & { __hwpRelayKey?: (key: FrameKey) => void };
+    page.__hwpRelayKey = relay;
+    const onMessage = (event: MessageEvent) => {
+      const data = event.data as { source?: string; type?: string } | null;
+      if (data?.source === "hwp-keys" && data.type === "ready") {
+        document.querySelectorAll("iframe").forEach((frame) => {
+          if (frame instanceof HTMLIFrameElement && frameOwnsKeys(frame)) {
+            frame.contentWindow?.postMessage(
+              {
+                source: "hwp-host",
+                type: "prefix",
+                token: frameToken.current,
+                chord: framePrefix(String(configRef.current?.keys.find((field) => field.key === "prefix")?.value || "ctrl+b")) ?? {
+                  ctrl: true,
+                  alt: false,
+                  shift: false,
+                  meta: false,
+                  key: "b",
+                },
+              },
+              "*",
+            );
+          }
+        });
+        return;
+      }
+      const key = readFrameKey(event.data, frameToken.current);
+      if (!key) return;
+      const owned =
+        event.source instanceof Window &&
+        [...document.querySelectorAll("iframe")].some(
+          (frame) => frame instanceof HTMLIFrameElement && frame.contentWindow === event.source && frameOwnsKeys(frame),
+        );
+      if (!owned && event.origin !== "null") return;
+      relay(key);
+    };
+    window.addEventListener("message", onMessage);
+    return () => {
+      window.removeEventListener("message", onMessage);
+      delete page.__hwpRelayKey;
+    };
+  }, []);
+
+  useEffect(() => {
+    const binding = String(config?.keys.find((field) => field.key === "prefix")?.value || "ctrl+b");
+    const chord = framePrefix(binding) ?? { ctrl: true, alt: false, shift: false, meta: false, key: "b" };
+    const desktop = desktopHost();
+    if (desktop) void desktop.invoke("set_desk_prefix", { ...chord });
+    const page = window as Window & { __hwpArmFrame?: (frame: Window) => void };
+    page.__hwpArmFrame = (frame) => {
+      frame.postMessage({ source: "hwp-host", type: "prefix", token: frameToken.current, chord }, "*");
+    };
+    const send = (frame: HTMLIFrameElement) => {
+      frame.contentWindow?.postMessage({ source: "hwp-host", type: "prefix", token: frameToken.current, chord }, "*");
+    };
+    const onLoad = (event: Event) => {
+      const target = event.target;
+      if (target instanceof HTMLIFrameElement && frameOwnsKeys(target)) send(target);
+    };
+    document.addEventListener("load", onLoad, true);
+    document.querySelectorAll("iframe").forEach((frame) => {
+      if (frame instanceof HTMLIFrameElement && frameOwnsKeys(frame)) send(frame);
+    });
+    return () => {
+      delete page.__hwpArmFrame;
+      document.removeEventListener("load", onLoad, true);
+    };
+  }, [config]);
 
   async function createSpace(label?: string) {
     try {

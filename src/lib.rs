@@ -25,6 +25,8 @@ pub mod layout;
 pub mod layout_ops;
 pub mod open_target;
 pub mod paths;
+pub mod plugin_files;
+pub mod plugin_grant;
 pub mod plugins;
 pub mod proxy;
 pub mod server;

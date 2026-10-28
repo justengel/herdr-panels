@@ -334,6 +334,72 @@ function closeIn(node: LayoutNode, id: string): CloseHit {
   return { kind: "node", node: { ...node, cells } };
 }
 
+export interface ClosedPanel {
+  panel: PanelNode;
+  anchorId: string | null;
+  place: Exclude<PanelPlace, "center">;
+}
+
+/** Where a panel sat before it was closed, so it can be put back beside what stayed. */
+export function describeClose(root: LayoutNode, id: string): ClosedPanel | null {
+  const panel = findPanel(root, id);
+  if (!panel) return null;
+  const spot = splitSpot(root, id);
+  return {
+    panel: JSON.parse(JSON.stringify(panel)) as PanelNode,
+    anchorId: spot?.anchorId ?? null,
+    place: spot?.place ?? "right",
+  };
+}
+
+export function insertPanel(
+  node: LayoutNode,
+  anchorId: string,
+  panel: PanelNode,
+  place: Exclude<PanelPlace, "center">,
+): LayoutNode {
+  if (!findPanel(node, anchorId) || findPanel(node, panel.id)) return node;
+  return insertBeside(node, anchorId, panel, place);
+}
+
+export function reopenPanel(root: LayoutNode, closed: ClosedPanel): LayoutNode | null {
+  if (findPanel(root, closed.panel.id)) return null;
+  const anchor =
+    (closed.anchorId && findPanel(root, closed.anchorId) ? closed.anchorId : null) ??
+    listPanels(root)[0]?.id ??
+    null;
+  if (!anchor) return null;
+  return insertPanel(root, anchor, closed.panel, closed.place);
+}
+
+function splitSpot(
+  node: LayoutNode,
+  id: string,
+): { anchorId: string; place: Exclude<PanelPlace, "center"> } | null {
+  if (node.type === "split") {
+    const placeFor = (side: "first" | "second"): Exclude<PanelPlace, "center"> => {
+      if (node.direction === "row") return side === "first" ? "left" : "right";
+      return side === "first" ? "above" : "below";
+    };
+    if (node.first.type === "panel" && node.first.id === id) {
+      const anchor = listPanels(node.second)[0];
+      if (anchor) return { anchorId: anchor.id, place: placeFor("first") };
+    }
+    if (node.second.type === "panel" && node.second.id === id) {
+      const anchor = listPanels(node.first)[0];
+      if (anchor) return { anchorId: anchor.id, place: placeFor("second") };
+    }
+    return splitSpot(node.first, id) ?? splitSpot(node.second, id);
+  }
+  if (node.type === "grid") {
+    for (const cell of node.cells) {
+      const hit = splitSpot(cellNode(cell), id);
+      if (hit) return hit;
+    }
+  }
+  return null;
+}
+
 export function closePanel(node: LayoutNode, id: string): LayoutNode | null {
   const hit = closeIn(node, id);
   if (hit.kind === "gone") return null;

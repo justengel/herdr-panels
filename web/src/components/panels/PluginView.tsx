@@ -1,5 +1,7 @@
 import { useEffect, useRef } from "react";
-import { readPluginAddressMessage } from "../../pluginAddress";
+import { api, wsUrl } from "../../api";
+import { desktopHost } from "../../desktopBrowser";
+import { readPluginAddressMessage, readPluginBridgeCall, readPluginFileCommand } from "../../pluginAddress";
 import type { PluginOpen } from "../../viewMenu";
 
 export type PluginHostCommand =
@@ -8,6 +10,7 @@ export type PluginHostCommand =
 
 export function PluginView({
   pluginId,
+  panelId,
   title,
   modify,
   command,
@@ -17,6 +20,7 @@ export function PluginView({
   onConfig,
 }: {
   pluginId: string;
+  panelId: string;
   title: string;
   modify: boolean;
   command: PluginHostCommand | null;
@@ -31,28 +35,111 @@ export function PluginView({
   const onConfigRef = useRef(onConfig);
   const commandRef = useRef(command);
   const openRef = useRef(open);
+  const fileSocket = useRef<WebSocket | null>(null);
+  const fileQueue = useRef<string[]>([]);
+  const modifyRef = useRef(modify);
   onAddressRef.current = onAddress;
   onBarRef.current = onBar;
   onConfigRef.current = onConfig;
   commandRef.current = command;
   openRef.current = open;
+  modifyRef.current = modify;
 
   useEffect(() => {
+    const sendFile = (payload: string) => {
+      const socket = fileSocket.current;
+      if (socket && socket.readyState === WebSocket.OPEN) {
+        socket.send(payload);
+        return;
+      }
+      fileQueue.current.push(payload);
+      if (socket && socket.readyState === WebSocket.CONNECTING) return;
+      const next = new WebSocket(wsUrl(`/ws/plugin-files?plugin=${encodeURIComponent(pluginId)}`));
+      fileSocket.current = next;
+      next.onopen = () => {
+        for (const queued of fileQueue.current) next.send(queued);
+        fileQueue.current = [];
+      };
+      next.onmessage = (event) => {
+        let message: unknown;
+        try {
+          message = JSON.parse(String(event.data));
+        } catch {
+          return;
+        }
+        if (!message || typeof message !== "object") return;
+        frameRef.current?.contentWindow?.postMessage({ ...(message as object), source: "hwp-host" }, "*");
+      };
+      next.onclose = () => {
+        if (fileSocket.current === next) fileSocket.current = null;
+      };
+    };
+
     const onMessage = (event: MessageEvent) => {
       if (event.source !== frameRef.current?.contentWindow) return;
+      const call = readPluginBridgeCall(event.data);
+      if (call) {
+        const frame = frameRef.current?.contentWindow;
+        void api
+          .pluginBridge(pluginId, { panelId, method: call.method, params: call.params })
+          .then((result) => {
+            if (call.method === "setZoom") {
+              const scale =
+                result && typeof result === "object" && "scale" in result
+                  ? Number((result as { scale: unknown }).scale)
+                  : Number.NaN;
+              if (!Number.isFinite(scale)) {
+                frame?.postMessage(
+                  { source: "hwp-host", id: call.id, ok: false, error: "scale is required" },
+                  "*",
+                );
+                return;
+              }
+              if (!desktopHost()) {
+                frame?.postMessage(
+                  {
+                    source: "hwp-host",
+                    id: call.id,
+                    ok: false,
+                    error: "display zoom is only available in the desktop window",
+                  },
+                  "*",
+                );
+                return;
+              }
+              window.dispatchEvent(new CustomEvent("herdr-zoom-set", { detail: scale }));
+            }
+            frame?.postMessage({ source: "hwp-host", id: call.id, ok: true, result }, "*");
+          })
+          .catch((error: unknown) => {
+            const text = error instanceof Error ? error.message : "request failed";
+            frame?.postMessage({ source: "hwp-host", id: call.id, ok: false, error: text }, "*");
+          });
+        return;
+      }
+      const file = readPluginFileCommand(event.data);
+      if (file) {
+        sendFile(JSON.stringify(file));
+        return;
+      }
       const message = readPluginAddressMessage(event.data);
       if (!message) return;
       if (message.type === "config") {
         onConfigRef.current(message.value);
         return;
       }
-      if (!modify) return;
+      if (!modifyRef.current) return;
       if (message.type === "address") onAddressRef.current(message.value);
       else onBarRef.current({ show: message.show, replace: message.replace });
     };
     window.addEventListener("message", onMessage);
-    return () => window.removeEventListener("message", onMessage);
-  }, [modify]);
+    return () => {
+      window.removeEventListener("message", onMessage);
+      fileSocket.current?.close();
+      fileSocket.current = null;
+      fileQueue.current = [];
+    };
+  }, [panelId, pluginId]);
 
   const openKey = open ? `${open.view}\n${open.kind}\n${open.address}\n${JSON.stringify(open.config)}` : "";
 
@@ -67,7 +154,12 @@ export function PluginView({
       title={title}
       sandbox="allow-scripts allow-forms allow-popups"
       src={`/plugins/${encodeURIComponent(pluginId)}`}
-      onLoad={(event) => deliver(event.currentTarget.contentWindow, modify, commandRef.current, openRef.current)}
+      onLoad={(event) => {
+        const frame = event.currentTarget.contentWindow;
+        const arm = (window as Window & { __hwpArmFrame?: (frame: Window) => void }).__hwpArmFrame;
+        if (frame) arm?.(frame);
+        deliver(frame, modify, commandRef.current, openRef.current);
+      }}
     />
   );
 }

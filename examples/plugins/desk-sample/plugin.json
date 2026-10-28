@@ -1,0 +1,9 @@
+{
+  "id": "desk-sample",
+  "title": "Desk sample",
+  "apiVersion": 1,
+  "version": "0.1.0",
+  "entry": "index.html",
+  "description": "Opens, moves, resizes, and closes one public example page, and sets the window zoom. It does not show the rest of the desk.",
+  "permissions": ["panels:read", "panels:control"]
+}

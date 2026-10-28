@@ -13,6 +13,8 @@
     "allow-place-browser",
     "allow-close-browser",
     "allow-set-browser-select",
-    "allow-set-display-zoom"
+    "allow-set-display-zoom",
+    "allow-set-desk-prefix",
+    "allow-set-frame-focus"
   ]
 }

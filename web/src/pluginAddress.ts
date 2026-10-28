@@ -49,6 +49,32 @@ export function readPluginAddressMessage(data: unknown): PluginAddressMessage | 
   return null;
 }
 
+export function readPluginFileCommand(data: unknown): { type: "watch" | "unwatch"; path: string } | null {
+  if (!data || typeof data !== "object") return null;
+  const message = data as { source?: unknown; type?: unknown; path?: unknown };
+  if (message.source !== "hwp-plugin") return null;
+  if (message.type !== "watch" && message.type !== "unwatch") return null;
+  if (typeof message.path !== "string" || !message.path || message.path.length > 4096 || message.path.includes("\0")) {
+    return null;
+  }
+  return { type: message.type, path: message.path };
+}
+
+export function readPluginBridgeCall(
+  data: unknown,
+): { id: number; method: string; params: Record<string, unknown> } | null {
+  if (!data || typeof data !== "object") return null;
+  const message = data as { source?: unknown; id?: unknown; method?: unknown; params?: unknown };
+  if (message.source !== "hwp-panel") return null;
+  if (typeof message.id !== "number" || !Number.isInteger(message.id)) return null;
+  if (typeof message.method !== "string" || !message.method) return null;
+  const params =
+    message.params && typeof message.params === "object" && !Array.isArray(message.params)
+      ? (message.params as Record<string, unknown>)
+      : {};
+  return { id: message.id, method: message.method, params };
+}
+
 function isConfig(value: unknown): value is Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   try {

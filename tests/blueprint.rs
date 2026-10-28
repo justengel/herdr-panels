@@ -1177,6 +1177,508 @@ async fn the_shell_page_keeps_the_token_out_of_other_origins() {
     }
 }
 
+#[tokio::test]
+async fn a_plugin_bridge_is_refused_without_permission_or_the_panel_flag() {
+    let desk = desk().await;
+    let plugin = desk.root.join("plugins").join("checkin-report");
+    std::fs::create_dir_all(&plugin).unwrap();
+    std::fs::write(
+        plugin.join("plugin.json"),
+        r#"{"id":"checkin-report","title":"Check-in report","permissions":["files:read"],"files":["/home/engel/projects/checkin/state"]}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        plugin.join("index.html"),
+        "<html><head></head><body>Report</body></html>",
+    )
+    .unwrap();
+    write_plugin_panel(&desk.root, false);
+
+    let (status, page) = desk
+        .exchange(
+            "GET",
+            "/plugins/checkin-report/index.html",
+            None,
+            None,
+            false,
+            &[("sec-fetch-site", "same-origin")],
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    assert!(
+        !page["raw"].as_str().unwrap_or("").contains("herdrPanels"),
+        "files:read alone does not inject the bridge: {page}"
+    );
+
+    let (status, body) = desk
+        .call(
+            "POST",
+            "/api/plugins/checkin-report/bridge",
+            Some(json!({
+                "panelId": "report",
+                "method": "focusPane",
+                "params": {"paneId": "w8:pG"}
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    assert!(
+        body["error"]
+            .as_str()
+            .unwrap_or("")
+            .contains("herdr:control"),
+        "{body}"
+    );
+
+    let (status, body) = desk
+        .call(
+            "POST",
+            "/api/plugins/checkin-report/bridge",
+            Some(json!({
+                "panelId": "report",
+                "method": "sendText",
+                "params": {"paneId": "w8:pG", "text": "echo hi"}
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+
+    std::fs::write(
+        plugin.join("plugin.json"),
+        r#"{"id":"checkin-report","title":"Check-in report","permissions":["herdr:control"],"entry":"index.html"}"#,
+    )
+    .unwrap();
+    let (status, body) = desk
+        .call(
+            "POST",
+            "/api/plugins/checkin-report/bridge",
+            Some(json!({
+                "panelId": "report",
+                "method": "focusPane",
+                "params": {"paneId": "w8:pG"}
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    assert!(
+        body["error"]
+            .as_str()
+            .unwrap_or("")
+            .contains("cannot type into a pane"),
+        "{body}"
+    );
+
+    write_plugin_panel(&desk.root, true);
+    let (status, page) = desk
+        .exchange(
+            "GET",
+            "/plugins/checkin-report/index.html",
+            None,
+            None,
+            false,
+            &[("sec-fetch-site", "same-origin")],
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    let html = page["raw"].as_str().unwrap_or("");
+    assert!(html.contains("herdrPanels"), "{html}");
+    assert!(html.contains("focusPane"), "{html}");
+    assert!(!html.contains(&desk.token), "{html}");
+
+    let (status, body) = desk
+        .call(
+            "POST",
+            "/api/plugins/checkin-report/bridge",
+            Some(json!({
+                "panelId": "report",
+                "method": "focusPane",
+                "params": {"paneId": "w8:pG"}
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    assert_eq!(body["error"], "pane was not found");
+}
+
+#[tokio::test]
+async fn desk_edits_need_panels_permissions_and_cannot_grant_herdr_control() {
+    let desk = desk().await;
+    let plugin = desk.root.join("plugins").join("desk-tool");
+    std::fs::create_dir_all(&plugin).unwrap();
+    std::fs::write(
+        plugin.join("index.html"),
+        "<html><head></head><body>Desk</body></html>",
+    )
+    .unwrap();
+    std::fs::write(
+        plugin.join("plugin.json"),
+        r#"{"id":"desk-tool","title":"Desk tool","permissions":["herdr:control"]}"#,
+    )
+    .unwrap();
+    write_named_plugin(&desk.root, "desk-tool", "tool");
+
+    let (status, body) = desk
+        .call(
+            "POST",
+            "/api/plugins/desk-tool/bridge",
+            Some(json!({
+                "panelId": "tool",
+                "method": "listPanels",
+                "params": {}
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    assert!(
+        body["error"].as_str().unwrap_or("").contains("panels:read"),
+        "{body}"
+    );
+
+    let (status, body) = desk
+        .call(
+            "POST",
+            "/api/plugins/desk-tool/bridge",
+            Some(json!({
+                "panelId": "tool",
+                "method": "closePanel",
+                "params": {"panelId": "tool"}
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    assert!(
+        body["error"]
+            .as_str()
+            .unwrap_or("")
+            .contains("panels:control"),
+        "{body}"
+    );
+
+    let (status, body) = desk
+        .call(
+            "POST",
+            "/api/plugins/desk-tool/bridge",
+            Some(json!({
+                "panelId": "tool",
+                "method": "fillPanel",
+                "params": {"panelId": "tool"}
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+
+    let (status, body) = desk
+        .call(
+            "POST",
+            "/api/plugins/desk-tool/bridge",
+            Some(json!({
+                "panelId": "tool",
+                "method": "setZoom",
+                "params": {"scale": 1.25}
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    assert!(
+        body["error"]
+            .as_str()
+            .unwrap_or("")
+            .contains("panels:control"),
+        "{body}"
+    );
+
+    let (status, body) = desk
+        .call(
+            "POST",
+            "/api/plugins/desk-tool/bridge",
+            Some(json!({
+                "panelId": "tool",
+                "method": "scrollPane",
+                "params": {"paneId": "w8:pG", "direction": "up", "lines": 3}
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    assert!(
+        body["error"]
+            .as_str()
+            .unwrap_or("")
+            .contains("cannot type into a pane"),
+        "{body}"
+    );
+
+    std::fs::write(
+        plugin.join("plugin.json"),
+        r#"{"id":"desk-tool","title":"Desk tool","permissions":["panels:read","panels:control"]}"#,
+    )
+    .unwrap();
+    let (status, body) = desk
+        .call(
+            "POST",
+            "/api/plugins/desk-tool/bridge",
+            Some(json!({
+                "panelId": "tool",
+                "method": "listPanels",
+                "params": {}
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(body["panels"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|panel| panel["id"] == "tool"));
+
+    let (status, body) = desk
+        .call(
+            "POST",
+            "/api/plugins/desk-tool/bridge",
+            Some(json!({
+                "panelId": "tool",
+                "method": "openPanel",
+                "params": {"target": "plugin:welcome", "from": "tool", "direction": "right"}
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let opened = body["panelId"].as_str().unwrap().to_string();
+    assert_ne!(opened, "tool");
+
+    let (status, body) = desk
+        .call(
+            "POST",
+            "/api/plugins/desk-tool/bridge",
+            Some(json!({
+                "panelId": "tool",
+                "method": "updatePanel",
+                "params": {
+                    "panelId": opened,
+                    "kind": "html",
+                    "path": "panels/session-board.html",
+                    "control": true
+                }
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let stored = std::fs::read_to_string(desk.root.join("desks").join("default.json")).unwrap();
+    let document: Value = serde_json::from_str(&stored).unwrap();
+    let html = find_panel(&document, &opened);
+    assert_eq!(html["type"], "html");
+    assert_ne!(html["control"], true);
+
+    let (status, body) = desk
+        .call(
+            "POST",
+            "/api/plugins/desk-tool/bridge",
+            Some(json!({
+                "panelId": "tool",
+                "method": "resizePanel",
+                "params": {"panelId": "tool", "ratio": 0.4}
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    let (status, body) = desk
+        .call(
+            "POST",
+            "/api/plugins/desk-tool/bridge",
+            Some(json!({
+                "panelId": "tool",
+                "method": "fillPanel",
+                "params": {"panelId": "tool"}
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["ok"], true);
+
+    let (status, body) = desk
+        .call(
+            "POST",
+            "/api/plugins/desk-tool/bridge",
+            Some(json!({
+                "panelId": "tool",
+                "method": "showDesk",
+                "params": {}
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["ok"], true);
+
+    let (status, body) = desk
+        .call(
+            "POST",
+            "/api/plugins/desk-tool/bridge",
+            Some(json!({
+                "panelId": "tool",
+                "method": "fillPanel",
+                "params": {"panelId": "missing"}
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+
+    let (status, body) = desk
+        .call(
+            "POST",
+            "/api/plugins/desk-tool/bridge",
+            Some(json!({
+                "panelId": "tool",
+                "method": "setZoom",
+                "params": {"scale": 1.2}
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let scale = body["scale"].as_f64().unwrap_or(0.0);
+    assert!((scale - 1.25).abs() < 0.001, "{body}");
+
+    let (status, body) = desk
+        .call(
+            "POST",
+            "/api/plugins/desk-tool/bridge",
+            Some(json!({
+                "panelId": "tool",
+                "method": "scrollPane",
+                "params": {"paneId": "w8:pG", "direction": "up", "lines": 3}
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    assert!(
+        body["error"]
+            .as_str()
+            .unwrap_or("")
+            .contains("herdr:control"),
+        "{body}"
+    );
+
+    std::fs::write(
+        plugin.join("plugin.json"),
+        r#"{"id":"desk-tool","title":"Desk tool","permissions":["herdr:control"]}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        desk.root.join("desks").join("default.json"),
+        serde_json::to_vec_pretty(&json!({
+            "revision": 1,
+            "pins": [],
+            "spaces": {
+                "main": {
+                    "type": "panel",
+                    "id": "tool",
+                    "panel": {"type": "plugin", "plugin": "desk-tool", "control": true}
+                }
+            }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let (status, body) = desk
+        .call(
+            "POST",
+            "/api/plugins/desk-tool/bridge",
+            Some(json!({
+                "panelId": "tool",
+                "method": "scrollPane",
+                "params": {"paneId": "w8:pG", "direction": "up", "lines": 3}
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    assert_eq!(body["error"], "pane was not found");
+
+    let (status, body) = desk
+        .call(
+            "POST",
+            "/api/plugins/desk-tool/bridge",
+            Some(json!({
+                "panelId": "tool",
+                "method": "scrollPane",
+                "params": {"paneId": "w8:pG", "direction": "sideways", "lines": 3}
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+}
+
+fn write_named_plugin(root: &std::path::Path, plugin: &str, panel_id: &str) {
+    let document = json!({
+        "revision": 1,
+        "pins": [],
+        "spaces": {
+            "main": {
+                "type": "panel",
+                "id": panel_id,
+                "panel": {"type": "plugin", "plugin": plugin}
+            }
+        }
+    });
+    std::fs::create_dir_all(root.join("desks")).unwrap();
+    std::fs::write(
+        root.join("desks").join("default.json"),
+        serde_json::to_vec_pretty(&document).unwrap(),
+    )
+    .unwrap();
+}
+
+fn find_panel(value: &Value, id: &str) -> Value {
+    if value.get("id").and_then(Value::as_str) == Some(id) {
+        if let Some(panel) = value.get("panel") {
+            return panel.clone();
+        }
+    }
+    match value {
+        Value::Object(map) => {
+            for child in map.values() {
+                let found = find_panel(child, id);
+                if !found.is_null() {
+                    return found;
+                }
+            }
+        }
+        Value::Array(items) => {
+            for child in items {
+                let found = find_panel(child, id);
+                if !found.is_null() {
+                    return found;
+                }
+            }
+        }
+        _ => {}
+    }
+    Value::Null
+}
+
+fn write_plugin_panel(root: &std::path::Path, control: bool) {
+    let panel = json!({
+        "type": "plugin",
+        "plugin": "checkin-report",
+        "control": control
+    });
+    let document = json!({
+        "revision": 1,
+        "pins": [],
+        "spaces": {
+            "main": {
+                "type": "panel",
+                "id": "report",
+                "panel": panel
+            }
+        }
+    });
+    std::fs::create_dir_all(root.join("desks")).unwrap();
+    std::fs::write(
+        root.join("desks").join("default.json"),
+        serde_json::to_vec_pretty(&document).unwrap(),
+    )
+    .unwrap();
+}
+
 fn query_url(url: &str) -> String {
     let mut query = url::form_urlencoded::Serializer::new(String::new());
     query.append_pair("url", url);

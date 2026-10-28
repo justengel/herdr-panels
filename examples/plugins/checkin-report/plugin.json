@@ -1,0 +1,10 @@
+{
+  "id": "checkin-report",
+  "title": "Check-in report",
+  "apiVersion": 1,
+  "version": "0.1.0",
+  "entry": "index.html",
+  "description": "Live view of the check-in collector's report.json. A finding whose url is a Herdr pane id focuses that pane.",
+  "permissions": ["files:read", "herdr:control"],
+  "files": ["/home/engel/projects/checkin/state"]
+}

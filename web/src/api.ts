@@ -142,6 +142,14 @@ export const api = {
       body: JSON.stringify(body),
     }),
   plugins: () => request<{ plugins: PluginInfo[] }>("/api/plugins"),
+  pluginBridge: (
+    pluginId: string,
+    body: { panelId: string; method: string; params?: Record<string, unknown> },
+  ) =>
+    request<unknown>(`/api/plugins/${encodeURIComponent(pluginId)}/bridge`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
   closeSession: (name: string) =>
     request<{ name: string; runtime: RuntimeSnapshot }>("/api/sessions/close", {
       method: "POST",

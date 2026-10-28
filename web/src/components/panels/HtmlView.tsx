@@ -1,7 +1,9 @@
 import { useEffect, useRef } from "react";
+import frameKeys from "../../../../assets/frame-keys.js?raw";
 import frameSelect from "../../../../assets/frame-select.js?raw";
 import bridge from "../../../../assets/panel-bridge.js?raw";
 import { api, contentUrl } from "../../api";
+import { isHerdrPaneId } from "../../paneId";
 
 interface Props {
   path?: string | null;
@@ -71,7 +73,7 @@ export function HtmlView({ path, inline, title, control = false, design = false,
         );
     } else if (inline) {
       frame.removeAttribute("src");
-      frame.srcdoc = `<!doctype html><html><head><meta charset="utf-8"><script>${frameSelect}\n${bridge}</script></head><body>${inline}</body></html>`;
+      frame.srcdoc = `<!doctype html><html><head><meta charset="utf-8"><script>${frameKeys}\n${frameSelect}\n${bridge}</script></head><body>${inline}</body></html>`;
     }
     return () => {
       cancelled = true;
@@ -96,6 +98,11 @@ export function HtmlView({ path, inline, title, control = false, design = false,
       className="frame"
       title={title}
       sandbox="allow-scripts"
+      onLoad={() => {
+        const frame = frameRef.current?.contentWindow;
+        const arm = (window as Window & { __hwpArmFrame?: (frame: Window) => void }).__hwpArmFrame;
+        if (frame) arm?.(frame);
+      }}
     />
   );
 }
@@ -111,7 +118,7 @@ function pageWithBridge(html: string, baseHref: string): string {
   const base = /<base\b/i.test(html)
     ? ""
     : `<base href="${baseHref.replace(/&/g, "&amp;").replace(/"/g, "&quot;")}">`;
-  const script = `<script>${frameSelect}\n${bridge}</script>`;
+  const script = `<script>${frameKeys}\n${frameSelect}\n${bridge}</script>`;
   const lower = html.toLowerCase();
   const start = lower.indexOf("<head");
   if (start >= 0) {
@@ -144,6 +151,28 @@ async function fulfill(message: BridgeMessage, control: boolean): Promise<unknow
       return { ok: true };
     case "readPane":
       return api.readScreen(String(params.paneId ?? ""), String(params.source ?? "visible"));
+    case "listPanels":
+    case "openPanel":
+    case "updatePanel":
+    case "closePanel":
+    case "movePanel":
+    case "resizePanel":
+    case "fillPanel":
+    case "showDesk":
+      throw new Error("This panel cannot change the desk");
+    case "setZoom":
+      throw new Error("This panel cannot change the window zoom");
+    case "scrollPane":
+      throw new Error("This panel cannot scroll a pane");
+    case "focusPane": {
+      if (!control) throw new Error("This panel cannot type into a pane");
+      const paneId = String(params.paneId ?? "");
+      if (!isHerdrPaneId(paneId)) throw new Error("invalid pane id");
+      const runtime = await api.runtime();
+      if (!runtime.panes.some((pane) => pane.paneId === paneId)) throw new Error("pane was not found");
+      await api.focus({ paneId });
+      return { ok: true };
+    }
     default:
       throw new Error(`Unknown bridge method: ${message.method}`);
   }

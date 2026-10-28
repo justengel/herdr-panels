@@ -149,14 +149,25 @@ function ConfigFields({
   }
   if (panel.type === "plugin") {
     return (
-      <label>
-        Plugin
-        <input
-          aria-label="Plugin id"
-          value={panel.plugin}
-          onChange={(event) => onConfig(panelId, { type: "plugin", plugin: event.target.value })}
-        />
-      </label>
+      <>
+        <label>
+          Plugin
+          <input
+            aria-label="Plugin id"
+            value={panel.plugin}
+            onChange={(event) => onConfig(panelId, { ...panel, plugin: event.target.value })}
+          />
+        </label>
+        <label>
+          <input
+            type="checkbox"
+            aria-label="Allow typing into Herdr"
+            checked={Boolean(panel.control)}
+            onChange={(event) => onConfig(panelId, { ...panel, control: event.target.checked })}
+          />
+          Allow this panel to type into Herdr
+        </label>
+      </>
     );
   }
   if (panel.type === "files" || panel.type === "agents" || panel.type === "tabs") return null;

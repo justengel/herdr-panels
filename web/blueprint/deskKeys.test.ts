@@ -87,6 +87,13 @@ describe("desk shortcuts", () => {
     expect(deskCommand(press("a", { alt: true }), true)).toBeNull();
     expect(deskCommand(press("ArrowLeft", { alt: true }), true)).toEqual({ action: "move", direction: "left" });
     expect(deskCommand(press("w", { alt: true }), true)).toEqual({ action: "close" });
+    expect(deskCommand(press("z"), true)).toEqual({ action: "undo" });
+    expect(deskCommand(press("z", { shift: true }), true)).toEqual({ action: "redo" });
+    expect(deskCommand(press("t"), true)).toEqual({ action: "reopen" });
+    expect(deskCommand(press("f"), true)).toEqual({ action: "zoom" });
+    expect(deskCommand(press("u"), true)).toBeNull();
+    expect(deskCommand(press("z", { ctrl: true }), false)).toBeNull();
+    expect(deskCommand(press("z", { ctrl: true, shift: true }), false)).toBeNull();
     expect(deskCommand(press("w", { alt: true, repeat: true }), true)).toBeNull();
   });
 
@@ -117,7 +124,7 @@ describe("desk shortcuts", () => {
   });
 
   it("keeps panel shortcuts apart from Herdr shortcuts", () => {
-    expect(isDeskKey("zoom")).toBe(true);
+    expect(isDeskKey("zoom")).toBe(false);
     expect(isDeskKey("next_workspace")).toBe(true);
     expect(isDeskKey("focus_agent")).toBe(true);
     expect(isDeskKey("settings")).toBe(false);
@@ -134,7 +141,9 @@ describe("desk shortcuts", () => {
     expect(formatChord("prefix+alt+1..9")).toBe("Prefix+Alt+1 to 9");
     expect(formatChord("prefix+shift+tab")).toBe("Prefix+Shift+Tab");
     expect(formatChord("prefix+alt+.")).toBe("Prefix+Alt+Period");
-    expect(DESK_HELP.some((row) => row.keys.includes("Prefix+Z"))).toBe(true);
+    expect(DESK_HELP.some((row) => row.keys === "Prefix+Z" && row.does.includes("back"))).toBe(true);
+    expect(DESK_HELP.some((row) => row.keys === "Prefix+F" && row.does.includes("Fill"))).toBe(true);
+    expect(DESK_HELP.some((row) => row.keys === "Prefix+T")).toBe(true);
     expect(DESK_HELP.some((row) => row.does.toLowerCase().includes("agent"))).toBe(true);
   });
 });
@@ -250,11 +259,16 @@ describe("binding lists", () => {
     expect(summarizeBindings(custom.focus)).toBe("Ctrl+Shift+Arrows");
   });
 
-  it("keeps a cleared Herdr zoom off and lets a panels list replace it", () => {
-    expect(resolveDeskBindings({}, [{ key: "zoom", value: "" }]).zoom).toBe("");
-    expect(matchDesk(resolveDeskBindings({}, [{ key: "zoom", value: "" }]), press("z"), true)).toBeNull();
-    expect(resolveDeskBindings({}, []).zoom).toBe("prefix+z");
-    expect(resolveDeskBindings({ zoom: "prefix+f" }, [{ key: "zoom", value: "prefix+z" }]).zoom).toBe("prefix+f");
+  it("keeps fill on prefix+f when Herdr still uses prefix+z for zoom", () => {
+    expect(resolveDeskBindings({}, [{ key: "zoom", value: "" }]).zoom).toBe("prefix+f");
+    expect(resolveDeskBindings({}, [{ key: "zoom", value: "prefix+z" }]).zoom).toBe("prefix+f");
+    expect(resolveDeskBindings({}, []).zoom).toBe("prefix+f");
+    const bindings = resolveDeskBindings({}, [{ key: "zoom", value: "prefix+z" }]);
+    expect(matchDesk(bindings, press("z"), true)).toEqual({ action: "undo" });
+    expect(matchDesk(bindings, press("z", { shift: true }), true)).toEqual({ action: "redo" });
+    expect(matchDesk(bindings, press("f"), true)).toEqual({ action: "zoom" });
+    expect(matchDesk(bindings, press("t"), true)).toEqual({ action: "reopen" });
+    expect(resolveDeskBindings({ zoom: "prefix+m" }, [{ key: "zoom", value: "prefix+z" }]).zoom).toBe("prefix+m");
     expect(
       resolveDeskBindings({}, [
         { key: "toggle_sidebar", value: "prefix+b" },

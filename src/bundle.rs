@@ -37,6 +37,13 @@ pub fn seed_examples(dir: &Path) -> anyhow::Result<()> {
 }
 
 /// Write the packaged Welcome plugin into `dir`, which will contain `plugin.json`.
+pub fn welcome_manifest() -> anyhow::Result<&'static str> {
+    let file = EXAMPLES
+        .get_file("plugins/welcome/plugin.json")
+        .context("the packaged example plugin was not found")?;
+    std::str::from_utf8(file.contents()).context("welcome plugin.json is not utf-8")
+}
+
 pub fn extract_example_plugin(dir: &Path) -> anyhow::Result<()> {
     let welcome = EXAMPLES
         .get_dir("plugins/welcome")

@@ -28,6 +28,9 @@ export type DeskCommand =
   | { action: "move"; direction: Direction }
   | { action: "enter" }
   | { action: "close" }
+  | { action: "undo" }
+  | { action: "redo" }
+  | { action: "reopen" }
   | { action: "cycle-panel"; delta: 1 | -1 }
   | { action: "zoom" }
   | { action: "cycle-space"; delta: 1 | -1 }
@@ -158,8 +161,7 @@ export const DESK_ACTIONS: DeskAction[] = [
   {
     id: "zoom",
     does: "Fill the screen with the focused panel, or show the whole desk",
-    defaults: "prefix+z",
-    herdr: ["zoom"],
+    defaults: "prefix+f",
     once: true,
   },
   {
@@ -226,6 +228,24 @@ export const DESK_ACTIONS: DeskAction[] = [
     id: "close",
     does: "Close the focused panel",
     defaults: "prefix+alt+w",
+    once: true,
+  },
+  {
+    id: "undo",
+    does: "Go back in the selected panel",
+    defaults: "prefix+z",
+    once: true,
+  },
+  {
+    id: "redo",
+    does: "Go forward in the selected panel",
+    defaults: "prefix+shift+z",
+    once: true,
+  },
+  {
+    id: "reopen",
+    does: "Reopen the last closed panel",
+    defaults: "prefix+t",
     once: true,
   },
   {
@@ -512,6 +532,12 @@ function commandFor(action: DeskAction, chord: Chord): DeskMatch | null {
       return { action: "spaces" };
     case "close":
       return { action: "close" };
+    case "undo":
+      return { action: "undo" };
+    case "redo":
+      return { action: "redo" };
+    case "reopen":
+      return { action: "reopen" };
     case "enter":
       return { action: "enter" };
     case "help":

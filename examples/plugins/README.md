@@ -88,7 +88,7 @@ The host posts this when the frame loads, and again when the address or the view
 parent.postMessage({ source: "hwp-plugin", type: "config", value: { line: 4 } }, "*");
 ```
 
-`value` has to be an object, and the JSON has to be 32 KB or smaller. An array is ignored. The page does not get the viewer token or `herdrPanels`.
+`value` has to be an object, and the JSON has to be 32 KB or smaller. An array is ignored. The page does not get the viewer token. It gets `herdrPanels` only when `permissions` includes `herdr:read`, `herdr:control`, `panels:read`, or `panels:control`.
 
 Install the Welcome sample, or copy another directory into the config folder:
 
@@ -101,7 +101,45 @@ Pass `--replace` to overwrite a plugin that is already installed. `herdr-panels 
 
 An agent can turn a panel into that plugin with `{"type":"plugin","plugin":"my-plugin"}`. A file view also stores the view and the address: `{"type":"plugin","plugin":"vim","view":"edit","path":"notes/a.md"}`. A directory view sets `"directory": true`. A page view stores `"url"` instead of `"path"`.
 
-The plugin page is served by the viewer and shown in a sandbox, so it cannot call the viewer API or read the page around it. It can still talk to another localhost server that you run yourself. A plugin does not get the `herdrPanels` bridge used by HTML panels. That bridge is for panels whose type is `html`.
+The plugin page is served by the viewer and shown in a sandbox, so it cannot call the viewer API or read the page around it. It can still talk to another localhost server that you run yourself.
+
+## Permissions
+
+`permissions` is optional. Leave it out and the plugin behaves as before: no Herdr bridge and no file feed. These are the names the installer accepts:
+
+- `herdr:read` turns on `herdrPanels.listPanes`, `status`, and `readPane`.
+- `herdr:control` turns on `sendText`, `sendKeys`, `focusPane`, and `scrollPane`. The panel's own JSON still has to set `"control": true`. Declaring the permission is not enough, and the flag does nothing for a plugin that did not declare it. `scrollPane(paneId, direction, lines)` moves that pane. `direction` is `up` or `down`. `lines` is a whole number from 1 to 200. The pane has to be open in the viewer.
+- `panels:read` turns on `listPanels`. Each entry has `id`, `title`, `type`, and `summary`.
+- `panels:control` turns on `openPanel`, `updatePanel`, `closePanel`, `movePanel`, `resizePanel`, `fillPanel`, `showDesk`, and `setZoom`. These are the same desk edits as `herdr-panels panel`, plus the desktop window zoom. `fillPanel` fills the screen with one panel. `showDesk` shows the whole desk again. `setZoom(scale)` sets that zoom to the nearest browser step, from 25% to 500%. A browser tab ignores it. They do not type into a Herdr pane. `updatePanel` takes `kind`, `path`, `page`, `plugin`, and `pane` the way the panel command does, and it cannot set `"control": true`. `examples/plugins/desk-sample` opens `https://example.com`, then moves, resizes, fills the screen with, and closes that one panel. Show the desk brings the layout back. Zoom 125% and Zoom 100% set the desktop window. `listPanels` still includes every panel's title and summary, which can be a file path or a pane id. The sample does not draw that list.
+- `files:read` turns on the file feed. It has to come with `files`, a list of absolute paths or directories, such as `"/home/engel/projects/checkin/state"`. A path outside that list is refused. `..` and relative paths are refused. The server resolves symlinks on every read.
+
+```json
+{
+  "id": "checkin-report",
+  "title": "Check-in report",
+  "permissions": ["files:read", "herdr:control"],
+  "files": ["/home/engel/projects/checkin/state"]
+}
+```
+
+`herdr-panels plugin install <directory>` prints those requests in plain language and asks before it copies the directory. Pass `--yes` to skip the question. `herdr-panels plugin list` prints each plugin's permissions. An unknown permission string makes install fail.
+
+The bridge is the same script an HTML panel gets. Calls go to the host page, and the host asks the server. The frame never sees the viewer token.
+
+To watch a file, the page posts:
+
+```js
+parent.postMessage({ source: "hwp-plugin", type: "watch", path: "/home/engel/projects/checkin/state/report.json" }, "*");
+parent.postMessage({ source: "hwp-plugin", type: "unwatch", path: "/home/engel/projects/checkin/state/report.json" }, "*");
+```
+
+The host answers, and answers again when the file changes:
+
+```js
+{ source: "hwp-host", type: "file", path, content, mtime }
+```
+
+A missing file is `{ error: "not_found" }` and the watch stays up. A file over 1 MB is `{ error: "too_large" }`. One panel can watch 8 paths. `examples/plugins/checkin-report` watches a report and uses `focusPane` when a finding's `url` is a pane id like `w8:pG`. Put `"control": true` on that panel's layout object or the focus call is refused. The design bar has the same checkbox as an HTML panel.
 
 ## Address bar
 

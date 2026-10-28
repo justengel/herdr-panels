@@ -652,6 +652,7 @@ function DocumentSurface({
       {panel.type === "plugin" ? (
         <PluginView
           pluginId={panel.plugin}
+          panelId={id}
           title={title || panel.plugin}
           modify={bar.modify}
           command={liveCommand}

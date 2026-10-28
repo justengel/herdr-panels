@@ -109,6 +109,8 @@ export interface PluginPanel {
   directory?: boolean;
   config?: Record<string, unknown>;
   addressBar?: boolean;
+  /** When set, herdr:control may type into a pane and focus one. */
+  control?: boolean;
 }
 
 export interface FilesPanel {

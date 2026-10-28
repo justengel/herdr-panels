@@ -97,6 +97,7 @@ pub fn build_app(config_dir: PathBuf, herdr_socket: PathBuf, port: u16) -> anyho
         .route("/api/sessions/rename", post(rename_session))
         .route("/api/sessions/close", post(close_session))
         .route("/api/plugins", get(list_plugins))
+        .route("/api/plugins/{id}/bridge", post(plugin_bridge))
         .route("/api/herdr/config", get(herdr_config).put(put_herdr_config))
         .route("/api/herdr/action", post(herdr_action))
         .route(
@@ -109,6 +110,7 @@ pub fn build_app(config_dir: PathBuf, herdr_socket: PathBuf, port: u16) -> anyho
         .route("/api/chats/{id}", get(chat_get).put(chat_put))
         .route("/ws/terminal", get(terminal_ws))
         .route("/ws/watch", get(watch_ws))
+        .route("/ws/plugin-files", get(plugin_files_ws))
         .route("/content/{*path}", get(crate::content::handle))
         .route("/plugins/{*path}", get(crate::plugins::handle))
         .route("/proxy/{*path}", any(crate::proxy::handle))
@@ -938,6 +940,358 @@ async fn list_plugins(State(state): State<AppState>) -> Result<Json<Value>, ApiE
     Ok(Json(json!({ "plugins": plugins })))
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BridgeBody {
+    panel_id: String,
+    method: String,
+    #[serde(default)]
+    params: Value,
+}
+
+async fn plugin_bridge(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    Json(body): Json<BridgeBody>,
+) -> Result<Json<Value>, ApiError> {
+    crate::plugins::validate_plugin_id(&id).map_err(ApiError::bad)?;
+    if body.panel_id.is_empty() || body.panel_id.len() > 80 || body.method.len() > 40 {
+        return Err(ApiError::bad("invalid bridge request"));
+    }
+    let manifest = crate::plugins::load_installed(&state.config_dir, &id).map_err(ApiError::bad)?;
+    let session = crate::paths::session_label(Path::new(&state.runtime.client().logical_socket()));
+    let desk = crate::desk::load_desk(&state.config_dir, &session).map_err(ApiError::bad)?;
+    let decision = crate::plugin_grant::bridge_allowed(
+        &manifest.permissions,
+        &desk,
+        &id,
+        &body.panel_id,
+        &body.method,
+    );
+    let decision = match decision {
+        Err(message) if message == "panel was not found" => {
+            let (_, layout, _) = active_layout(&state)?;
+            crate::plugin_grant::bridge_allowed_in_layout(
+                &manifest.permissions,
+                &layout.root,
+                &id,
+                &body.panel_id,
+                &body.method,
+            )
+        }
+        other => other,
+    };
+    decision.map_err(ApiError::forbidden)?;
+    let client = state.runtime.client().clone();
+    match body.method.as_str() {
+        "status" | "listPanes" => {
+            let snapshot = state.runtime.snapshot().await;
+            Ok(Json(
+                serde_json::to_value(&snapshot).unwrap_or_else(|_| json!({})),
+            ))
+        }
+        "readPane" => {
+            let pane_id = param_str(&body.params, "paneId");
+            if !is_pane_id(&pane_id) {
+                return Err(ApiError::bad("invalid pane id"));
+            }
+            let source = body.params.get("source").and_then(Value::as_str);
+            let source = screen_source(source).map_err(ApiError::bad)?;
+            let screen = client
+                .read_pane(&pane_id, source, None)
+                .await
+                .map_err(ApiError::upstream)?;
+            Ok(Json(json!({
+                "text": screen.text,
+                "truncated": screen.truncated,
+                "revision": screen.revision,
+            })))
+        }
+        "sendText" => {
+            let pane_id = param_str(&body.params, "paneId");
+            if !is_pane_id(&pane_id) {
+                return Err(ApiError::bad("invalid pane id"));
+            }
+            crate::terminal::dispatch(
+                &client,
+                &pane_id,
+                ClientInput::Text {
+                    text: param_str(&body.params, "text"),
+                },
+            )
+            .await
+            .map_err(ApiError::upstream)?;
+            Ok(Json(json!({ "ok": true })))
+        }
+        "sendKeys" => {
+            let pane_id = param_str(&body.params, "paneId");
+            if !is_pane_id(&pane_id) {
+                return Err(ApiError::bad("invalid pane id"));
+            }
+            let keys = param_keys(&body.params)?;
+            crate::terminal::dispatch(&client, &pane_id, ClientInput::Keys { keys })
+                .await
+                .map_err(ApiError::upstream)?;
+            Ok(Json(json!({ "ok": true })))
+        }
+        "focusPane" => {
+            let pane_id = param_str(&body.params, "paneId");
+            let snapshot = state.runtime.snapshot().await;
+            let ids: Vec<&str> = snapshot
+                .panes
+                .iter()
+                .map(|pane| pane.pane_id.as_str())
+                .collect();
+            crate::plugin_grant::require_pane(&ids, &pane_id).map_err(|err| {
+                if err == "pane was not found" {
+                    ApiError::missing(err)
+                } else {
+                    ApiError::bad(err)
+                }
+            })?;
+            client
+                .call("pane.focus", json!({ "pane_id": pane_id }))
+                .await
+                .map_err(|err| ApiError::upstream(err.to_string()))?;
+            state.runtime.invalidate();
+            Ok(Json(json!({ "ok": true })))
+        }
+        "listPanels" => crate::agent::list_desk(&state)
+            .await
+            .map(Json)
+            .map_err(agent_error),
+        "openPanel" => {
+            let target = param_str(&body.params, "target");
+            if target.trim().is_empty() {
+                return Err(ApiError::bad("target is required"));
+            }
+            crate::agent::open_desk(
+                &state,
+                crate::agent::DeskOpen {
+                    target,
+                    panel_id: param_opt(&body.params, "panelId"),
+                    from: param_opt(&body.params, "from"),
+                    direction: param_opt(&body.params, "direction")
+                        .unwrap_or_else(|| "right".into()),
+                    reuse: body
+                        .params
+                        .get("reuse")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false),
+                    title: param_opt(&body.params, "title"),
+                },
+            )
+            .await
+            .map(Json)
+            .map_err(agent_error)
+        }
+        "updatePanel" => {
+            let panel_id = param_str(&body.params, "panelId");
+            if panel_id.trim().is_empty() {
+                return Err(ApiError::bad("panelId is required"));
+            }
+            let panel = match param_opt(&body.params, "kind") {
+                Some(kind) => Some(
+                    crate::agent::panel_from_kind(
+                        &kind,
+                        param_opt(&body.params, "path"),
+                        param_opt(&body.params, "page"),
+                        param_opt(&body.params, "plugin"),
+                        param_opt(&body.params, "pane"),
+                    )
+                    .map_err(ApiError::bad)?,
+                ),
+                None => None,
+            };
+            let title = param_opt(&body.params, "title").map(Some);
+            crate::agent::update_desk(&state, &panel_id, title, panel)
+                .await
+                .map(Json)
+                .map_err(agent_error)
+        }
+        "closePanel" => {
+            let panel_id = param_str(&body.params, "panelId");
+            if panel_id.trim().is_empty() {
+                return Err(ApiError::bad("panelId is required"));
+            }
+            crate::agent::close_desk(&state, &panel_id)
+                .await
+                .map(Json)
+                .map_err(agent_error)
+        }
+        "movePanel" => {
+            let panel_id = param_str(&body.params, "panelId");
+            let target = param_str(&body.params, "target");
+            if panel_id.trim().is_empty() || target.trim().is_empty() {
+                return Err(ApiError::bad("panelId and target are required"));
+            }
+            let place = param_opt(&body.params, "place").unwrap_or_else(|| "swap".into());
+            crate::agent::move_desk(&state, &panel_id, &target, &place)
+                .await
+                .map(Json)
+                .map_err(agent_error)
+        }
+        "resizePanel" => {
+            let panel_id = param_str(&body.params, "panelId");
+            if panel_id.trim().is_empty() {
+                return Err(ApiError::bad("panelId is required"));
+            }
+            let ratio = body
+                .params
+                .get("ratio")
+                .and_then(Value::as_f64)
+                .ok_or_else(|| ApiError::bad("ratio is required"))?;
+            crate::agent::resize_desk(&state, &panel_id, ratio)
+                .await
+                .map(Json)
+                .map_err(agent_error)
+        }
+        "fillPanel" => {
+            let panel_id = param_str(&body.params, "panelId");
+            if panel_id.trim().is_empty() {
+                return Err(ApiError::bad("panelId is required"));
+            }
+            crate::agent::zoom_desk(&state, Some(&panel_id))
+                .await
+                .map(Json)
+                .map_err(agent_error)
+        }
+        "showDesk" => crate::agent::zoom_desk(&state, None)
+            .await
+            .map(Json)
+            .map_err(agent_error),
+        "setZoom" => {
+            let scale = body
+                .params
+                .get("scale")
+                .and_then(Value::as_f64)
+                .ok_or_else(|| ApiError::bad("scale is required"))?;
+            let scale = snap_display_zoom(scale)?;
+            Ok(Json(json!({ "ok": true, "scale": scale })))
+        }
+        "scrollPane" => {
+            let pane_id = param_str(&body.params, "paneId");
+            let direction = param_str(&body.params, "direction");
+            if direction != "up" && direction != "down" {
+                return Err(ApiError::bad("direction must be up or down"));
+            }
+            let lines = param_lines(&body.params)?;
+            let snapshot = state.runtime.snapshot().await;
+            let ids: Vec<&str> = snapshot
+                .panes
+                .iter()
+                .map(|pane| pane.pane_id.as_str())
+                .collect();
+            crate::plugin_grant::require_pane(&ids, &pane_id).map_err(|err| {
+                if err == "pane was not found" {
+                    ApiError::missing(err)
+                } else {
+                    ApiError::bad(err)
+                }
+            })?;
+            state
+                .controls
+                .scroll(&pane_id, &direction, lines, "wheel")
+                .await
+                .map_err(ApiError::bad)?;
+            Ok(Json(json!({ "ok": true })))
+        }
+        _ => Err(ApiError::bad(format!(
+            "Unknown bridge method: {}",
+            body.method
+        ))),
+    }
+}
+
+fn param_str(params: &Value, key: &str) -> String {
+    params
+        .get(key)
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string()
+}
+
+/// Chromium's page-zoom steps. The same list lives in `web/src/displayZoom.ts`.
+const DISPLAY_ZOOM_STEPS: [f64; 17] = [
+    0.25, 0.33, 0.5, 0.67, 0.75, 0.8, 0.9, 1.0, 1.1, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0, 4.0, 5.0,
+];
+
+fn snap_display_zoom(value: f64) -> Result<f64, ApiError> {
+    if !value.is_finite() {
+        return Err(ApiError::bad("scale is required"));
+    }
+    let mut best = DISPLAY_ZOOM_STEPS[0];
+    for step in DISPLAY_ZOOM_STEPS {
+        if (step - value).abs() < (best - value).abs() {
+            best = step;
+        }
+    }
+    Ok(best)
+}
+
+fn param_lines(params: &Value) -> Result<u16, ApiError> {
+    let value = params
+        .get("lines")
+        .and_then(Value::as_f64)
+        .ok_or_else(|| ApiError::bad("lines is required"))?;
+    if !value.is_finite() || value < 1.0 || value > 200.0 || value.fract() != 0.0 {
+        return Err(ApiError::bad("lines must be a whole number from 1 to 200"));
+    }
+    Ok(value as u16)
+}
+
+fn param_opt(params: &Value, key: &str) -> Option<String> {
+    let value = params.get(key).and_then(Value::as_str)?.trim();
+    if value.is_empty() {
+        None
+    } else {
+        Some(value.to_string())
+    }
+}
+
+fn agent_error(err: crate::agent::AgentError) -> ApiError {
+    match err.status {
+        StatusCode::NOT_FOUND => ApiError::missing(err.message),
+        StatusCode::BAD_GATEWAY => ApiError::upstream(err.message),
+        _ => ApiError::bad(err.message),
+    }
+}
+
+fn param_keys(params: &Value) -> Result<Vec<String>, ApiError> {
+    match params.get("keys") {
+        None => Ok(Vec::new()),
+        Some(Value::Array(items)) => {
+            let mut keys = Vec::new();
+            for item in items {
+                let Some(key) = item.as_str() else {
+                    return Err(ApiError::bad("unsupported key"));
+                };
+                keys.push(key.to_string());
+            }
+            Ok(keys)
+        }
+        Some(_) => Err(ApiError::bad("unsupported key")),
+    }
+}
+
+#[derive(Deserialize)]
+struct PluginFileQuery {
+    plugin: String,
+}
+
+async fn plugin_files_ws(
+    ws: WebSocketUpgrade,
+    Query(query): Query<PluginFileQuery>,
+    State(state): State<AppState>,
+) -> Response {
+    if crate::plugins::validate_plugin_id(&query.plugin).is_err() {
+        return ApiError::bad("invalid plugin id").into_response();
+    }
+    let config_dir = (*state.config_dir).clone();
+    let plugin = query.plugin;
+    ws.on_upgrade(move |socket| crate::plugin_files::drive(config_dir, plugin, socket))
+}
+
 async fn herdr_config(State(state): State<AppState>) -> Json<Value> {
     let doc = tokio::task::spawn_blocking(crate::herdr_config::document)
         .await
@@ -1379,6 +1733,13 @@ impl ApiError {
         }
     }
 
+    fn forbidden(err: impl ToString) -> Self {
+        Self {
+            status: StatusCode::FORBIDDEN,
+            message: err.to_string(),
+        }
+    }
+
     fn upstream(err: impl ToString) -> Self {
         Self {
             status: StatusCode::BAD_GATEWAY,
@@ -1403,6 +1764,17 @@ mod tests {
             .parse()
             .unwrap();
         assert_eq!(query_token(&uri).as_deref(), Some("abc+/="));
+    }
+
+    #[test]
+    fn display_zoom_snaps_to_the_browser_steps() {
+        assert!((snap_display_zoom(1.2).unwrap_or(0.0) - 1.25).abs() < f64::EPSILON);
+        assert!((snap_display_zoom(1.0).unwrap_or(0.0) - 1.0).abs() < f64::EPSILON);
+        assert!((snap_display_zoom(9.0).unwrap_or(0.0) - 5.0).abs() < f64::EPSILON);
+        assert!(snap_display_zoom(f64::NAN).is_err());
+        assert_eq!(param_lines(&json!({"lines": 3})).unwrap_or(0), 3);
+        assert!(param_lines(&json!({"lines": 0})).is_err());
+        assert!(param_lines(&json!({"lines": 1.5})).is_err());
     }
 
     #[test]

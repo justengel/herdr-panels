@@ -1,3 +1,4 @@
+use std::io::{IsTerminal, Write};
 use std::path::PathBuf;
 
 use anyhow::{bail, Context};
@@ -153,6 +154,9 @@ enum PluginCommand {
         /// Replace an installed plugin with the same id
         #[arg(long)]
         replace: bool,
+        /// Install without asking about the plugin's permissions
+        #[arg(long)]
+        yes: bool,
     },
 }
 
@@ -169,7 +173,13 @@ pub async fn execute() -> anyhow::Result<()> {
         ClientCommand::Plugin { command } => match command {
             PluginCommand::List => {
                 for plugin in plugins::list_plugins(&config_dir)? {
-                    println!("{}\t{}\t{}", plugin.id, plugin.title, plugin.entry);
+                    println!(
+                        "{}\t{}\t{}\t{}",
+                        plugin.id,
+                        plugin.title,
+                        plugin.entry,
+                        crate::plugin_grant::permission_summary(&plugin.permissions)
+                    );
                 }
                 Ok(())
             }
@@ -177,10 +187,20 @@ pub async fn execute() -> anyhow::Result<()> {
                 path,
                 example,
                 replace,
+                yes,
             } => {
                 if example && path.is_some() {
                     bail!("pass a plugin directory or --example, not both");
                 }
+                let preview = if example {
+                    plugins::bundled_welcome_manifest()?
+                } else {
+                    let Some(path) = path.as_deref() else {
+                        bail!("pass a plugin directory, or --example to install the sample plugin");
+                    };
+                    plugins::read_manifest_file(&path.join("plugin.json"))?
+                };
+                confirm_install(&preview, yes)?;
                 let manifest = if example {
                     plugins::install_bundled_example(&config_dir, replace)?
                 } else {
@@ -195,6 +215,38 @@ pub async fn execute() -> anyhow::Result<()> {
         },
         ClientCommand::Token { command } => token_command(&config_dir, command),
     }
+}
+
+fn confirm_install(manifest: &plugins::PluginManifest, yes: bool) -> anyhow::Result<()> {
+    if !crate::plugin_grant::needs_consent(&manifest.permissions) {
+        return Ok(());
+    }
+    let text = crate::plugin_grant::consent_text(
+        &manifest.id,
+        &manifest.title,
+        &manifest.permissions,
+        &manifest.files,
+    );
+    println!("{text}");
+    if yes {
+        return Ok(());
+    }
+    if !std::io::stdin().is_terminal() {
+        bail!(
+            "plugin {} asks for permissions. Pass --yes to install it without a prompt",
+            manifest.id
+        );
+    }
+    print!("Install this plugin? [y/N] ");
+    let _ = std::io::stdout().flush();
+    let mut line = String::new();
+    std::io::stdin()
+        .read_line(&mut line)
+        .context("reading the install confirmation")?;
+    if !crate::plugin_grant::consent_answer(&line) {
+        bail!("plugin install cancelled");
+    }
+    Ok(())
 }
 
 fn token_command(config_dir: &std::path::Path, command: TokenCommand) -> anyhow::Result<()> {

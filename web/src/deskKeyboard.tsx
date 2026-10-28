@@ -13,6 +13,7 @@ import {
   type Box,
   type DeskCommand,
 } from "./deskKeys";
+import { desktopHost } from "./desktopBrowser";
 import { useHost } from "./host";
 import { listPanels } from "./layoutEdit";
 import { usePanelActions } from "./panelActions";
@@ -55,6 +56,7 @@ export function DeskKeyboard({
   onNotice,
   onToggleHelp,
   onHelp,
+  onReopen,
 }: {
   layout: LayoutNode;
   runtime: RuntimeSnapshot | null;
@@ -68,10 +70,13 @@ export function DeskKeyboard({
   onNotice: (message: string) => void;
   onToggleHelp: () => void;
   onHelp: (open: boolean) => void;
+  onReopen: () => void;
 }) {
   const host = useHost();
   const hostRef = useRef(host);
   hostRef.current = host;
+  const focusRef = useRef(focusedId);
+  focusRef.current = focusedId;
   const panelActions = usePanelActions();
   const enterRef = useRef<string | null>(null);
   const runRef = useRef<(command: DeskCommand) => void>(() => {});
@@ -97,6 +102,7 @@ export function DeskKeyboard({
   }
 
   runRef.current = (command) => {
+    const focusedId = focusRef.current;
     if (command.action === "help") {
       onToggleHelp();
       return;
@@ -124,6 +130,14 @@ export function DeskKeyboard({
       if (order.length === 0) return;
       const next = order[stepIndex(order.length, focusedId ? order.indexOf(focusedId) : -1, command.delta)];
       if (next) aim(next);
+      return;
+    }
+    if (command.action === "undo" || command.action === "redo") {
+      if (focusedId) stepAddress(focusedId, command.action === "undo" ? "Back" : "Forward");
+      return;
+    }
+    if (command.action === "reopen") {
+      onReopen();
       return;
     }
     if (command.action === "zoom") {
@@ -208,6 +222,18 @@ export function DeskKeyboard({
   useEffect(() => host.registerDesk((command) => runRef.current(command)), [host.registerDesk]);
 
   useEffect(() => {
+    const page = window as Window & { __hwpFocusPanel?: (id: string) => void };
+    page.__hwpFocusPanel = (id) => {
+      if (!id) return;
+      focusRef.current = id;
+      onFocus(id);
+    };
+    return () => {
+      delete page.__hwpFocusPanel;
+    };
+  }, [onFocus]);
+
+  useEffect(() => {
     if (!focusedId || enterRef.current !== focusedId) return;
     enterRef.current = null;
     focusPanelSurface(focusedId, "content");
@@ -251,23 +277,56 @@ export function DeskKeyboard({
       const id = target.closest("[data-panel-id]")?.getAttribute("data-panel-id");
       if (id) onFocus(id);
     };
+    const publishFrame = () => {
+      const focused = document.activeElement instanceof HTMLIFrameElement;
+      void desktopHost()?.invoke("set_frame_focus", { focused });
+    };
     const onPointerDown = (event: PointerEvent) => select(event.target);
     const onFocusIn = (event: FocusEvent) => {
       if (event.target instanceof HTMLIFrameElement) select(event.target);
+      publishFrame();
     };
-    // A click inside a frame never reaches this page. The window blurs and the frame becomes active.
+    // A click inside a plugin frame never reaches this page. While the window is blurred, follow
+    // whichever frame becomes active. The desktop window also hit-tests clicks on browser panels.
+    let seen: Element | null = null;
+    const followFrame = () => {
+      const active = document.activeElement;
+      if (!(active instanceof HTMLIFrameElement) || active === seen) return;
+      seen = active;
+      select(active);
+      publishFrame();
+    };
+    const page = window as Window & { __hwpFocusAt?: (x: number, y: number) => void };
+    page.__hwpFocusAt = (x, y) => {
+      if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+      const hit = document.elementFromPoint(x, y);
+      if (hit) select(hit);
+    };
+    let timer = 0;
     const onWindowBlur = () => {
-      window.setTimeout(() => {
-        if (document.activeElement instanceof HTMLIFrameElement) select(document.activeElement);
-      }, 0);
+      window.clearInterval(timer);
+      timer = window.setInterval(followFrame, 80);
+      followFrame();
     };
+    const onWindowFocus = () => {
+      window.clearInterval(timer);
+      timer = 0;
+      seen = null;
+      publishFrame();
+    };
+    publishFrame();
     window.addEventListener("pointerdown", onPointerDown, true);
     window.addEventListener("focusin", onFocusIn, true);
     window.addEventListener("blur", onWindowBlur);
+    window.addEventListener("focus", onWindowFocus);
+    if (!document.hasFocus()) onWindowBlur();
     return () => {
+      window.clearInterval(timer);
+      delete page.__hwpFocusAt;
       window.removeEventListener("pointerdown", onPointerDown, true);
       window.removeEventListener("focusin", onFocusIn, true);
       window.removeEventListener("blur", onWindowBlur);
+      window.removeEventListener("focus", onWindowFocus);
     };
   }, [onFocus]);
 
@@ -284,7 +343,7 @@ export function DeskKeyboard({
         <h2 id="desk-keys-title">Keyboard</h2>
         <p className="settings-note">
           Prefix is {formatChord(prefix)}. Press it, then the key. Prefix+H, J, K, and L still move between Herdr panes.
-          Prefix+1 to 9 still switches tabs. A browser page keeps its own keys; click the panel title to use these shortcuts again.
+          Prefix+1 to 9 still switches tabs. The prefix also works inside a plugin, an HTML panel, and a browser panel. Inside a terminal it still belongs to Herdr.
           Ctrl+wheel, Ctrl+Plus, and Ctrl+Minus scale the panels. The session bar stays the same size. Ctrl+0 returns to 100%.
         </p>
         <ul className="key-help-list">
@@ -305,6 +364,11 @@ export function DeskKeyboard({
     </div>,
     document.body,
   );
+}
+
+function stepAddress(panelId: string, direction: "Back" | "Forward") {
+  const section = document.querySelector<HTMLElement>(`[data-panel-id="${CSS.escape(panelId)}"]`);
+  section?.querySelector<HTMLButtonElement>(`button[aria-label="${direction}"]`)?.click();
 }
 
 function panelBoxes(): Box[] {

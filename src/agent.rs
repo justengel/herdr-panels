@@ -246,11 +246,15 @@ async fn close(
     State(state): State<AppState>,
     Json(body): Json<PanelBody>,
 ) -> Result<Json<Value>, AgentError> {
-    let mut doc = load_active(&state).await?;
-    let panel_id = resolve_key(&doc.root, &body.panel_id)?;
+    close_desk(&state, &body.panel_id).await.map(Json)
+}
+
+pub(crate) async fn close_desk(state: &AppState, panel_id: &str) -> Result<Value, AgentError> {
+    let mut doc = load_active(state).await?;
+    let panel_id = resolve_key(&doc.root, panel_id)?;
     doc.root = layout_ops::close_panel(doc.root, &panel_id).map_err(AgentError::bad)?;
-    let doc = save_active(&state, doc).await?;
-    Ok(Json(workspace_json(&state, &doc)))
+    let doc = save_active(state, doc).await?;
+    Ok(workspace_json(state, &doc))
 }
 
 #[derive(Deserialize)]
@@ -264,12 +268,21 @@ async fn resize(
     State(state): State<AppState>,
     Json(body): Json<ResizeBody>,
 ) -> Result<Json<Value>, AgentError> {
-    let mut doc = load_active(&state).await?;
-    let panel_id = resolve_key(&doc.root, &body.panel_id)?;
-    doc.root =
-        layout_ops::resize_panel(doc.root, &panel_id, body.ratio).map_err(AgentError::bad)?;
-    let doc = save_active(&state, doc).await?;
-    Ok(Json(workspace_json(&state, &doc)))
+    resize_desk(&state, &body.panel_id, body.ratio)
+        .await
+        .map(Json)
+}
+
+pub(crate) async fn resize_desk(
+    state: &AppState,
+    panel_id: &str,
+    ratio: f64,
+) -> Result<Value, AgentError> {
+    let mut doc = load_active(state).await?;
+    let panel_id = resolve_key(&doc.root, panel_id)?;
+    doc.root = layout_ops::resize_panel(doc.root, &panel_id, ratio).map_err(AgentError::bad)?;
+    let doc = save_active(state, doc).await?;
+    Ok(workspace_json(state, &doc))
 }
 
 #[derive(Deserialize)]
@@ -308,12 +321,37 @@ async fn open_target(
     State(state): State<AppState>,
     Json(body): Json<OpenBody>,
 ) -> Result<Json<Value>, AgentError> {
+    open_desk(
+        &state,
+        DeskOpen {
+            target: body.target,
+            panel_id: body.panel_id,
+            from: body.from,
+            direction: body.direction,
+            reuse: body.reuse,
+            title: body.title,
+        },
+    )
+    .await
+    .map(Json)
+}
+
+pub(crate) struct DeskOpen {
+    pub target: String,
+    pub panel_id: Option<String>,
+    pub from: Option<String>,
+    pub direction: String,
+    pub reuse: bool,
+    pub title: Option<String>,
+}
+
+pub(crate) async fn open_desk(state: &AppState, body: DeskOpen) -> Result<Value, AgentError> {
     let direction = match body.direction.as_str() {
         "right" => Direction::Row,
         "down" => Direction::Column,
         _ => return Err(AgentError::bad("direction must be right or down")),
     };
-    let roots = crate::server::allowed_roots(&state).await;
+    let roots = crate::server::allowed_roots(state).await;
     let located = locate_target(&body.target, &roots);
     let kind = crate::open_target::classify_target(&located, |path| file_kind(path))
         .map_err(AgentError::bad)?;
@@ -322,7 +360,7 @@ async fn open_target(
         .title
         .filter(|title| !title.trim().is_empty())
         .unwrap_or_else(|| crate::open_target::open_title(&kind));
-    let mut doc = load_active(&state).await?;
+    let mut doc = load_active(state).await?;
     let (root, panel_id, created) = if let Some(panel_id) = body.panel_id.as_deref() {
         let panel_id = resolve_key(&doc.root, panel_id)?;
         let root = layout_ops::update_panel(doc.root, &panel_id, Some(Some(title)), Some(panel))
@@ -343,12 +381,12 @@ async fn open_target(
         (root, panel_id, created)
     };
     doc.root = root;
-    let doc = save_active(&state, doc).await?;
-    Ok(Json(json!({
+    let doc = save_active(state, doc).await?;
+    Ok(json!({
         "panelId": panel_id,
         "created": created,
-        "workspace": workspace_json(&state, &doc),
-    })))
+        "workspace": workspace_json(state, &doc),
+    }))
 }
 
 fn locate_target(target: &str, roots: &[std::path::PathBuf]) -> String {
@@ -425,6 +463,7 @@ fn kind_to_panel(kind: &crate::open_target::OpenKind) -> PanelConfig {
             url: None,
             directory: false,
             address_bar: None,
+            control: false,
         },
     }
 }
@@ -465,17 +504,28 @@ async fn update_panel(
     State(state): State<AppState>,
     Json(body): Json<UpdateBody>,
 ) -> Result<Json<Value>, AgentError> {
-    let mut doc = load_active(&state).await?;
-    let panel_id = resolve_key(&doc.root, &body.panel_id)?;
     let title = if body.clear_title {
         Some(None)
     } else {
         body.title.map(Some)
     };
-    doc.root = layout_ops::update_panel(doc.root, &panel_id, title, body.panel)
-        .map_err(AgentError::bad)?;
-    let doc = save_active(&state, doc).await?;
-    Ok(Json(workspace_json(&state, &doc)))
+    update_desk(&state, &body.panel_id, title, body.panel)
+        .await
+        .map(Json)
+}
+
+pub(crate) async fn update_desk(
+    state: &AppState,
+    panel_id: &str,
+    title: Option<Option<String>>,
+    panel: Option<PanelConfig>,
+) -> Result<Value, AgentError> {
+    let mut doc = load_active(state).await?;
+    let panel_id = resolve_key(&doc.root, panel_id)?;
+    doc.root =
+        layout_ops::update_panel(doc.root, &panel_id, title, panel).map_err(AgentError::bad)?;
+    let doc = save_active(state, doc).await?;
+    Ok(workspace_json(state, &doc))
 }
 
 #[derive(Deserialize)]
@@ -495,18 +545,34 @@ async fn move_panel(
     State(state): State<AppState>,
     Json(body): Json<MoveBody>,
 ) -> Result<Json<Value>, AgentError> {
-    let mut doc = load_active(&state).await?;
-    let source = resolve_key(&doc.root, &body.panel_id)?;
-    let target = resolve_key(&doc.root, &body.target)?;
-    doc.root = layout_ops::move_panel(doc.root, &source, &target, &body.place).map_err(|err| {
+    move_desk(&state, &body.panel_id, &body.target, &body.place)
+        .await
+        .map(Json)
+}
+
+pub(crate) async fn move_desk(
+    state: &AppState,
+    panel_id: &str,
+    target: &str,
+    place: &str,
+) -> Result<Value, AgentError> {
+    let mut doc = load_active(state).await?;
+    let source = resolve_key(&doc.root, panel_id)?;
+    let target = resolve_key(&doc.root, target)?;
+    doc.root = layout_ops::move_panel(doc.root, &source, &target, place).map_err(|err| {
         if err == "panel was not found" {
             AgentError::missing(err)
         } else {
             AgentError::bad(err)
         }
     })?;
-    let doc = save_active(&state, doc).await?;
-    Ok(Json(workspace_json(&state, &doc)))
+    let doc = save_active(state, doc).await?;
+    Ok(workspace_json(state, &doc))
+}
+
+pub(crate) async fn list_desk(state: &AppState) -> Result<Value, AgentError> {
+    let doc = load_active(state).await?;
+    Ok(json!({ "panels": panel_rows(&doc.root) }))
 }
 
 #[derive(Deserialize)]
@@ -520,24 +586,26 @@ async fn zoom(
     State(state): State<AppState>,
     Json(body): Json<ZoomBody>,
 ) -> Result<Json<Value>, AgentError> {
-    if let Some(panel_id) = &body.panel_id {
-        let doc = load_active(&state).await?;
-        let panel_id = resolve_key(&doc.root, panel_id)?;
-        state.agent.publish(&json!({
-            "type": "zoom",
-            "panelId": panel_id,
-        }));
-        return Ok(Json(
-            json!({"ok": true, "viewer": state.agent.viewers() > 0}),
-        ));
-    }
+    zoom_desk(&state, body.panel_id.as_deref()).await.map(Json)
+}
+
+/// Fill the screen with one panel, or pass `None` to show the whole desk again.
+pub(crate) async fn zoom_desk(
+    state: &AppState,
+    panel_id: Option<&str>,
+) -> Result<Value, AgentError> {
+    let panel_id = match panel_id {
+        Some(panel_id) => {
+            let doc = load_active(state).await?;
+            Some(resolve_key(&doc.root, panel_id)?)
+        }
+        None => None,
+    };
     state.agent.publish(&json!({
         "type": "zoom",
-        "panelId": Value::Null,
+        "panelId": panel_id,
     }));
-    Ok(Json(
-        json!({"ok": true, "viewer": state.agent.viewers() > 0}),
-    ))
+    Ok(json!({"ok": true, "viewer": state.agent.viewers() > 0}))
 }
 
 #[derive(Deserialize)]
@@ -918,7 +986,16 @@ async fn save_active(state: &AppState, doc: LayoutDocument) -> Result<LayoutDocu
 }
 
 fn workspace_json(state: &AppState, doc: &LayoutDocument) -> Value {
-    let panels: Vec<Value> = list_panels(&doc.root)
+    json!({
+        "layoutId": doc.id,
+        "title": doc.title,
+        "viewer": state.agent.viewers() > 0,
+        "panels": panel_rows(&doc.root),
+    })
+}
+
+fn panel_rows(root: &LayoutNode) -> Vec<Value> {
+    list_panels(root)
         .into_iter()
         .map(|panel| {
             json!({
@@ -928,12 +1005,67 @@ fn workspace_json(state: &AppState, doc: &LayoutDocument) -> Value {
                 "summary": panel_summary(&panel.panel),
             })
         })
-        .collect();
-    json!({
-        "layoutId": doc.id,
-        "title": doc.title,
-        "viewer": state.agent.viewers() > 0,
-        "panels": panels,
+        .collect()
+}
+
+/// A panel a plugin may place on the desk. The Herdr `control` flag stays off.
+pub(crate) fn panel_from_kind(
+    kind: &str,
+    path: Option<String>,
+    page: Option<String>,
+    plugin: Option<String>,
+    pane: Option<String>,
+) -> Result<PanelConfig, String> {
+    let path = path.filter(|value| !value.trim().is_empty());
+    let page = page.filter(|value| !value.trim().is_empty());
+    let plugin = plugin.filter(|value| !value.trim().is_empty());
+    let pane = pane.filter(|value| !value.trim().is_empty());
+    if let Some(pane_id) = pane.as_deref() {
+        if !is_pane_id(pane_id) {
+            return Err("invalid pane id".into());
+        }
+    }
+    Ok(match kind {
+        "herdr" => PanelConfig::Herdr {
+            pane_id: pane,
+            source: None,
+            lines: None,
+        },
+        "markdown" => PanelConfig::Markdown {
+            path: path.unwrap_or_else(|| "notes/welcome.md".into()),
+            address_bar: None,
+            raw: false,
+        },
+        "html" => PanelConfig::Html {
+            path: Some(path.unwrap_or_else(|| "panels/session-board.html".into())),
+            inline: None,
+            control: false,
+            address_bar: None,
+            raw: false,
+        },
+        "iframe" => PanelConfig::Iframe {
+            url: page.ok_or_else(|| "page is required for an iframe panel".to_string())?,
+            proxy: false,
+            address_bar: None,
+        },
+        "plugin" => {
+            let plugin =
+                plugin.ok_or_else(|| "plugin is required for a plugin panel".to_string())?;
+            crate::plugins::validate_plugin_id(&plugin).map_err(|err| err.to_string())?;
+            PanelConfig::Plugin {
+                plugin,
+                config: Value::Null,
+                view: None,
+                path: None,
+                url: None,
+                directory: false,
+                address_bar: None,
+                control: false,
+            }
+        }
+        "files" => PanelConfig::Files,
+        "agents" => PanelConfig::Agents,
+        other => return Err(format!("unknown panel kind {other}")),
     })
 }
 
@@ -1186,9 +1318,9 @@ impl TruncateFront for Vec<ChatMessage> {
     }
 }
 
-struct AgentError {
-    status: StatusCode,
-    message: String,
+pub(crate) struct AgentError {
+    pub(crate) status: StatusCode,
+    pub(crate) message: String,
 }
 
 impl AgentError {
@@ -1217,5 +1349,26 @@ impl AgentError {
 impl IntoResponse for AgentError {
     fn into_response(self) -> Response {
         (self.status, Json(json!({"error": self.message}))).into_response()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_plugin_desk_edit_cannot_turn_on_herdr_control() {
+        let html = panel_from_kind("html", None, None, None, None).unwrap();
+        assert!(matches!(
+            html,
+            PanelConfig::Html {
+                control: false,
+                inline: None,
+                ..
+            }
+        ));
+        let plugin = panel_from_kind("plugin", None, None, Some("welcome".into()), None).unwrap();
+        assert!(matches!(plugin, PanelConfig::Plugin { control: false, .. }));
+        assert!(panel_from_kind("iframe", None, None, None, None).is_err());
     }
 }

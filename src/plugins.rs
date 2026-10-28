@@ -108,6 +108,10 @@ pub struct PluginManifest {
     #[serde(default, rename = "addressBar")]
     pub address_bar: AddressBar,
     pub views: Vec<PluginView>,
+    #[serde(default)]
+    pub permissions: Vec<String>,
+    #[serde(default)]
+    pub files: Vec<std::path::PathBuf>,
 }
 
 #[derive(Deserialize)]
@@ -125,6 +129,10 @@ struct ManifestDraft {
     #[serde(default, rename = "addressBar")]
     address_bar: AddressBar,
     views: Option<Vec<ViewDraft>>,
+    #[serde(default)]
+    permissions: Vec<String>,
+    #[serde(default)]
+    files: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -236,6 +244,7 @@ pub fn parse_manifest(text: &str) -> anyhow::Result<PluginManifest> {
         bail!("plugin version is limited to 32 characters");
     }
     let views = normalize_views(&draft.id, &draft.title, draft.views)?;
+    let grants = crate::plugin_grant::parse_permissions(draft.permissions, draft.files)?;
     Ok(PluginManifest {
         id: draft.id,
         title: draft.title,
@@ -245,7 +254,50 @@ pub fn parse_manifest(text: &str) -> anyhow::Result<PluginManifest> {
         version: draft.version,
         address_bar: draft.address_bar,
         views,
+        permissions: grants.permissions,
+        files: grants.files,
     })
+}
+
+impl PluginManifest {
+    pub fn wants_bridge(&self) -> bool {
+        crate::plugin_grant::wants_bridge(&self.permissions)
+    }
+}
+
+pub fn read_manifest_file(path: &Path) -> anyhow::Result<PluginManifest> {
+    let text = fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+    parse_manifest(&text)
+}
+
+pub fn load_installed(config_dir: &Path, id: &str) -> anyhow::Result<PluginManifest> {
+    read_manifest_file(&plugins_dir(config_dir).join(id).join("plugin.json"))
+}
+
+pub fn bundled_welcome_manifest() -> anyhow::Result<PluginManifest> {
+    if let Some(examples) = crate::paths::bundled_examples() {
+        let path = examples.join("plugins").join("welcome").join("plugin.json");
+        if path.is_file() {
+            return read_manifest_file(&path);
+        }
+    }
+    parse_manifest(crate::bundle::welcome_manifest()?)
+}
+
+/// Inject the prefix relay into every HTML entry, and the Herdr bridge when the plugin declared it.
+pub fn prepare_entry(manifest: &PluginManifest, relative: &str, bytes: &[u8]) -> Vec<u8> {
+    if relative != manifest.entry {
+        return bytes.to_vec();
+    }
+    let ext = Path::new(relative).extension().and_then(|ext| ext.to_str());
+    if ext != Some("html") && ext != Some("htm") {
+        return bytes.to_vec();
+    }
+    let html = crate::content::inject_frame_keys(&String::from_utf8_lossy(bytes));
+    if !manifest.wants_bridge() {
+        return html.into_bytes();
+    }
+    crate::content::inject_bridge(&html).into_bytes()
 }
 
 fn normalize_views(
@@ -438,6 +490,10 @@ pub async fn handle(State(state): State<AppState>, uri: Uri) -> Response<Body> {
         Ok(bytes) => bytes,
         Err(err) => return (StatusCode::NOT_FOUND, err.to_string()).into_response(),
     };
+    let bytes = match load_installed(&state.config_dir, id) {
+        Ok(manifest) => prepare_entry(&manifest, &relative, &bytes),
+        Err(_) => bytes,
+    };
     let mime = mime_guess::from_path(&path).first_or_octet_stream();
     let mut response = Response::new(Body::from(bytes));
     if let Ok(value) = HeaderValue::from_str(mime.essence_str()) {
@@ -556,6 +612,74 @@ mod tests {
             .join("index.html")
             .is_file());
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn the_checkin_report_example_declares_file_and_control_permission() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("examples/plugins/checkin-report/plugin.json");
+        let manifest = read_manifest_file(&path).unwrap();
+        assert_eq!(manifest.id, "checkin-report");
+        assert_eq!(
+            manifest.permissions,
+            vec!["files:read".to_string(), "herdr:control".to_string()]
+        );
+        assert_eq!(
+            manifest.files,
+            vec![PathBuf::from("/home/engel/projects/checkin/state")]
+        );
+        assert!(manifest.wants_bridge());
+    }
+
+    #[test]
+    fn the_desk_sample_only_asks_to_edit_the_desk() {
+        let path =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/plugins/desk-sample/plugin.json");
+        let manifest = read_manifest_file(&path).unwrap();
+        assert_eq!(manifest.id, "desk-sample");
+        assert_eq!(
+            manifest.permissions,
+            vec!["panels:read".to_string(), "panels:control".to_string()]
+        );
+        assert!(manifest.files.is_empty());
+        let page = fs::read_to_string(path.parent().unwrap().join("index.html")).unwrap();
+        assert!(page.contains("openPanel"));
+        assert!(page.contains("fillPanel"));
+        assert!(page.contains("showDesk"));
+        assert!(page.contains("setZoom"));
+        assert!(page.contains("panel.summary"));
+        assert!(!page.contains("sampleId"));
+        assert!(!page.contains("scrollPane"));
+        assert!(!page.contains("listPanes"));
+        assert!(!page.contains("readPane"));
+        assert!(!page.contains("sendText"));
+        assert!(!page.contains("/home"));
+    }
+
+    #[test]
+    fn permissions_are_rejected_when_the_manifest_is_wrong() {
+        let plain = parse_manifest(r#"{"id":"welcome","title":"Welcome"}"#).unwrap();
+        assert!(plain.permissions.is_empty());
+        assert!(!plain.wants_bridge());
+        let html = b"<html><head></head><body>Hi</body></html>";
+        let plain_page = String::from_utf8(prepare_entry(&plain, "index.html", html)).unwrap();
+        assert!(plain_page.contains("/* hwp-frame-keys */"));
+        assert!(!plain_page.contains("herdrPanels"));
+
+        let powered =
+            parse_manifest(r#"{"id":"board","title":"Board","permissions":["herdr:read"]}"#)
+                .unwrap();
+        assert!(powered.wants_bridge());
+        let served = String::from_utf8(prepare_entry(&powered, "index.html", html)).unwrap();
+        assert!(served.contains("herdrPanels"));
+        assert!(served.contains("focusPane"));
+        assert!(served.contains("/* hwp-frame-keys */"));
+        assert_eq!(served.matches("/* hwp-frame-keys */").count(), 1);
+        assert_eq!(prepare_entry(&powered, "app.js", b"var x"), b"var x");
+
+        let err = parse_manifest(r#"{"id":"board","title":"Board","permissions":["shell"]}"#)
+            .unwrap_err();
+        assert!(err.to_string().contains("unknown permission"));
     }
 
     #[test]
