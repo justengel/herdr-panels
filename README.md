@@ -25,7 +25,7 @@ sudo apt install libwebkit2gtk-4.1-0
 
 Unpack the archive and run `./herdr-panels` from that folder. The desktop program is beside it, so this opens the window and listens on http://127.0.0.1:4737. The first start writes the viewer token and the example layouts into the config directory. A browser tab at that address shows the same desk. `herdr-panels server` starts the server and leaves the window closed.
 
-`herdr-panels update` downloads the latest GitHub release for this system and replaces `herdr-panels`. When `herdr-panels-desktop` is in the same folder, that program is replaced from the same release. Restart the viewer afterward. `herdr-panels upgrade` is the same command. A copy that is still in a cargo target directory is left unchanged.
+`herdr-panels update` downloads the latest GitHub release for this system and replaces `herdr-panels`. When `herdr-panels-desktop` is in the same folder, that program is replaced from the same release. Restart the viewer afterward. A copy that is still in a cargo target directory is left unchanged. The command is on `herdr-panels`, not on the desktop program.
 
 On Windows, unpack the zip and run `herdr-panels.exe`. The window uses the WebView2 already on Windows 10 and 11.
 
@@ -142,7 +142,7 @@ Prefix+Alt+N and Prefix+Alt+P move between spaces. Prefix+Shift+1 through 9 jump
 
 Keybinds, then Panels, lists every desk shortcut. Change records the keys you press. An action with more than one chord stores them as a comma-separated list. Reset puts the usual chords back. Those shortcuts belong to this window.
 
-A browser page keeps keys to itself. Click the panel title to use the desk shortcuts again. Opening and resizing stay on the pointer, or on `herdr-panels panel` for an agent.
+The prefix reaches a plugin, an HTML panel, and a browser panel. Ctrl+B inside a plugin frame reaches the desk, the same way it does in a terminal. Clicking one of those panels selects it even when the page inside keeps the click. Other keys stay with the page. Opening and resizing stay on the pointer, or on `herdr-panels panel` for an agent.
 
 ### Design mode
 
@@ -161,7 +161,7 @@ The Design button turns the workspace into an editor:
 <config>/plugins/<id>/index.html
 ```
 
-`plugin.json` has `id`, `title`, and `entry` (default `index.html`). `views` says which addresses a plugin can open, so it can sit beside Markdown or Text for that file. Leave `views` out and the plugin is its own panel. `addressBar` shows that bar, lets `modify` change it, or uses `replace` so the plugin can draw its own. The panel gear can show or hide the bar. An optional `permissions` list can ask for `herdr:read`, `herdr:control`, `panels:read`, `panels:control`, or `files:read`. `files:read` also needs a `files` list of absolute paths or directories. Install asks before granting those, unless you pass `--yes`. A plugin with no `permissions` is unchanged. Install the sample with `herdr-panels plugin install --example`, or install another directory with `herdr-panels plugin install <directory>`. The page loads it at `/plugins/<id>`. See `examples/plugins/README.md`.
+`plugin.json` has `id`, `title`, and `entry` (default `index.html`). `views` says which addresses a plugin can open, so it can sit beside Markdown or Text for that file. Leave `views` out and the plugin is its own panel. `addressBar` shows that bar, lets `modify` change it, or uses `replace` so the plugin can draw its own. The panel gear can show or hide the bar. An optional `permissions` list can ask for `herdr:read`, `herdr:control`, `panels:read`, `panels:control`, or `files:read`. `files:read` also needs a `files` list of absolute paths or directories. Those paths use the system's own separators. Install asks before granting those, unless you pass `--yes`. `herdr-panels plugin list` prints each plugin's permissions. A plugin with no `permissions` is unchanged. Install the sample with `herdr-panels plugin install --example`, or install another directory with `herdr-panels plugin install <directory>`. `examples/plugins/desk-sample` asks for `panels:read` and `panels:control`, opens `https://example.com`, and does not draw the rest of the desk. The page loads a plugin at `/plugins/<id>`. See `examples/plugins/README.md`.
 
 ### Agents
 
@@ -251,6 +251,7 @@ herdr-panels plugin list
 herdr-panels plugin install --example
 herdr-panels plugin install <directory>
 herdr-panels plugin install <directory> --yes
+herdr-panels update
 herdr-panels token rotate
 herdr-panels token set <value>
 ```
@@ -288,7 +289,7 @@ cargo run -- server --herdr-session demo
 
 ## Desktop shell
 
-`src-tauri` opens this same viewer in a native window. How to start it is in [Install and run](#install-and-run). A browser panel whose address is `http` or `https` is a child webview laid on that panel's content rectangle, so the site is its own top-level page. Moving a divider sends the new rectangle to the webview. A right-click menu stays on screen and the webview shifts out from under it. The settings dialog, design mode, and a panel drag hide the webview so those controls can take the pointer. Element selection stays on the page and runs inside it. A normal browser tab still uses an iframe.
+`src-tauri` opens this same viewer in a native window. How to start it is in [Install and run](#install-and-run). Ctrl or Cmd with the mouse wheel, plus, minus, or 0 scales the desktop panels together, from 25% to 500%. The session bar stays the same size, and a terminal keeps its place in its history. A browser tab uses the browser's own zoom. A browser panel whose address is `http` or `https` is a child webview laid on that panel's content rectangle, so the site is its own top-level page. Moving a divider sends the new rectangle to the webview. A right-click menu stays on screen and the webview shifts out from under it. The settings dialog, design mode, and a panel drag hide the webview so those controls can take the pointer. Element selection stays on the page and runs inside it. A normal browser tab still uses an iframe.
 
 ## Development checks
 

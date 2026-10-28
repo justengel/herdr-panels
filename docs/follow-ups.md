@@ -2,6 +2,10 @@
 
 Recorded 2026-10-27 from the review before the first public release. Closed items are here so this list stays the place to come back to.
 
+## Done in 0.1.4
+
+- A file grant stays inside its directory on macOS when an existing folder is a firmlink. Paths use each system's own separators.
+
 ## Done in 0.1.3
 
 - `herdr-panels update` downloads the latest GitHub release and replaces the program. When the desktop window is in the same folder, that program is replaced from the same release.

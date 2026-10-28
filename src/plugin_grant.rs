@@ -120,7 +120,7 @@ pub fn grant_label(path: &Path) -> String {
     let shown = path.display().to_string();
     match path.canonicalize() {
         Ok(canon) if !same_place(path, &canon) => {
-            format!("{shown} (resolves to {})", strip_verbatim(&canon))
+            format!("{shown} (resolves to {})", display_path(&canon))
         }
         _ => shown,
     }
@@ -282,14 +282,25 @@ fn grant_root(grant: &Path) -> Result<PathBuf, &'static str> {
 }
 
 fn ancestor_stays(grant: &Path, requested: &Path) -> Result<(), &'static str> {
-    let Some(ancestor) = deepest_existing(requested) else {
-        return Ok(());
+    let resolved = resolve_existing_prefix(requested)?;
+    let grant_resolved = resolve_existing_prefix(grant)?;
+    if resolved.starts_with(&grant_resolved) {
+        Ok(())
+    } else {
+        Err("outside")
+    }
+}
+
+/// Keep the part of `path` that is already on disk, in canonical form, and put
+/// the missing tail back on. macOS firmlinks make `/home` or `/Users` canonicalize
+/// somewhere else; the missing file is still inside the grant.
+fn resolve_existing_prefix(path: &Path) -> Result<PathBuf, &'static str> {
+    let Some(ancestor) = deepest_existing(path) else {
+        return Ok(path.to_path_buf());
     };
     let canon = ancestor.canonicalize().map_err(|_| "outside")?;
-    if !same_place(&ancestor, &canon) && !grant.starts_with(&canon) {
-        return Err("outside");
-    }
-    Ok(())
+    let rest = path.strip_prefix(&ancestor).map_err(|_| "outside")?;
+    Ok(canon.join(rest))
 }
 
 fn deepest_existing(path: &Path) -> Option<PathBuf> {
@@ -305,15 +316,22 @@ fn deepest_existing(path: &Path) -> Option<PathBuf> {
 }
 
 fn same_place(path: &Path, canon: &Path) -> bool {
-    let left = strip_verbatim(path);
-    let right = strip_verbatim(canon);
     if cfg!(windows) {
-        left.eq_ignore_ascii_case(&right)
+        strip_verbatim(path).eq_ignore_ascii_case(&strip_verbatim(canon))
     } else {
-        left == right
+        path == canon
     }
 }
 
+fn display_path(path: &Path) -> String {
+    if cfg!(windows) {
+        strip_verbatim(path)
+    } else {
+        path.display().to_string()
+    }
+}
+
+#[cfg(windows)]
 fn strip_verbatim(path: &Path) -> String {
     let text = path.display().to_string();
     let text = text.strip_prefix(r"\\?\").unwrap_or(&text);

@@ -54,9 +54,7 @@ impl Platform {
 pub async fn execute() -> anyhow::Result<()> {
     let extra: Vec<String> = std::env::args().skip(2).collect();
     if extra.iter().any(|arg| arg == "--help" || arg == "-h") {
-        println!(
-            "Download and install the latest GitHub release\n\nUsage: herdr-panels update\n       herdr-panels upgrade"
-        );
+        println!("Download and install the latest GitHub release\n\nUsage: herdr-panels update");
         return Ok(());
     }
     if let Some(arg) = extra.first() {
@@ -846,7 +844,12 @@ mod tests {
         assert!(is_development_build(Path::new(
             "/work/herdr-panels/target/release/herdr-panels"
         )));
+        #[cfg(windows)]
         assert!(is_development_build(Path::new(
+            r"C:\work\herdr-panels\target\debug\herdr-panels.exe"
+        )));
+        #[cfg(not(windows))]
+        assert!(!is_development_build(Path::new(
             r"C:\work\herdr-panels\target\debug\herdr-panels.exe"
         )));
         assert!(is_development_build(Path::new(
