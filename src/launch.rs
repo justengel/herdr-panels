@@ -112,10 +112,7 @@ pub async fn read_health(url: &str, token: Option<&str>) -> Option<(u16, String)
         .ok()?;
     let request = client.get(format!("{url}/api/health"));
     let request = if let Some(token) = token {
-        request.header(
-            reqwest::header::AUTHORIZATION,
-            format!("Bearer {token}"),
-        )
+        request.header(reqwest::header::AUTHORIZATION, format!("Bearer {token}"))
     } else {
         request
     };
@@ -181,7 +178,10 @@ pub fn viewer_launch(port_open: bool, status: Option<u16>, body: &str, ours: &st
 
 fn health_build_matches(body: &str, ours: &str) -> Option<bool> {
     let value: serde_json::Value = serde_json::from_str(body).ok()?;
-    let build = value.get("build")?.as_str().filter(|build| !build.is_empty())?;
+    let build = value
+        .get("build")?
+        .as_str()
+        .filter(|build| !build.is_empty())?;
     Some(build == ours)
 }
 
@@ -213,11 +213,7 @@ fn viewer_process(path: &str) -> bool {
 }
 
 fn one_line(body: &str) -> String {
-    let text: String = body
-        .chars()
-        .filter(|ch| *ch != '\r')
-        .take(160)
-        .collect();
+    let text: String = body.chars().filter(|ch| *ch != '\r').take(160).collect();
     text.replace('\n', " ").trim().to_string()
 }
 
@@ -280,7 +276,10 @@ mod tests {
         );
         let foreign = server_refusal(
             url,
-            Choice::Refuse("http://127.0.0.1:4737 is in use, but it is not a herdr-panels viewer (HTTP 200)".into()),
+            Choice::Refuse(
+                "http://127.0.0.1:4737 is in use, but it is not a herdr-panels viewer (HTTP 200)"
+                    .into(),
+            ),
         )
         .unwrap();
         assert!(foreign.contains("not a herdr-panels viewer"), "{foreign}");
@@ -300,7 +299,11 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("hwp-recorded-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("server.json"), r#"{"url":"http://127.0.0.1:47993/"}"#).unwrap();
+        std::fs::write(
+            dir.join("server.json"),
+            r#"{"url":"http://127.0.0.1:47993/"}"#,
+        )
+        .unwrap();
         assert_eq!(
             recorded_url(&dir).as_deref(),
             Some("http://127.0.0.1:47993")
@@ -411,10 +414,7 @@ mod tests {
 
     #[test]
     fn a_closed_port_starts_a_viewer() {
-        assert_eq!(
-            viewer_launch(false, None, "", "abc"),
-            ViewerLaunch::Start
-        );
+        assert_eq!(viewer_launch(false, None, "", "abc"), ViewerLaunch::Start);
     }
 
     #[test]
@@ -469,7 +469,8 @@ mod tests {
 
     #[test]
     fn the_recorded_desktop_process_is_the_one_to_stop() {
-        let pid = stale_viewer_pid(Some(10), Some(r"C:\app\herdr-panels-desktop.exe"), &[]).unwrap();
+        let pid =
+            stale_viewer_pid(Some(10), Some(r"C:\app\herdr-panels-desktop.exe"), &[]).unwrap();
         assert_eq!(pid, 10);
     }
 
@@ -499,10 +500,7 @@ mod tests {
         let err = stale_viewer_pid(
             None,
             None,
-            &[
-                (1, "herdr-panels.exe"),
-                (2, "herdr-panels-desktop.exe"),
-            ],
+            &[(1, "herdr-panels.exe"), (2, "herdr-panels-desktop.exe")],
         );
         assert!(err.is_err(), "{err:?}");
     }

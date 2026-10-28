@@ -138,10 +138,8 @@ fn navigation_sequence(
         "Insert" => ("2", "~", "\u{1b}[2~"),
         _ => return None,
     };
-    let bits = usize::from(shift)
-        + 2 * usize::from(alt)
-        + 4 * usize::from(ctrl)
-        + 8 * usize::from(meta);
+    let bits =
+        usize::from(shift) + 2 * usize::from(alt) + 4 * usize::from(ctrl) + 8 * usize::from(meta);
     if bits == 0 {
         return Some(plain.to_string());
     }

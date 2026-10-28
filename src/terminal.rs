@@ -149,7 +149,10 @@ async fn handle_client(
     }
     if value.get("type").and_then(Value::as_str) == Some("mouse") {
         let action = value.get("action").and_then(Value::as_str).unwrap_or("");
-        let button = value.get("button").and_then(Value::as_str).unwrap_or("left");
+        let button = value
+            .get("button")
+            .and_then(Value::as_str)
+            .unwrap_or("left");
         let column = dimension(&value, "column")
             .ok_or_else(|| Fault::Size("column must be a number".into()))?;
         let row =

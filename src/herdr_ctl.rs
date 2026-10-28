@@ -93,7 +93,8 @@ pub async fn update() -> Result<String, String> {
         let mut command = Command::new("herdr");
         command.arg("update");
         crate::quiet_process::quiet(&mut command);
-        command.output()
+        command
+            .output()
             .map_err(|err| format!("could not run herdr update: {err}"))
     })
     .await

@@ -24,7 +24,10 @@ fn stamp_build() {
     for path in &files {
         println!("cargo:rerun-if-changed={}", path.display());
         let bytes = std::fs::read(path).unwrap_or_else(|err| {
-            panic!("could not read {} for the build identity: {err}", path.display());
+            panic!(
+                "could not read {} for the build identity: {err}",
+                path.display()
+            );
         });
         hash = fnv(hash, path.to_string_lossy().as_bytes());
         hash = fnv(hash, &bytes);
@@ -34,7 +37,10 @@ fn stamp_build() {
 
 fn collect(dir: &std::path::Path, files: &mut Vec<std::path::PathBuf>) {
     let entries = std::fs::read_dir(dir).unwrap_or_else(|err| {
-        panic!("could not read {} for the build identity: {err}", dir.display());
+        panic!(
+            "could not read {} for the build identity: {err}",
+            dir.display()
+        );
     });
     for entry in entries.flatten() {
         let path = entry.path();

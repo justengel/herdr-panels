@@ -59,10 +59,7 @@ mod tests {
             "not a url",
             "example.com",
         ] {
-            assert!(
-                external_http_url(raw).is_err(),
-                "{raw} should be refused"
-            );
+            assert!(external_http_url(raw).is_err(), "{raw} should be refused");
         }
         let long = format!("https://example.com/{}", "a".repeat(5000));
         assert_eq!(external_http_url(&long), Err("link is too long"));

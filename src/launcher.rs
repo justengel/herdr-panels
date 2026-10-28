@@ -73,7 +73,11 @@ pub fn install_launcher(data_home: &Path, exe: &Path) -> anyhow::Result<Installe
     }
 
     let mut icons = Vec::new();
-    for (size, bytes) in [("48x48", ICON_48), ("128x128", ICON_128), ("256x256", ICON_256)] {
+    for (size, bytes) in [
+        ("48x48", ICON_48),
+        ("128x128", ICON_128),
+        ("256x256", ICON_256),
+    ] {
         let path = data_home
             .join("icons")
             .join("hicolor")
@@ -149,7 +153,11 @@ mod tests {
             .any(|line| line == "StartupWMClass=herdr-panels-desktop"));
         assert!(entry.lines().any(|line| line == "StartupNotify=true"));
         assert!(entry.lines().any(|line| line == "Categories=Development;"));
-        let spaced = desktop_entry(&std::env::temp_dir().join("My Programs").join("herdr-panels"));
+        let spaced = desktop_entry(
+            &std::env::temp_dir()
+                .join("My Programs")
+                .join("herdr-panels"),
+        );
         let spaced_exec = spaced
             .lines()
             .find(|line| line.starts_with("Exec="))
@@ -162,7 +170,10 @@ mod tests {
             .find(|line| line.starts_with("Exec="))
             .unwrap();
         assert!(!verbatim_exec.contains('?'), "{verbatim_exec}");
-        assert!(verbatim_exec.contains("herdr-panels.exe"), "{verbatim_exec}");
+        assert!(
+            verbatim_exec.contains("herdr-panels.exe"),
+            "{verbatim_exec}"
+        );
     }
 
     #[test]
@@ -174,7 +185,10 @@ mod tests {
         let entry = std::fs::read_to_string(&installed.desktop_file).unwrap();
         assert!(entry.contains("Icon=herdr-panels\n"), "{entry}");
         assert!(!entry.contains("Icon=/"), "{entry}");
-        assert!(entry.contains("StartupWMClass=herdr-panels-desktop"), "{entry}");
+        assert!(
+            entry.contains("StartupWMClass=herdr-panels-desktop"),
+            "{entry}"
+        );
         for (size, width) in [("48x48", 48u32), ("128x128", 128), ("256x256", 256)] {
             let path = root
                 .join("icons")

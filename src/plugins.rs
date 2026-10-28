@@ -636,7 +636,8 @@ mod tests {
 
     #[test]
     fn uninstall_removes_that_plugin_and_leaves_the_guide() {
-        let root = std::env::temp_dir().join(format!("hwp-uninstall-plugin-{}", std::process::id()));
+        let root =
+            std::env::temp_dir().join(format!("hwp-uninstall-plugin-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         let config = root.join("config");
         let source = root.join("welcome");
@@ -657,15 +658,22 @@ mod tests {
         assert_eq!(manifest.id, "welcome");
         assert_eq!(manifest.title, "Welcome");
         assert!(!plugins.join("welcome").exists());
-        assert_eq!(fs::read_to_string(plugins.join("README.md")).unwrap(), "guide");
+        assert_eq!(
+            fs::read_to_string(plugins.join("README.md")).unwrap(),
+            "guide"
+        );
         assert_eq!(
             fs::read_to_string(plugins.join("other").join("keep.txt")).unwrap(),
             "stay"
         );
 
-        let missing = uninstall_plugin(&config, "welcome").unwrap_err().to_string();
+        let missing = uninstall_plugin(&config, "welcome")
+            .unwrap_err()
+            .to_string();
         assert!(missing.contains("not installed"), "{missing}");
-        let escaped = uninstall_plugin(&config, "../welcome").unwrap_err().to_string();
+        let escaped = uninstall_plugin(&config, "../welcome")
+            .unwrap_err()
+            .to_string();
         assert!(
             escaped.contains("plugin id") || escaped.contains("lowercase"),
             "{escaped}"

@@ -53,10 +53,8 @@ pub async fn execute() -> anyhow::Result<()> {
             let config_dir = prepare_config_dir(args.config.clone())?;
             let url = format!("http://{}:{}", args.host, args.port);
             let token = crate::launch::existing_token(&config_dir);
-            let choice = crate::launch::choose(
-                &url,
-                crate::launch::inspect(&url, token.as_deref()).await,
-            );
+            let choice =
+                crate::launch::choose(&url, crate::launch::inspect(&url, token.as_deref()).await);
             if let Some(message) = crate::launch::server_refusal(&url, choice) {
                 anyhow::bail!(message);
             }
@@ -149,10 +147,9 @@ async fn open_recorded_desktop() -> anyhow::Result<()> {
     let url =
         crate::launch::recorded_url(&config_dir).unwrap_or_else(|| "http://127.0.0.1:4737".into());
     let token = crate::launch::existing_token(&config_dir);
-    if let crate::launch::Choice::Refuse(message) = crate::launch::choose(
-        &url,
-        crate::launch::inspect(&url, token.as_deref()).await,
-    ) {
+    if let crate::launch::Choice::Refuse(message) =
+        crate::launch::choose(&url, crate::launch::inspect(&url, token.as_deref()).await)
+    {
         anyhow::bail!(message);
     }
     open_desktop_at(&url)

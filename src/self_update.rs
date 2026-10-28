@@ -505,7 +505,9 @@ pub enum ViewerRestart {
         server_args: Vec<String>,
         open_desktop: bool,
     },
-    CouldNotFind { url: String },
+    CouldNotFind {
+        url: String,
+    },
 }
 
 /// What to tell the user after the files were replaced.
@@ -678,7 +680,10 @@ pub fn update_result_lines(
                 "Restarted the viewer at {url} and opened the desktop window."
             ));
         }
-        RestartOutcome::Restarted { url, desktop: false } => {
+        RestartOutcome::Restarted {
+            url,
+            desktop: false,
+        } => {
             lines.push(format!("Restarted the viewer at {url}."));
         }
         RestartOutcome::NotRunning => {
@@ -727,7 +732,8 @@ pub fn stop_process(pid: u32) -> Result<(), String> {
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null());
         crate::quiet_process::quiet(&mut command);
-        let status = command.status()
+        let status = command
+            .status()
             .map_err(|err| format!("could not stop process {pid}: {err}"))?;
         if !status.success() && process_running(pid) {
             return Err(format!("could not stop process {pid}"));
@@ -783,10 +789,7 @@ async fn restart_installed_viewer(exe: &Path) -> Result<RestartOutcome, String> 
     let pid = choose_server_pid(recorded, recorded_alive_server, &listeners, |candidate| {
         process_image(candidate).is_some_and(|image| server_image(&image))
     });
-    let desktops = exe
-        .parent()
-        .map(desktop_pids_beside)
-        .unwrap_or_default();
+    let desktops = exe.parent().map(desktop_pids_beside).unwrap_or_default();
     match viewer_restart(&url, true, pid, !desktops.is_empty()) {
         ViewerRestart::NotRunning => Ok(RestartOutcome::NotRunning),
         ViewerRestart::CouldNotFind { url } => Ok(RestartOutcome::CouldNotFind { url }),
@@ -805,11 +808,7 @@ async fn restart_installed_viewer(exe: &Path) -> Result<RestartOutcome, String> 
             let mut opened = false;
             if open_desktop {
                 if let Some(desktop) = exe.parent().and_then(desktop_binary) {
-                    spawn_detached(
-                        &desktop,
-                        &[],
-                        &[("HERDR_PANELS_URL", url.as_str())],
-                    )?;
+                    spawn_detached(&desktop, &[], &[("HERDR_PANELS_URL", url.as_str())])?;
                     opened = true;
                 }
             }
@@ -1274,7 +1273,11 @@ fn listed_pids() -> Vec<u32> {
     #[cfg(target_os = "macos")]
     {
         command_output("ps", &["-ax", "-o", "pid="])
-            .map(|text| text.split_whitespace().filter_map(|item| item.parse().ok()).collect())
+            .map(|text| {
+                text.split_whitespace()
+                    .filter_map(|item| item.parse().ok())
+                    .collect()
+            })
             .unwrap_or_default()
     }
     #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
@@ -1755,14 +1758,8 @@ mod tests {
 
     #[test]
     fn the_recorded_process_wins_and_one_listener_is_the_fallback() {
-        assert_eq!(
-            choose_server_pid(Some(7), true, &[8], |_| true),
-            Some(7)
-        );
-        assert_eq!(
-            choose_server_pid(Some(7), false, &[8], |_| true),
-            Some(8)
-        );
+        assert_eq!(choose_server_pid(Some(7), true, &[8], |_| true), Some(7));
+        assert_eq!(choose_server_pid(Some(7), false, &[8], |_| true), Some(8));
         assert_eq!(choose_server_pid(None, false, &[8, 9], |_| true), None);
         assert_eq!(choose_server_pid(None, false, &[8], |_| false), None);
     }
@@ -1859,7 +1856,9 @@ mod tests {
             },
         );
         assert!(
-            lines.iter().any(|line| line.contains("herdr-panels-desktop")),
+            lines
+                .iter()
+                .any(|line| line.contains("herdr-panels-desktop")),
             "{lines:?}"
         );
         assert!(
@@ -1873,7 +1872,9 @@ mod tests {
             "{lines:?}"
         );
         assert!(
-            lines.iter().all(|line| !line.contains("Restart the viewer")),
+            lines
+                .iter()
+                .all(|line| !line.contains("Restart the viewer")),
             "{lines:?}"
         );
     }
@@ -1926,11 +1927,16 @@ mod tests {
     #[tokio::test]
     async fn a_running_server_is_replaced_by_a_new_process() {
         let current = std::env::current_exe().unwrap();
-        let exe = current.parent().unwrap().parent().unwrap().join(if cfg!(windows) {
-            "herdr-panels.exe"
-        } else {
-            "herdr-panels"
-        });
+        let exe = current
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join(if cfg!(windows) {
+                "herdr-panels.exe"
+            } else {
+                "herdr-panels"
+            });
         assert!(
             exe.is_file(),
             "missing {} — build herdr-panels before this test",
@@ -1943,7 +1949,10 @@ mod tests {
         let url = format!("http://127.0.0.1:{port}");
         let config = dir.to_string_lossy().into_owned();
         let port_text = port.to_string();
-        let socket = dir.join("missing-herdr.sock").to_string_lossy().into_owned();
+        let socket = dir
+            .join("missing-herdr.sock")
+            .to_string_lossy()
+            .into_owned();
         let mut child = std::process::Command::new(&exe)
             .args([
                 "server",
@@ -2001,11 +2010,17 @@ mod tests {
             }
         );
         let _ = child.wait();
-        assert!(!process_running(old_pid), "old viewer {old_pid} is still running");
+        assert!(
+            !process_running(old_pid),
+            "old viewer {old_pid} is still running"
+        );
         let text = std::fs::read_to_string(dir.join("server.json")).unwrap();
         let new_pid = pid_in_server_record(&text).expect("new pid");
         assert_ne!(new_pid, old_pid);
-        assert!(process_running(new_pid), "new viewer {new_pid} is not running");
+        assert!(
+            process_running(new_pid),
+            "new viewer {new_pid} is not running"
+        );
         assert!(matches!(
             crate::launch::inspect(&url, None).await,
             crate::launch::Probe::Up
