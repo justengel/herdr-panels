@@ -1,6 +1,7 @@
 import { useEffect, useState, type CSSProperties } from "react";
 import type { PaneView, TabView, WorkspaceView } from "../../types";
 import { useDesk } from "../../desk";
+import { useHost } from "../../host";
 import { HerdrTerminal } from "./HerdrTerminal";
 
 export function SpaceMirror({
@@ -13,6 +14,7 @@ export function SpaceMirror({
   onFocusPane: (paneId: string) => void;
 }) {
   const desk = useDesk();
+  const host = useHost();
   const [picked, setPicked] = useState<string | null>(null);
   const workspaceId =
     desk.focusedWorkspaceId ||
@@ -53,6 +55,15 @@ export function SpaceMirror({
             {tab.label || tab.tabId}
           </button>
         ))}
+        <button
+          type="button"
+          className="space-tab-add"
+          aria-label="New tab"
+          title="New tab"
+          onClick={() => void host.newTab(workspaceId || undefined)}
+        >
+          +
+        </button>
       </div>
       <div className="space-panes">
         {visible.length === 0 ? <div className="empty">This space has no panes.</div> : null}

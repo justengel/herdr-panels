@@ -198,7 +198,7 @@ button.status:hover:not(:disabled) {
 }
 
 .status.live .dot { background: var(--idle); }
-.status.update .dot { background: var(--working); }
+.status.update .dot { background: var(--done); }
 
 .workspace {
   flex: 1;
@@ -803,6 +803,17 @@ body.panel-dragging, body.panel-dragging * { cursor: grabbing !important; user-s
 
 .space-tabs button.on, .space-tabs button[aria-selected="true"] {
   background: #2a3140;
+  color: var(--text);
+}
+
+.space-tabs .space-tab-add {
+  flex: 0 0 auto;
+  padding: 0 8px;
+  font-size: 16px;
+  line-height: 1;
+}
+
+.space-tabs .space-tab-add:hover {
   color: var(--text);
 }
 

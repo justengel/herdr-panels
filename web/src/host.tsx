@@ -34,6 +34,8 @@ interface HostValue {
   /** True after the prefix key, before the following key. Reads the live flag, not the painted one. */
   prefixArmed: () => boolean;
   createSpace: (label?: string) => Promise<void>;
+  /** Create a Herdr tab in this space, the same action as the TUI new-tab key. */
+  newTab: (workspaceId?: string) => Promise<void>;
   renameSpace: (workspaceId: string, label: string) => Promise<void>;
   closeSpace: (workspaceId: string) => Promise<void>;
   applyThemeNow: (name: string) => Promise<void>;
@@ -152,8 +154,7 @@ export function HostProvider({
       } else if (action === "focus_agent" && index) {
         deskHandler.current({ action: "agent", index });
       } else if (action === "new_tab") {
-        await api.herdrAction({ action: "tab.create", workspaceId });
-        await refresh();
+        await newTab(workspaceId);
       } else if (action === "close_tab" && tabId) {
         await api.herdrAction({ action: "tab.close", tabId });
         await refresh();
@@ -368,6 +369,16 @@ export function HostProvider({
     };
   }, [config]);
 
+  async function newTab(workspaceId?: string) {
+    const space = workspaceId || runtimeRef.current?.focusedWorkspaceId || undefined;
+    try {
+      await api.herdrAction({ action: "tab.create", workspaceId: space });
+      await refresh();
+    } catch (err) {
+      noticeRef.current(err instanceof Error ? err.message : String(err));
+    }
+  }
+
   async function createSpace(label?: string) {
     try {
       await api.herdrAction({ action: "workspace.create", label });
@@ -464,6 +475,7 @@ export function HostProvider({
     consume: (event) => consumeRef.current(event),
     prefixArmed: () => prefixRef.current,
     createSpace,
+    newTab,
     renameSpace,
     closeSpace,
     applyThemeNow,
