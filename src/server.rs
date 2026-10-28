@@ -1164,10 +1164,24 @@ async fn plugin_bridge(
                 .map(Json)
                 .map_err(agent_error)
         }
-        "visitPanel" => crate::agent::visit_desk(&state, &param_str(&body.params, "panelId"))
-            .await
-            .map(Json)
-            .map_err(agent_error),
+        "visitPanel" => {
+            let listed = param_strings(&body.params, "panelIds");
+            let queries = if listed.is_empty() {
+                vec![param_str(&body.params, "panelId")]
+            } else {
+                listed
+            };
+            let arrange = param_str(&body.params, "arrange");
+            let arrange = if arrange.is_empty() {
+                None
+            } else {
+                Some(arrange)
+            };
+            crate::agent::visit_desk(&state, &queries, arrange.as_deref())
+                .await
+                .map(Json)
+                .map_err(agent_error)
+        }
         "fillPanel" => {
             let panel_id = param_str(&body.params, "panelId");
             if panel_id.trim().is_empty() {
@@ -1236,6 +1250,19 @@ fn param_str(params: &Value, key: &str) -> String {
         .and_then(Value::as_str)
         .unwrap_or("")
         .to_string()
+}
+
+fn param_strings(params: &Value, key: &str) -> Vec<String> {
+    params
+        .get(key)
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| item.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// Chromium's page-zoom steps. The same list lives in `web/src/displayZoom.ts`.

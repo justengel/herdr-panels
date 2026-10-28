@@ -1708,6 +1708,12 @@ async fn a_visit_names_the_space_and_a_miss_is_an_error() {
                     "id": "panel-1",
                     "title": "google",
                     "panel": {"type": "iframe", "url": "https://google.com", "proxy": false}
+                },
+                "wk": {
+                    "type": "panel",
+                    "id": "notes",
+                    "title": "Notes",
+                    "panel": {"type": "markdown", "path": "notes/a.md"}
                 }
             }
         }))
@@ -1744,6 +1750,39 @@ async fn a_visit_names_the_space_and_a_miss_is_an_error() {
     let google = spaces.iter().find(|space| space["id"] == "wh").unwrap();
     assert_eq!(google["panels"][0]["title"], "google");
     assert_eq!(google["panels"][0]["summary"], "https://google.com");
+
+    let (status, body) = desk
+        .call(
+            "POST",
+            "/api/agent/visit",
+            Some(json!({"panelIds": ["google", "Notes"]})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["arrange"], "row");
+    assert_eq!(body["panels"][0]["panelId"], "panel-1");
+    assert_eq!(body["panels"][1]["panelId"], "notes");
+    assert_eq!(body["panels"][1]["space"], "wk");
+
+    let (status, body) = desk
+        .call(
+            "POST",
+            "/api/agent/visit",
+            Some(json!({"panelIds": ["google", "missing"]})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    assert_eq!(body["error"], "panel was not found: missing");
+
+    let (status, body) = desk
+        .call(
+            "POST",
+            "/api/agent/visit",
+            Some(json!({"panelIds": ["google", "Notes"], "arrange": "diagonal"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["error"], "arrange is row, column, or grid");
 }
 
 fn query_url(url: &str) -> String {

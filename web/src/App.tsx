@@ -32,7 +32,7 @@ import { TopBar } from "./components/TopBar";
 import { DesignBar } from "./components/DesignBar";
 import { ElementSelect } from "./components/ElementSelect";
 import { DeskKeyboard, KeyedPanelProvider } from "./deskKeyboard";
-import { findPanelVisit, type PanelVisit } from "./borrowPanel";
+import { openVisit, type OpenedVisit } from "./borrowPanel";
 import { layoutForFocusedPane, layoutForPaneFocus, panelForPane, panelRefs } from "./deskKeys";
 import { installDisplayZoom } from "./displayZoom";
 import { pushClosedPanel, takeClosedPanel } from "./panelHistory";
@@ -101,7 +101,7 @@ export function App() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [element, setElement] = useState<{ panelId: string; tag: string; text: string } | null>(null);
   const [zoomedId, setZoomedId] = useState<string | null>(null);
-  const [visit, setVisit] = useState<(PanelVisit & { openedOn: string }) | null>(null);
+  const [visit, setVisit] = useState<(OpenedVisit & { openedOn: string }) | null>(null);
   const [chatTarget, setChatTarget] = useState("");
   const [splitHerdr, setSplitHerdr] = useState(true);
   const [inbox, setInbox] = useState<Record<string, Attachment[]>>({});
@@ -495,10 +495,15 @@ export function App() {
     setInbox((current) => ({ ...current, [panelId]: [] }));
   }, []);
 
-  const visitRef = useRef<(query: string, spaceId?: string) => { panelId: string } | { error: string }>(() => ({
+  const visitRef = useRef<
+    (
+      panels: { panelId: string; spaceId?: string }[],
+      arrange?: string,
+    ) => OpenedVisit | { error: string }
+  >(() => ({
     error: "The desk could not show that panel.",
   }));
-  visitRef.current = (query, spaceId) => {
+  visitRef.current = (panels, arrange) => {
     const current = spaceRef.current;
     const stored = readSpaceLayouts();
     const workspaces = runtimeRef.current?.workspaces ?? [];
@@ -531,17 +536,20 @@ export function App() {
       if (listed.has(key) || (current && spaceLayoutKey(current) === key)) continue;
       spaces.push({ id: key, label: key, root, current: false });
     }
-    const found = findPanelVisit(spaces, query, spaceId);
-    if ("error" in found) return found;
-    setVisit({ ...found.visit, openedOn: current ?? "" });
-    return { panelId: found.visit.panelId };
+    const opened = openVisit(spaces, panels, arrange);
+    if ("error" in opened) return opened;
+    setVisit({ ...opened, openedOn: current ?? "" });
+    return opened;
   };
 
   useEffect(() => {
     const page = window as Window & {
-      __hwpVisitPanel?: (query: string, spaceId?: string) => { panelId: string } | { error: string };
+      __hwpVisitPanel?: (
+        panels: { panelId: string; spaceId?: string }[],
+        arrange?: string,
+      ) => OpenedVisit | { error: string };
     };
-    page.__hwpVisitPanel = (query, spaceId) => visitRef.current(query, spaceId);
+    page.__hwpVisitPanel = (panels, arrange) => visitRef.current(panels, arrange);
     return () => {
       delete page.__hwpVisitPanel;
     };
@@ -574,6 +582,8 @@ export function App() {
         desk?: DeskFile;
         panelId?: string | null;
         spaceId?: string;
+        arrange?: string;
+        panels?: { panelId?: string; spaceId?: string }[];
         selector?: string;
         text?: string;
         requestId?: string;
@@ -609,8 +619,14 @@ export function App() {
         setZoomedId(msg.panelId ?? null);
         return;
       }
-      if (msg.type === "visit" && msg.panelId) {
-        const result = visitRef.current(msg.panelId, msg.spaceId);
+      if (msg.type === "visit" && (msg.panelId || msg.panels?.length)) {
+        const listed = (msg.panels ?? []).flatMap((panel) =>
+          panel.panelId ? [{ panelId: panel.panelId, spaceId: panel.spaceId }] : [],
+        );
+        const panels = listed.length
+          ? listed
+          : [{ panelId: msg.panelId ?? "", spaceId: msg.spaceId }];
+        const result = visitRef.current(panels, msg.arrange);
         if ("error" in result) notify(result.error);
         return;
       }
@@ -989,6 +1005,13 @@ export function App() {
           />
           {visit ? (
             <div className="borrow-visit">
+              {visit.single ? null : (
+                <header className="borrow-visit-bar">
+                  <button type="button" className="borrow-back" onClick={() => setVisit(null)}>
+                    Back
+                  </button>
+                </header>
+              )}
               <LayoutView
                 node={visit.node}
                 root={visit.node}
@@ -1000,17 +1023,19 @@ export function App() {
                 onConsume={() => undefined}
                 onRatio={() => undefined}
                 onTracks={() => undefined}
-                onPanel={(_id, panel) =>
+                onPanel={(id, panel, retitle) =>
                   setVisit((current) =>
-                    current && current.node.type === "panel"
-                      ? { ...current, node: { ...current.node, panel } }
+                    current
+                      ? { ...current, node: assignContent(current.node, id, panel, retitle === true) }
                       : current,
                   )
                 }
                 onCloseTab={() => undefined}
                 onFocusPane={focusAgentPane}
-                onBack={() => setVisit(null)}
-                fromSpace={visit.spaceLabel}
+                borrowed={!visit.single}
+                origins={visit.origins}
+                onBack={visit.single ? () => setVisit(null) : undefined}
+                fromSpace={visit.single ? visit.spaceLabel : undefined}
               />
             </div>
           ) : null}

@@ -122,10 +122,13 @@ enum PanelCommand {
     },
     /// Fill the page with one panel. Omit the panel to restore the layout
     Zoom { panel: Option<String> },
-    /// Show a panel from any space over this one. Omit the name to list every space
+    /// Show panels from any space over this one. Omit the names to list every space
     Visit {
-        /// Panel name or id. Leave this out to list panels on every space
-        panel: Option<String>,
+        /// Panel names or ids. Leave these out to list panels on every space
+        panels: Vec<String>,
+        /// row, column, or grid. Two panels sit side by side; three or more use a grid
+        #[arg(long)]
+        arrange: Option<String>,
     },
     /// Open a file, directory, or http URL in a panel
     Open {
@@ -415,20 +418,8 @@ async fn panel_command(base: &str, token: &str, command: PanelCommand) -> anyhow
             println!("{response}");
             Ok(())
         }
-        PanelCommand::Visit { panel } => match panel {
-            Some(panel) => {
-                let response = call(
-                    base,
-                    token,
-                    "POST",
-                    "/api/agent/visit",
-                    Some(json!({ "panelId": panel })),
-                )
-                .await?;
-                println!("{response}");
-                Ok(())
-            }
-            None => {
+        PanelCommand::Visit { panels, arrange } => {
+            if panels.is_empty() {
                 let body = call(base, token, "GET", "/api/agent/spaces", None).await?;
                 let value: Value = serde_json::from_str(&body)?;
                 for space in value
@@ -459,9 +450,16 @@ async fn panel_command(base: &str, token: &str, command: PanelCommand) -> anyhow
                         );
                     }
                 }
-                Ok(())
+                return Ok(());
             }
-        },
+            let mut body = json!({ "panelIds": panels });
+            if let Some(arrange) = arrange {
+                body["arrange"] = json!(arrange);
+            }
+            let response = call(base, token, "POST", "/api/agent/visit", Some(body)).await?;
+            println!("{response}");
+            Ok(())
+        }
         PanelCommand::Open {
             target,
             panel,

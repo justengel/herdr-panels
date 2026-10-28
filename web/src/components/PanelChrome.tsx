@@ -39,6 +39,7 @@ interface Props {
   /** A borrowed panel. Back dismisses the visit and does not close the original. */
   onBack?: () => void;
   fromSpace?: string;
+  borrowed?: boolean;
   children: ReactNode;
 }
 
@@ -85,6 +86,7 @@ export function PanelChrome({
   onClick,
   onBack,
   fromSpace,
+  borrowed = false,
   children,
 }: Props) {
   const panelActions = usePanelActions();
@@ -322,7 +324,7 @@ export function PanelChrome({
       ? { left: menu.left, right: menu.right, top: menu.top }
       : undefined;
 
-  if (onBack) {
+  if (onBack || borrowed) {
     return (
       <section className={classes} data-panel-id={panelId} data-kind={kind} tabIndex={-1}>
         <header className="panel-header borrow-header">
@@ -330,16 +332,18 @@ export function PanelChrome({
             <strong>{title}</strong>
             {fromSpace ? <span className="subtitle">from {fromSpace}</span> : null}
           </div>
-          <button
-            type="button"
-            className="borrow-back"
-            onClick={(event) => {
-              event.stopPropagation();
-              onBack();
-            }}
-          >
-            Back
-          </button>
+          {onBack ? (
+            <button
+              type="button"
+              className="borrow-back"
+              onClick={(event) => {
+                event.stopPropagation();
+                onBack();
+              }}
+            >
+              Back
+            </button>
+          ) : null}
         </header>
         <div className="panel-body">{children}</div>
       </section>

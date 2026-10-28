@@ -259,6 +259,41 @@ pub struct VisitSpace<'a> {
     pub current: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VisitArrange {
+    Row,
+    Column,
+    Grid,
+}
+
+impl VisitArrange {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Row => "row",
+            Self::Column => "column",
+            Self::Grid => "grid",
+        }
+    }
+}
+
+/// Two panels sit side by side. Three or more use a grid unless the caller chose a direction.
+pub fn choose_arrange(count: usize, requested: Option<&str>) -> Result<VisitArrange, &'static str> {
+    if count > 6 {
+        return Err("a visit can show at most 6 panels");
+    }
+    match requested.map(str::trim).filter(|value| !value.is_empty()) {
+        None => Ok(if count >= 3 {
+            VisitArrange::Grid
+        } else {
+            VisitArrange::Row
+        }),
+        Some("row") => Ok(VisitArrange::Row),
+        Some("column") => Ok(VisitArrange::Column),
+        Some("grid") => Ok(VisitArrange::Grid),
+        Some(_) => Err("arrange is row, column, or grid"),
+    }
+}
+
 #[derive(Debug)]
 pub struct VisitTarget {
     pub panel_id: String,
@@ -322,6 +357,36 @@ pub fn find_visit(spaces: &[VisitSpace<'_>], query: &str) -> Result<VisitTarget,
             space.label.to_string()
         },
     })
+}
+
+/// Resolve every name before a visit opens. One failure rejects the whole list.
+pub fn find_visits(
+    spaces: &[VisitSpace<'_>],
+    queries: &[&str],
+) -> Result<Vec<VisitTarget>, String> {
+    if queries.is_empty() {
+        return Err("panelId is required".into());
+    }
+    let mut found = Vec::new();
+    let mut seen = std::collections::BTreeSet::new();
+    for query in queries {
+        let visit = find_visit(spaces, query).map_err(|err| {
+            if queries.len() == 1 {
+                err.to_string()
+            } else if err == "panel was not found" {
+                format!("panel was not found: {}", query.trim())
+            } else if err == "more than one panel has that name" {
+                format!("more than one panel has that name: {}", query.trim())
+            } else {
+                err.to_string()
+            }
+        })?;
+        if !seen.insert(visit.panel_id.clone()) {
+            return Err("a visit lists that panel more than once".into());
+        }
+        found.push(visit);
+    }
+    Ok(found)
 }
 
 /// The tree for one workspace: the saved space, or the Spaces, Agents, and Terminal seed, plus pins that belong there.
@@ -609,5 +674,59 @@ mod tests {
             },
         ];
         assert_eq!(find_visit(&same, "panel-1").unwrap().space_id, "wH");
+    }
+
+    #[test]
+    fn a_visit_of_several_panels_names_the_one_that_failed() {
+        let notes = LayoutNode::Panel {
+            id: "notes".into(),
+            title: Some("Notes".into()),
+            panel: PanelConfig::Markdown {
+                path: "a.md".into(),
+                address_bar: None,
+                raw: false,
+            },
+            collapsed: false,
+        };
+        let google = iframe("panel-1", "google", "https://google.com");
+        let spaces = [
+            VisitSpace {
+                id: "wJ",
+                label: "herdr-panels",
+                root: &notes,
+                current: true,
+            },
+            VisitSpace {
+                id: "wH",
+                label: "my_sixth_grimoire",
+                root: &google,
+                current: false,
+            },
+        ];
+        let found = find_visits(&spaces, &["google", "Notes"]).unwrap();
+        assert_eq!(found[0].panel_id, "panel-1");
+        assert_eq!(found[1].panel_id, "notes");
+        assert_eq!(
+            find_visits(&spaces, &["google", "Missing"]).unwrap_err(),
+            "panel was not found: Missing"
+        );
+        assert_eq!(
+            find_visits(&spaces, &["google", "google"]).unwrap_err(),
+            "a visit lists that panel more than once"
+        );
+        assert_eq!(choose_arrange(2, None).unwrap(), VisitArrange::Row);
+        assert_eq!(choose_arrange(4, None).unwrap(), VisitArrange::Grid);
+        assert_eq!(
+            choose_arrange(3, Some("column")).unwrap(),
+            VisitArrange::Column
+        );
+        assert_eq!(
+            choose_arrange(7, None).unwrap_err(),
+            "a visit can show at most 6 panels"
+        );
+        assert_eq!(
+            choose_arrange(2, Some("diagonal")).unwrap_err(),
+            "arrange is row, column, or grid"
+        );
     }
 }

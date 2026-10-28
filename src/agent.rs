@@ -136,7 +136,7 @@ async fn index(State(state): State<AppState>) -> Json<Value> {
         "update": "POST /api/agent/update {panelId, title?, panel?}",
         "move": "POST /api/agent/move {panelId, target, place?: swap|right|below}",
         "zoom": "POST /api/agent/zoom {panelId?}",
-        "visit": "POST /api/agent/visit {panelId} -> {panelId, title, spaceId, space}",
+        "visit": "POST /api/agent/visit {panelId | panelIds, arrange?} -> {arrange, panels: [{panelId, title, spaceId, space}]}",
         "spaces": "GET /api/agent/spaces",
         "open": "POST /api/agent/open {target, panelId?, from?, direction?: right|down, reuse?: bool, title?}",
         "resolve": "POST /api/agent/resolve {target}",
@@ -615,14 +615,26 @@ pub(crate) async fn zoom_desk(
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct VisitBody {
-    panel_id: String,
+    #[serde(default)]
+    panel_id: Option<String>,
+    #[serde(default)]
+    panel_ids: Vec<String>,
+    #[serde(default)]
+    arrange: Option<String>,
 }
 
 async fn visit(
     State(state): State<AppState>,
     Json(body): Json<VisitBody>,
 ) -> Result<Json<Value>, AgentError> {
-    visit_desk(&state, &body.panel_id).await.map(Json)
+    let queries = if body.panel_ids.is_empty() {
+        vec![body.panel_id.unwrap_or_default()]
+    } else {
+        body.panel_ids
+    };
+    visit_desk(&state, &queries, body.arrange.as_deref())
+        .await
+        .map(Json)
 }
 
 async fn spaces(State(state): State<AppState>) -> Result<Json<Value>, AgentError> {
@@ -689,12 +701,20 @@ async fn visit_spaces(state: &AppState) -> Result<Vec<OwnedSpace>, AgentError> {
     Ok(spaces)
 }
 
-/// Show a panel from any saved space. A missing name is an error, and the reply names the space.
-pub(crate) async fn visit_desk(state: &AppState, panel_id: &str) -> Result<Value, AgentError> {
-    let panel_id = panel_id.trim();
-    if panel_id.is_empty() || panel_id.chars().count() > 200 {
+/// Show one or more panels from any saved space. One missing name rejects the whole visit.
+pub(crate) async fn visit_desk(
+    state: &AppState,
+    queries: &[String],
+    arrange: Option<&str>,
+) -> Result<Value, AgentError> {
+    if queries.is_empty()
+        || queries
+            .iter()
+            .any(|query| query.trim().is_empty() || query.chars().count() > 200)
+    {
         return Err(AgentError::bad("panelId is required"));
     }
+    let arrange = desk::choose_arrange(queries.len(), arrange).map_err(AgentError::bad)?;
     let owned = visit_spaces(state).await?;
     let views: Vec<desk::VisitSpace<'_>> = owned
         .iter()
@@ -705,25 +725,51 @@ pub(crate) async fn visit_desk(state: &AppState, panel_id: &str) -> Result<Value
             current: space.current,
         })
         .collect();
-    let found = desk::find_visit(&views, panel_id).map_err(|err| {
-        if err == "panel was not found" {
+    let needles: Vec<&str> = queries.iter().map(String::as_str).collect();
+    let found = desk::find_visits(&views, &needles).map_err(|err| {
+        if err.starts_with("panel was not found") {
             AgentError::missing(err)
         } else {
             AgentError::bad(err)
         }
     })?;
+    let panels: Vec<Value> = found
+        .iter()
+        .map(|visit| {
+            json!({
+                "panelId": visit.panel_id,
+                "spaceId": visit.space_id,
+            })
+        })
+        .collect();
+    let first = &found[0];
     state.agent.publish(&json!({
         "type": "visit",
-        "panelId": found.panel_id,
-        "spaceId": found.space_id,
+        "arrange": arrange.as_str(),
+        "panelId": first.panel_id,
+        "spaceId": first.space_id,
+        "panels": panels,
     }));
+    let named: Vec<Value> = found
+        .iter()
+        .map(|visit| {
+            json!({
+                "panelId": visit.panel_id,
+                "title": visit.title,
+                "spaceId": visit.space_id,
+                "space": visit.space_label,
+            })
+        })
+        .collect();
     Ok(json!({
         "ok": true,
         "viewer": state.agent.viewers() > 0,
-        "panelId": found.panel_id,
-        "title": found.title,
-        "spaceId": found.space_id,
-        "space": found.space_label,
+        "arrange": arrange.as_str(),
+        "panels": named,
+        "panelId": first.panel_id,
+        "title": first.title,
+        "spaceId": first.space_id,
+        "space": first.space_label,
     }))
 }
 

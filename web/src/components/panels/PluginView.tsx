@@ -2,7 +2,7 @@ import { useEffect, useRef } from "react";
 import { api, wsUrl } from "../../api";
 import { desktopHost } from "../../desktopBrowser";
 import { openableHttpUrl, openExternalUrl } from "../../externalLink";
-import { requestPanelVisit } from "../../borrowPanel";
+import { requestVisit } from "../../borrowPanel";
 import { requestPaneReveal } from "../../deskKeys";
 import { readPluginAddressMessage, readPluginBridgeCall, readPluginFileCommand } from "../../pluginAddress";
 import type { PluginOpen } from "../../viewMenu";
@@ -151,12 +151,30 @@ export function PluginView({
             if (call.method === "visitPanel") {
               const record =
                 result && typeof result === "object"
-                  ? (result as { panelId?: unknown; spaceId?: unknown })
+                  ? (result as {
+                      panelId?: unknown;
+                      spaceId?: unknown;
+                      arrange?: unknown;
+                      panels?: { panelId?: unknown; spaceId?: unknown }[];
+                    })
                   : {};
-              const requested =
-                typeof record.panelId === "string" ? record.panelId : String(call.params.panelId ?? "");
-              const spaceId = typeof record.spaceId === "string" ? record.spaceId : undefined;
-              const shown = requestPanelVisit(requested, spaceId);
+              const listed = Array.isArray(record.panels)
+                ? record.panels.flatMap((panel) =>
+                    typeof panel?.panelId === "string"
+                      ? [{ panelId: panel.panelId, spaceId: typeof panel.spaceId === "string" ? panel.spaceId : undefined }]
+                      : [],
+                  )
+                : [];
+              const panels = listed.length
+                ? listed
+                : [
+                    {
+                      panelId: typeof record.panelId === "string" ? record.panelId : String(call.params.panelId ?? ""),
+                      spaceId: typeof record.spaceId === "string" ? record.spaceId : undefined,
+                    },
+                  ];
+              const arrange = typeof record.arrange === "string" ? record.arrange : undefined;
+              const shown = requestVisit(panels, arrange);
               if ("error" in shown) {
                 frame?.postMessage(
                   { source: "hwp-host", id: call.id, ok: false, error: shown.error },

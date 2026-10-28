@@ -50,6 +50,8 @@ interface Props {
   onOpenSpace?: (workspaceId: string) => void;
   onBack?: () => void;
   fromSpace?: string;
+  borrowed?: boolean;
+  origins?: Record<string, string>;
   openMenuId?: string | null;
   openMenuToken?: number;
   root?: LayoutNode;
@@ -72,6 +74,8 @@ export function LayoutView({
   onOpenSpace,
   onBack,
   fromSpace,
+  borrowed,
+  origins,
   openMenuId = null,
   openMenuToken = 0,
   root,
@@ -90,6 +94,8 @@ export function LayoutView({
     onCloseTab,
     onFocusPane,
     onOpenSpace,
+    borrowed,
+    origins,
     openMenuId,
     openMenuToken,
     root: tree,
@@ -126,7 +132,8 @@ export function LayoutView({
       panel={node.panel}
       pending={pending[node.id] ?? []}
       onBack={onBack}
-      fromSpace={fromSpace}
+      fromSpace={fromSpace ?? origins?.[node.id]}
+      borrowed={borrowed}
     />
   );
 }
@@ -146,6 +153,8 @@ function GridView({
   onCloseTab,
   onFocusPane,
   onOpenSpace,
+  borrowed,
+  origins,
   openMenuId = null,
   openMenuToken = 0,
   root,
@@ -166,6 +175,8 @@ function GridView({
     onCloseTab,
     onFocusPane,
     onOpenSpace,
+    borrowed,
+    origins,
     openMenuId,
     openMenuToken,
     root,
@@ -248,11 +259,12 @@ function PanelView(props: {
   onOpenSpace?: (workspaceId: string) => void;
   onBack?: () => void;
   fromSpace?: string;
+  borrowed?: boolean;
   openMenuId?: string | null;
   openMenuToken?: number;
   root?: LayoutNode;
 }) {
-  const { id, title, panel, panes, workspaces, onPanel, onCloseTab, openMenuId, openMenuToken, root, onBack, fromSpace } =
+  const { id, title, panel, panes, workspaces, onPanel, onCloseTab, openMenuId, openMenuToken, root, onBack, fromSpace, borrowed } =
     props;
   const design = useDesign();
   const desk = useDesk();
@@ -298,9 +310,10 @@ function PanelView(props: {
     onMenuDismiss: blank && canClose ? () => panelActions.close(id) : undefined,
     allowPin,
     pinLabel: pinned ? "Pinned…" : "Pin…",
-    onPin: allowPin && !onBack ? () => setPinning(true) : undefined,
+    onPin: allowPin && !onBack && !borrowed ? () => setPinning(true) : undefined,
     onBack,
     fromSpace,
+    borrowed,
     onAddressBar:
       addressBar === undefined
         ? undefined

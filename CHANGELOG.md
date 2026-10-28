@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+`herdr-panels panel visit google Notes Agents Files` shows those panels together over the current desk. Two sit side by side. Three or more use a grid. `--arrange row`, `column`, or `grid` chooses the placement. One Back leaves all of them. A missing, repeated, or ambiguous name rejects the visit and names that panel. At most six panels. Repeating the command opens the same check again.
+
 `herdr-panels panel visit <name>` shows a panel from any space over the one you are on. The command replies with that panel and its space. A missing name is an error, not a success. `herdr-panels panel visit` with no name lists the panels on every space. `panel list` still shows only the focused space. A plugin with `panels:control` can call `visitPanel`. The bar names the panel and the space it came from, and Back or Escape leaves the visit. That space's layout is left as it was. Fill screen is unchanged: it still magnifies a panel that already belongs to this space. The desktop window embeds the built page, so this overlay needs `npm run build` in `web/` before the desktop program is rebuilt. A page from before that build ignores the visit.
 
 A plugin `focusPane` call switches the desk to that pane. It opens the pane's workspace, shows the pane in a terminal panel (opening one when that space has none), brings that panel to the front, and still focuses the pane in Herdr. A pane that is not in the session is an error. When control is off, the error says to turn on control in the design bar. That bar notes the switch the first time you select a plugin that declared `herdr:control`, until you turn control on.
