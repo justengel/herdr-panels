@@ -15,6 +15,7 @@ pub mod client;
 pub mod config;
 pub mod content;
 pub mod desk;
+pub mod external_link;
 pub mod files;
 pub mod frame_pass;
 pub mod herdr;

@@ -29,6 +29,7 @@
     <h1>Desk sample</h1>
     <p id="status">Checking the example panel.</p>
     <button type="button" id="open">Open example</button>
+    <button type="button" id="browser">Open in browser</button>
     <button type="button" id="below">Move below</button>
     <button type="button" id="resize">Resize</button>
     <button type="button" id="fill">Fill screen</button>
@@ -82,6 +83,11 @@
           title: "Example",
           direction: "right",
         });
+      }));
+
+      document.getElementById("browser").addEventListener("click", () => run(async () => {
+        await bridge().openExternal(EXAMPLE);
+        return "Opened example.com in the browser.";
       }));
 
       document.getElementById("below").addEventListener("click", () => run(async () => {

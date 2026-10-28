@@ -3,6 +3,8 @@ import frameKeys from "../../../../assets/frame-keys.js?raw";
 import frameSelect from "../../../../assets/frame-select.js?raw";
 import bridge from "../../../../assets/panel-bridge.js?raw";
 import { api, contentUrl } from "../../api";
+import { desktopHost } from "../../desktopBrowser";
+import { openableHttpUrl, openExternalUrl } from "../../externalLink";
 import { isHerdrPaneId } from "../../paneId";
 
 interface Props {
@@ -97,7 +99,7 @@ export function HtmlView({ path, inline, title, control = false, design = false,
       ref={frameRef}
       className="frame"
       title={title}
-      sandbox="allow-scripts"
+      sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox"
       onLoad={() => {
         const frame = frameRef.current?.contentWindow;
         const arm = (window as Window & { __hwpArmFrame?: (frame: Window) => void }).__hwpArmFrame;
@@ -162,6 +164,15 @@ async function fulfill(message: BridgeMessage, control: boolean): Promise<unknow
       throw new Error("This panel cannot change the desk");
     case "setZoom":
       throw new Error("This panel cannot change the window zoom");
+    case "openExternal": {
+      const url = openableHttpUrl(String(params.url ?? ""));
+      if (!url) throw new Error("only http and https links can be opened");
+      if (desktopHost()) {
+        const opened = await openExternalUrl(url);
+        return { url: opened, opened: true };
+      }
+      return { url };
+    }
     case "scrollPane":
       throw new Error("This panel cannot scroll a pane");
     case "focusPane": {

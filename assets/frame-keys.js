@@ -77,4 +77,45 @@ if (typeof window !== "undefined" && window.parent && window.parent !== window &
     },
     true,
   );
+
+  // Same rule as frameLinkAction in web/src/externalLink.ts.
+  // A clicked http(s) link that leaves this page asks the host for a new browsing context.
+  // The desktop window turns that into the system browser. A browser tab opens a new tab.
+  function frameLinkAction(href, pageHref, target) {
+    let url;
+    let page;
+    try {
+      url = new URL(href, pageHref);
+      page = new URL(pageHref);
+    } catch (err) {
+      return "block";
+    }
+    if ((url.protocol !== "http:" && url.protocol !== "https:") || !url.hostname) return "block";
+    const blank = String(target || "").toLowerCase() === "_blank";
+    const sameDocument =
+      url.origin === page.origin &&
+      url.pathname === page.pathname &&
+      url.search === page.search &&
+      url.hash.length > 0;
+    if (sameDocument && !blank) return "stay";
+    if (!blank && url.origin === page.origin) return "stay";
+    return "open";
+  }
+
+  function openFrameLink(event) {
+    if (event.defaultPrevented) return;
+    if (event.type === "auxclick" && event.button !== 1) return;
+    if (event.type === "click" && event.button !== 0) return;
+    const node = event.target;
+    if (!node || !node.closest) return;
+    const anchor = node.closest("a[href]");
+    if (!anchor) return;
+    const action = frameLinkAction(anchor.href, window.location.href, anchor.target);
+    if (action === "stay") return;
+    event.preventDefault();
+    if (action === "open") window.open(anchor.href, "_blank", "noopener,noreferrer");
+  }
+
+  document.addEventListener("click", openFrameLink);
+  document.addEventListener("auxclick", openFrameLink);
 }

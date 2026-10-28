@@ -62,6 +62,39 @@
     showDesk: () => call("showDesk"),
     setZoom: (scale) => call("setZoom", { scale }),
     scrollPane: (paneId, direction, lines) => call("scrollPane", { paneId, direction, lines }),
+    openExternal: (url) => {
+      let popup = null;
+      try {
+        popup = window.open("about:blank", "_blank");
+      } catch (err) {
+        popup = null;
+      }
+      return call("openExternal", { url }).then(
+        (result) => {
+          const approved = result && result.url;
+          if (popup && approved) {
+            try {
+              popup.location.replace(approved);
+            } catch (err) {
+              popup.close();
+              throw new Error("the browser blocked the new tab");
+            }
+            try {
+              popup.opener = null;
+            } catch (err) {
+              /* The new page has already left this frame. */
+            }
+          } else if (!popup && !(result && result.opened)) {
+            throw new Error("the browser blocked the new tab");
+          }
+          return result;
+        },
+        (error) => {
+          if (popup) popup.close();
+          throw error;
+        },
+      );
+    },
   };
 
   window.addEventListener("message", (event) => {

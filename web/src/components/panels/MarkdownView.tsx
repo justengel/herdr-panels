@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { marked } from "marked";
 import DOMPurify from "dompurify";
 import { wsUrl } from "../../api";
+import { noteLinkAction, openExternalUrl } from "../../externalLink";
 
 interface Props {
   path: string;
@@ -70,8 +71,10 @@ export function MarkdownView({ path, design = false, onPick }: Props) {
         }
         const anchor = (event.target as HTMLElement).closest("a");
         if (!anchor?.href) return;
+        const action = noteLinkAction(anchor.href, window.location.href);
+        if (action === "stay") return;
         event.preventDefault();
-        window.open(anchor.href, "_blank", "noopener,noreferrer");
+        if (action === "open") void openExternalUrl(anchor.href).catch(() => undefined);
       }}
       dangerouslySetInnerHTML={{ __html: html }}
     />

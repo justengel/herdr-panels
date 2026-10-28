@@ -691,18 +691,23 @@ mod tests {
     }
 
     #[test]
-    fn the_desk_sample_only_asks_to_edit_the_desk() {
+    fn the_desk_sample_asks_for_the_desk_and_for_external_links() {
         let path =
             Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/plugins/desk-sample/plugin.json");
         let manifest = read_manifest_file(&path).unwrap();
         assert_eq!(manifest.id, "desk-sample");
         assert_eq!(
             manifest.permissions,
-            vec!["panels:read".to_string(), "panels:control".to_string()]
+            vec![
+                "panels:read".to_string(),
+                "panels:control".to_string(),
+                "links:open".to_string()
+            ]
         );
         assert!(manifest.files.is_empty());
         let page = fs::read_to_string(path.parent().unwrap().join("index.html")).unwrap();
         assert!(page.contains("openPanel"));
+        assert!(page.contains("openExternal"));
         assert!(page.contains("fillPanel"));
         assert!(page.contains("showDesk"));
         assert!(page.contains("setZoom"));

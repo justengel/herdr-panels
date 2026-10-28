@@ -1177,6 +1177,11 @@ async fn plugin_bridge(
             let scale = snap_display_zoom(scale)?;
             Ok(Json(json!({ "ok": true, "scale": scale })))
         }
+        "openExternal" => {
+            let url = crate::external_link::external_http_url(&param_str(&body.params, "url"))
+                .map_err(ApiError::bad)?;
+            Ok(Json(json!({ "url": url })))
+        }
         "scrollPane" => {
             let pane_id = param_str(&body.params, "paneId");
             let direction = param_str(&body.params, "direction");

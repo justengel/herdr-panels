@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { api, wsUrl } from "../../api";
 import { desktopHost } from "../../desktopBrowser";
+import { openableHttpUrl, openExternalUrl } from "../../externalLink";
 import { readPluginAddressMessage, readPluginBridgeCall, readPluginFileCommand } from "../../pluginAddress";
 import type { PluginOpen } from "../../viewMenu";
 
@@ -82,7 +83,43 @@ export function PluginView({
         const frame = frameRef.current?.contentWindow;
         void api
           .pluginBridge(pluginId, { panelId, method: call.method, params: call.params })
-          .then((result) => {
+          .then(async (result) => {
+            if (call.method === "openExternal") {
+              const approved =
+                result && typeof result === "object" && "url" in result
+                  ? openableHttpUrl(String((result as { url: unknown }).url))
+                  : null;
+              if (!approved) {
+                frame?.postMessage(
+                  {
+                    source: "hwp-host",
+                    id: call.id,
+                    ok: false,
+                    error: "only http and https links can be opened",
+                  },
+                  "*",
+                );
+                return;
+              }
+              if (desktopHost()) {
+                try {
+                  const url = await openExternalUrl(approved);
+                  frame?.postMessage(
+                    { source: "hwp-host", id: call.id, ok: true, result: { url, opened: true } },
+                    "*",
+                  );
+                } catch (error: unknown) {
+                  const text = error instanceof Error ? error.message : "could not open the link";
+                  frame?.postMessage({ source: "hwp-host", id: call.id, ok: false, error: text }, "*");
+                }
+                return;
+              }
+              frame?.postMessage(
+                { source: "hwp-host", id: call.id, ok: true, result: { url: approved } },
+                "*",
+              );
+              return;
+            }
             if (call.method === "setZoom") {
               const scale =
                 result && typeof result === "object" && "scale" in result
@@ -152,7 +189,7 @@ export function PluginView({
       ref={frameRef}
       className="frame"
       title={title}
-      sandbox="allow-scripts allow-forms allow-popups"
+      sandbox="allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox"
       src={`/plugins/${encodeURIComponent(pluginId)}`}
       onLoad={(event) => {
         const frame = event.currentTarget.contentWindow;

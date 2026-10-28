@@ -1,6 +1,6 @@
 {
   "identifier": "desktop-shell",
-  "description": "The local viewer may place browser panels. Remote sites loaded in child webviews are not listed here.",
+  "description": "The local viewer may place browser panels and open http or https links in the system browser. Remote sites loaded in child webviews are not listed here. The page cannot call the opener plugin directly.",
   "windows": ["main"],
   "remote": {
     "urls": [
@@ -15,6 +15,7 @@
     "allow-set-browser-select",
     "allow-set-display-zoom",
     "allow-set-desk-prefix",
-    "allow-set-frame-focus"
+    "allow-set-frame-focus",
+    "allow-open-external"
   ]
 }

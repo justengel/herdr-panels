@@ -4,6 +4,8 @@
 
 `herdr-panels update` stops a running viewer and starts the new program on the same address. An open desktop window is closed and opened again so it loads the new page. The viewer records its process id in `server.json`. The open desk reloads its plugin list, so `herdr-panels plugin install` shows up without restarting the viewer. `herdr-panels plugin uninstall <id>` removes that plugin, and the desk drops it from the menu. A terminal panel has a + on its Herdr tab strip that opens a new tab. The Herdr status dot is blue when an update is available.
 
+A link in a note, an HTML panel, or a plugin opens outside the desk. In the desktop window that is the system browser. In a browser tab it is a new tab of that browser. Only `http` and `https` are opened. `target="_blank"` and `window.open` do this without a plugin permission, because the person clicked a link. `links:open` enables `herdrPanels.openExternal(url)` for a button that chooses the address in script, and install asks before granting it. `examples/plugins/desk-sample` has an Open in browser button that calls it for `https://example.com`. `herdr-panels panel open` with an `http` or `https` address still adds a browser panel. That is a new panel, not a tab.
+
 ## 0.1.6 - 2026-10-28
 
 `herdr-panels` opens the desktop window and exits when the viewer is already running. Another program on that address is reported as not a herdr-panels viewer. The desktop child is waited on, so closing the window does not leave a zombie, and the viewer keeps running. `herdr-panels install-launcher` writes a desktop entry with `StartupWMClass=herdr-panels-desktop` and hicolor icons at 48, 128, and 256 pixels plus the SVG. The window icon is the 256 pixel image.

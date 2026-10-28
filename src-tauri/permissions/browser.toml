@@ -27,3 +27,8 @@ commands.allow = ["set_desk_prefix"]
 identifier = "allow-set-frame-focus"
 description = "Tell the desktop window when a plugin or HTML frame has the keyboard."
 commands.allow = ["set_frame_focus"]
+
+[[permission]]
+identifier = "allow-open-external"
+description = "Open an http or https URL in the system browser. Other schemes are refused by the command."
+commands.allow = ["open_external"]

@@ -13,6 +13,7 @@ pub const CONTROL: &str = "herdr:control";
 pub const FILES: &str = "files:read";
 pub const PANELS_READ: &str = "panels:read";
 pub const PANELS_CONTROL: &str = "panels:control";
+pub const LINKS: &str = "links:open";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PluginGrants {
@@ -28,7 +29,7 @@ pub fn parse_permissions(
     for name in permissions {
         if !known(&name) {
             bail!(
-                "unknown permission \"{name}\". use herdr:read, herdr:control, files:read, panels:read, or panels:control"
+                "unknown permission \"{name}\". use herdr:read, herdr:control, files:read, panels:read, panels:control, or links:open"
             );
         }
         if !kept.iter().any(|have: &String| have == &name) {
@@ -55,7 +56,10 @@ pub fn parse_permissions(
 }
 
 fn known(name: &str) -> bool {
-    matches!(name, READ | CONTROL | FILES | PANELS_READ | PANELS_CONTROL)
+    matches!(
+        name,
+        READ | CONTROL | FILES | PANELS_READ | PANELS_CONTROL | LINKS
+    )
 }
 
 pub fn grant_path(path: &str) -> anyhow::Result<PathBuf> {
@@ -92,7 +96,7 @@ fn posix_absolute(path: &str) -> bool {
 
 pub fn wants_bridge(permissions: &[String]) -> bool {
     permissions.iter().any(|name| {
-        name == READ || name == CONTROL || name == PANELS_READ || name == PANELS_CONTROL
+        name == READ || name == CONTROL || name == PANELS_READ || name == PANELS_CONTROL || name == LINKS
     })
 }
 
@@ -150,6 +154,9 @@ pub fn consent_text(id: &str, title: &str, permissions: &[String], files: &[Path
             }
             PANELS_CONTROL => lines.push(
                 "- Open, update, close, move, and resize panels on this desk. Fill the screen with one panel, or show the whole desk again. Set the desktop window zoom. This does not type into a Herdr pane.".into(),
+            ),
+            LINKS => lines.push(
+                "- Open http and https links in the browser. Other links are refused.".into(),
             ),
             _ => {}
         }
@@ -390,10 +397,17 @@ fn decide(permissions: &[String], method: &str, flag: Result<bool, String>) -> R
             | "showDesk"
             | "setZoom"
     );
-    if !control_method && !read_method && !panels_read && !panels_control {
+    let links = method == "openExternal";
+    if !control_method && !read_method && !panels_read && !panels_control && !links {
         return Err(format!("Unknown bridge method: {method}"));
     }
     let flag = flag?;
+    if links {
+        if !permissions.iter().any(|name| name == LINKS) {
+            return Err("This plugin does not have links:open".into());
+        }
+        return Ok(());
+    }
     if panels_read {
         if !permissions.iter().any(|name| name == PANELS_READ) {
             return Err("This plugin does not have panels:read".into());
@@ -764,6 +778,32 @@ mod tests {
         assert!(text.contains("Set the desktop window zoom"));
         let typing = consent_text("report", "Report", &[CONTROL.into()], &[]);
         assert!(typing.contains("scroll one"));
+    }
+
+    #[test]
+    fn opening_a_link_needs_links_open_and_nothing_else() {
+        let quiet = desk(false);
+        let links = vec![LINKS.to_string()];
+        let panels = vec![PANELS_CONTROL.to_string()];
+        assert!(wants_bridge(&links));
+        assert!(bridge_allowed(&links, &quiet, "checkin-report", "report", "openExternal").is_ok());
+        assert_eq!(
+            bridge_allowed(&panels, &quiet, "checkin-report", "report", "openExternal").unwrap_err(),
+            "This plugin does not have links:open"
+        );
+        assert_eq!(
+            bridge_allowed(&links, &quiet, "checkin-report", "report", "openPanel").unwrap_err(),
+            "This plugin does not have panels:control"
+        );
+        assert_eq!(
+            bridge_allowed(&links, &quiet, "checkin-report", "report", "listPanes").unwrap_err(),
+            "This plugin does not have herdr:read"
+        );
+        let text = consent_text("report", "Report", &links, &[]);
+        assert!(text.contains("Open http and https links in the browser"));
+        assert!(text.contains("Other links are refused"));
+        let grants = parse_permissions(vec![LINKS.into(), LINKS.into()], Vec::new()).unwrap();
+        assert_eq!(grants.permissions, vec![LINKS]);
     }
 
     #[test]

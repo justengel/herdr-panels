@@ -2,8 +2,10 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
-use tauri::webview::{PageLoadEvent, Webview};
+use herdr_panels::external_link::external_http_url;
+use tauri::webview::{NewWindowResponse, PageLoadEvent, Webview};
 use tauri::{AppHandle, LogicalPosition, LogicalSize, Manager, State};
+use tauri_plugin_opener::OpenerExt;
 use url::Url;
 
 const FRAME_SELECT: &str = include_str!("../../assets/frame-select.js");
@@ -142,10 +144,16 @@ async fn place_browser(
         .get_window("main")
         .ok_or_else(|| "the desktop window is not open".to_string())?;
     let boot = select_boot();
+    let opener = app.clone();
     let view = window
         .add_child(
             tauri::webview::WebviewBuilder::new(&label, tauri::WebviewUrl::External(parsed))
                 .initialization_script(boot)
+                .on_navigation(|url| browser_panel_link(url.as_str()) == LinkNavigation::Stay)
+                .on_new_window(move |url, _features| {
+                    respond_to_new_window(&opener, &url);
+                    NewWindowResponse::Deny
+                })
                 .on_page_load(|webview, payload| {
                     if payload.event() != PageLoadEvent::Finished {
                         return;
@@ -223,6 +231,11 @@ async fn close_browser(host: State<'_, BrowserHost>, label: String, generation: 
 }
 
 #[tauri::command]
+fn open_external(app: AppHandle, url: String) -> Result<String, String> {
+    open_in_browser(&app, &url)
+}
+
+#[tauri::command]
 fn set_frame_focus(focused: bool) {
     #[cfg(windows)]
     browser_wheel::set_frame_focus(focused);
@@ -263,8 +276,116 @@ async fn set_browser_select(host: State<'_, BrowserHost>, enabled: bool) -> Resu
     Ok(())
 }
 
+/// Where a navigation or a new window should go.
+#[derive(Debug, PartialEq, Eq)]
+enum LinkNavigation {
+    Stay,
+    External,
+    Refuse,
+}
+
+fn viewer_ports() -> Vec<u16> {
+    let mut ports = vec![4737];
+    let configured = std::env::var("HERDR_PANELS_URL")
+        .ok()
+        .and_then(|raw| Url::parse(raw.trim()).ok())
+        .and_then(|url| url.port());
+    if let Some(port) = configured {
+        if !ports.contains(&port) {
+            ports.push(port);
+        }
+    }
+    ports
+}
+
+fn is_viewer(url: &Url, ports: &[u16]) -> bool {
+    if url.scheme() != "http" {
+        return false;
+    }
+    let host = url.host_str().unwrap_or("");
+    if !matches!(host, "127.0.0.1" | "localhost" | "::1") {
+        return false;
+    }
+    ports.contains(&url.port().unwrap_or(80))
+}
+
+fn is_document_about(url: &Url) -> bool {
+    url.scheme() == "about" && matches!(url.path(), "blank" | "srcdoc")
+}
+
+fn main_window_link(raw: &str, ports: &[u16]) -> LinkNavigation {
+    let Ok(url) = Url::parse(raw) else {
+        return LinkNavigation::Refuse;
+    };
+    if is_viewer(&url, ports) || is_document_about(&url) {
+        return LinkNavigation::Stay;
+    }
+    if external_http_url(raw).is_ok() {
+        LinkNavigation::External
+    } else {
+        LinkNavigation::Refuse
+    }
+}
+
+fn browser_panel_link(raw: &str) -> LinkNavigation {
+    if external_http_url(raw).is_ok() {
+        LinkNavigation::Stay
+    } else {
+        LinkNavigation::Refuse
+    }
+}
+
+fn new_window_link(raw: &str) -> LinkNavigation {
+    if external_http_url(raw).is_ok() {
+        LinkNavigation::External
+    } else {
+        LinkNavigation::Refuse
+    }
+}
+
+fn open_in_browser(app: &AppHandle, raw: &str) -> Result<String, String> {
+    let target = external_http_url(raw)?;
+    app.opener()
+        .open_url(&target, None::<&str>)
+        .map_err(|err| err.to_string())?;
+    Ok(target)
+}
+
+fn respond_to_new_window(app: &AppHandle, url: &Url) {
+    match new_window_link(url.as_str()) {
+        LinkNavigation::External => {
+            if let Err(err) = open_in_browser(app, url.as_str()) {
+                eprintln!("could not open {url}: {err}");
+            }
+        }
+        LinkNavigation::Refuse if url.scheme() != "about" => {
+            eprintln!("refused to open {url}");
+        }
+        _ => {}
+    }
+}
+
+fn allow_main_navigation(app: &AppHandle, url: &Url) -> bool {
+    match main_window_link(url.as_str(), &viewer_ports()) {
+        LinkNavigation::Stay => true,
+        LinkNavigation::External => {
+            if let Err(err) = open_in_browser(app, url.as_str()) {
+                eprintln!("could not open {url}: {err}");
+            }
+            false
+        }
+        LinkNavigation::Refuse => {
+            if url.scheme() != "about" {
+                eprintln!("refused to open {url}");
+            }
+            false
+        }
+    }
+}
+
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_opener::init())
         .manage(host())
         .invoke_handler(tauri::generate_handler![
             place_browser,
@@ -272,16 +393,34 @@ pub fn run() {
             set_browser_select,
             set_display_zoom,
             set_desk_prefix,
-            set_frame_focus
+            set_frame_focus,
+            open_external
         ])
         .setup(|app| {
+            let Some(config) = app
+                .config()
+                .app
+                .windows
+                .iter()
+                .find(|window| window.label == "main")
+                .cloned()
+            else {
+                return Err("the desktop window is not configured".into());
+            };
+            let handle = app.handle().clone();
+            let navigate = handle.clone();
+            let window = tauri::WebviewWindowBuilder::from_config(app.handle(), &config)?
+                .on_new_window(move |url, _features| {
+                    respond_to_new_window(&handle, &url);
+                    NewWindowResponse::Deny
+                })
+                .on_navigation(move |url| allow_main_navigation(&navigate, url))
+                .build()?;
             if let Ok(raw) = std::env::var("HERDR_PANELS_URL") {
                 let raw = raw.trim().trim_end_matches('/').to_string();
                 if !raw.is_empty() && raw != VIEWER {
-                    if let Some(window) = app.get_webview_window("main") {
-                        if let Ok(target) = format!("{raw}/").parse() {
-                            let _ = window.navigate(target);
-                        }
+                    if let Ok(target) = format!("{raw}/").parse() {
+                        let _ = window.navigate(target);
                     }
                 }
             }
@@ -927,6 +1066,59 @@ mod tests {
         assert_eq!(css_from_client(200, 100, 96, 2.0), Some((100.0, 50.0)));
         assert_eq!(panel_id_from_browser("browser-panel-1"), Some("panel-1"));
         assert_eq!(panel_id_from_browser("main"), None);
+    }
+
+    #[test]
+    fn the_desktop_window_opens_http_links_outside_and_keeps_its_own_page() {
+        let ports = [4737];
+        assert_eq!(
+            main_window_link("http://127.0.0.1:4737/", &ports),
+            LinkNavigation::Stay
+        );
+        assert_eq!(
+            main_window_link("http://localhost:4737/plugins/checkin-report", &ports),
+            LinkNavigation::Stay
+        );
+        assert_eq!(main_window_link("about:blank", &ports), LinkNavigation::Stay);
+        assert_eq!(main_window_link("about:srcdoc", &ports), LinkNavigation::Stay);
+        assert_eq!(
+            main_window_link("https://example.com/docs", &ports),
+            LinkNavigation::External
+        );
+        assert_eq!(
+            main_window_link("http://127.0.0.1:8080/app", &ports),
+            LinkNavigation::External
+        );
+        assert_eq!(
+            main_window_link("file:///tmp/x", &ports),
+            LinkNavigation::Refuse
+        );
+        assert_eq!(
+            main_window_link("javascript:alert(1)", &ports),
+            LinkNavigation::Refuse
+        );
+        assert_eq!(
+            main_window_link("herdr://panel", &ports),
+            LinkNavigation::Refuse
+        );
+        assert_eq!(
+            browser_panel_link("https://example.com/docs"),
+            LinkNavigation::Stay
+        );
+        assert_eq!(browser_panel_link("file:///tmp/x"), LinkNavigation::Refuse);
+        assert_eq!(
+            browser_panel_link("javascript:alert(1)"),
+            LinkNavigation::Refuse
+        );
+        assert_eq!(
+            new_window_link("https://example.com/pr/1"),
+            LinkNavigation::External
+        );
+        assert_eq!(new_window_link("http://example.com"), LinkNavigation::External);
+        assert_eq!(new_window_link("about:blank"), LinkNavigation::Refuse);
+        assert_eq!(new_window_link("file:///tmp/x"), LinkNavigation::Refuse);
+        assert_eq!(new_window_link("javascript:alert(1)"), LinkNavigation::Refuse);
+        assert_eq!(new_window_link("herdr://panel"), LinkNavigation::Refuse);
     }
 
     #[test]

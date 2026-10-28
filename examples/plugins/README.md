@@ -88,7 +88,7 @@ The host posts this when the frame loads, and again when the address or the view
 parent.postMessage({ source: "hwp-plugin", type: "config", value: { line: 4 } }, "*");
 ```
 
-`value` has to be an object, and the JSON has to be 32 KB or smaller. An array is ignored. The page does not get the viewer token. It gets `herdrPanels` only when `permissions` includes `herdr:read`, `herdr:control`, `panels:read`, or `panels:control`.
+`value` has to be an object, and the JSON has to be 32 KB or smaller. An array is ignored. The page does not get the viewer token. It gets `herdrPanels` only when `permissions` includes `herdr:read`, `herdr:control`, `panels:read`, `panels:control`, or `links:open`.
 
 Install the Welcome sample, or copy another directory into the config folder:
 
@@ -111,8 +111,19 @@ The plugin page is served by the viewer and shown in a sandbox, so it cannot cal
 - `herdr:read` turns on `herdrPanels.listPanes`, `status`, and `readPane`.
 - `herdr:control` turns on `sendText`, `sendKeys`, `focusPane`, and `scrollPane`. The panel's own JSON still has to set `"control": true`. Declaring the permission is not enough, and the flag does nothing for a plugin that did not declare it. `scrollPane(paneId, direction, lines)` moves that pane. `direction` is `up` or `down`. `lines` is a whole number from 1 to 200. The pane has to be open in the viewer.
 - `panels:read` turns on `listPanels`. Each entry has `id`, `title`, `type`, and `summary`.
-- `panels:control` turns on `openPanel`, `updatePanel`, `closePanel`, `movePanel`, `resizePanel`, `fillPanel`, `showDesk`, and `setZoom`. These are the same desk edits as `herdr-panels panel`, plus the desktop window zoom. `fillPanel` fills the screen with one panel. `showDesk` shows the whole desk again. `setZoom(scale)` sets that zoom to the nearest browser step, from 25% to 500%. A browser tab ignores it. They do not type into a Herdr pane. `updatePanel` takes `kind`, `path`, `page`, `plugin`, and `pane` the way the panel command does, and it cannot set `"control": true`. `examples/plugins/desk-sample` opens `https://example.com`, then moves, resizes, fills the screen with, and closes that one panel. Show the desk brings the layout back. Zoom 125% and Zoom 100% set the desktop window. `listPanels` still includes every panel's title and summary, which can be a file path or a pane id. The sample does not draw that list.
+- `panels:control` turns on `openPanel`, `updatePanel`, `closePanel`, `movePanel`, `resizePanel`, `fillPanel`, `showDesk`, and `setZoom`. These are the same desk edits as `herdr-panels panel`, plus the desktop window zoom. `fillPanel` fills the screen with one panel. `showDesk` shows the whole desk again. `setZoom(scale)` sets that zoom to the nearest browser step, from 25% to 500%. A browser tab ignores it. They do not type into a Herdr pane. `updatePanel` takes `kind`, `path`, `page`, `plugin`, and `pane` the way the panel command does, and it cannot set `"control": true`. `examples/plugins/desk-sample` opens `https://example.com` as a browser panel, then moves, resizes, fills the screen with, and closes that one panel. Show the desk brings the layout back. Zoom 125% and Zoom 100% set the desktop window. Its Open in browser button calls `openExternal` for that same address, so the sample also declares `links:open`. `listPanels` still includes every panel's title and summary, which can be a file path or a pane id. The sample does not draw that list.
 - `files:read` turns on the file feed. It has to come with `files`, a list of absolute paths or directories, such as `"/home/engel/projects/checkin/state"`. A path outside that list is refused. `..` and relative paths are refused. The server resolves symlinks on every read.
+- `links:open` turns on `herdrPanels.openExternal(url)`. The address has to be `http` or `https`. In the desktop window that opens the system browser. In a browser tab it opens a new tab of that browser. `file`, `javascript`, and other schemes are refused. A link the person clicks does this without the permission. That includes `<a href="https://example.com" target="_blank">` and `window.open`. The permission is for a button that chooses the address in script, such as Open PR:
+
+```js
+await herdrPanels.openExternal("https://example.com/pull/1");
+```
+
+To put that address on the desk instead, declare `panels:control` and call `openPanel`. That adds a browser panel beside the current one. It does not add a tab. HTML has no `target` that means a panel. `target="_blank"` means a new browser tab, or the system browser when the desk is the desktop window.
+
+```js
+await herdrPanels.openPanel("https://example.com", { title: "Example" });
+```
 
 ```json
 {
