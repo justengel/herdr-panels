@@ -1783,6 +1783,27 @@ async fn a_visit_names_the_space_and_a_miss_is_an_error() {
         .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
     assert_eq!(body["error"], "arrange is row, column, or grid");
+
+    let (status, body) = desk
+        .call(
+            "POST",
+            "/api/agent/visit",
+            Some(json!({"panelIds": ["google", "Notes"], "sizes": [2, 1]})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["sizes"][0].as_f64(), Some(2.0));
+    assert_eq!(body["sizes"][1].as_f64(), Some(1.0));
+
+    let (status, body) = desk
+        .call(
+            "POST",
+            "/api/agent/visit",
+            Some(json!({"panelIds": ["google", "Notes"], "sizes": [2]})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["error"], "size has one weight per panel");
 }
 
 fn query_url(url: &str) -> String {

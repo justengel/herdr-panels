@@ -129,6 +129,15 @@ enum PanelCommand {
         /// row, column, or grid. Two panels sit side by side; three or more use a grid
         #[arg(long)]
         arrange: Option<String>,
+        /// One weight per panel, for a row or a column. 2,1 makes the first panel twice the second
+        #[arg(long, value_name = "WEIGHTS")]
+        size: Option<String>,
+        /// One weight per column, for a grid
+        #[arg(long, value_name = "WEIGHTS")]
+        columns: Option<String>,
+        /// One weight per row, for a grid
+        #[arg(long, value_name = "WEIGHTS")]
+        rows: Option<String>,
     },
     /// Open a file, directory, or http URL in a panel
     Open {
@@ -418,8 +427,17 @@ async fn panel_command(base: &str, token: &str, command: PanelCommand) -> anyhow
             println!("{response}");
             Ok(())
         }
-        PanelCommand::Visit { panels, arrange } => {
+        PanelCommand::Visit {
+            panels,
+            arrange,
+            size,
+            columns,
+            rows,
+        } => {
             if panels.is_empty() {
+                if size.is_some() || columns.is_some() || rows.is_some() || arrange.is_some() {
+                    anyhow::bail!("name the panels in the visit");
+                }
                 let body = call(base, token, "GET", "/api/agent/spaces", None).await?;
                 let value: Value = serde_json::from_str(&body)?;
                 for space in value
@@ -455,6 +473,18 @@ async fn panel_command(base: &str, token: &str, command: PanelCommand) -> anyhow
             let mut body = json!({ "panelIds": panels });
             if let Some(arrange) = arrange {
                 body["arrange"] = json!(arrange);
+            }
+            let sizes = weight_list(size)?;
+            let columns = weight_list(columns)?;
+            let rows = weight_list(rows)?;
+            if !sizes.is_empty() {
+                body["sizes"] = json!(sizes);
+            }
+            if !columns.is_empty() {
+                body["columns"] = json!(columns);
+            }
+            if !rows.is_empty() {
+                body["rows"] = json!(rows);
             }
             let response = call(base, token, "POST", "/api/agent/visit", Some(body)).await?;
             println!("{response}");
@@ -520,6 +550,27 @@ fn panel_config(
         other => bail!("unknown panel kind {other}"),
     };
     Ok(Some(panel))
+}
+
+fn weight_list(raw: Option<String>) -> anyhow::Result<Vec<f64>> {
+    let Some(raw) = raw else {
+        return Ok(Vec::new());
+    };
+    let mut weights = Vec::new();
+    for part in raw.split(',') {
+        let part = part.trim();
+        let Ok(value) = part.parse::<f64>() else {
+            bail!("a weight must be a positive number");
+        };
+        if !value.is_finite() || value <= 0.0 {
+            bail!("a weight must be a positive number");
+        }
+        weights.push(value);
+    }
+    if weights.is_empty() {
+        bail!("a weight must be a positive number");
+    }
+    Ok(weights)
 }
 
 pub fn record_server(config_dir: &std::path::Path, url: &str) -> anyhow::Result<()> {

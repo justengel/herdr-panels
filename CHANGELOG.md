@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+A visit can give each panel a share of the screen. `--size 2,1` makes the first panel twice the second in a row or a column. A grid takes `--columns` and `--rows`, one weight per track. Running that command again resizes the visit already open and leaves what the panels are showing. Dragging a divider changes only the visit.
+
 `herdr-panels panel visit google Notes Agents Files` shows those panels together over the current desk. Two sit side by side. Three or more use a grid. `--arrange row`, `column`, or `grid` chooses the placement. One Back leaves all of them. A missing, repeated, or ambiguous name rejects the visit and names that panel. At most six panels. Repeating the command opens the same check again.
 
 `herdr-panels panel visit <name>` shows a panel from any space over the one you are on. The command replies with that panel and its space. A missing name is an error, not a success. `herdr-panels panel visit` with no name lists the panels on every space. `panel list` still shows only the focused space. A plugin with `panels:control` can call `visitPanel`. The bar names the panel and the space it came from, and Back or Escape leaves the visit. That space's layout is left as it was. Fill screen is unchanged: it still magnifies a panel that already belongs to this space. The desktop window embeds the built page, so this overlay needs `npm run build` in `web/` before the desktop program is rebuilt. A page from before that build ignores the visit.

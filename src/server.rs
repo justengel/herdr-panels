@@ -1177,10 +1177,20 @@ async fn plugin_bridge(
             } else {
                 Some(arrange)
             };
-            crate::agent::visit_desk(&state, &queries, arrange.as_deref())
-                .await
-                .map(Json)
-                .map_err(agent_error)
+            let sizes = param_numbers(&body.params, "sizes")?;
+            let columns = param_numbers(&body.params, "columns")?;
+            let rows = param_numbers(&body.params, "rows")?;
+            crate::agent::visit_desk(
+                &state,
+                &queries,
+                arrange.as_deref(),
+                &sizes,
+                &columns,
+                &rows,
+            )
+            .await
+            .map(Json)
+            .map_err(agent_error)
         }
         "fillPanel" => {
             let panel_id = param_str(&body.params, "panelId");
@@ -1250,6 +1260,21 @@ fn param_str(params: &Value, key: &str) -> String {
         .and_then(Value::as_str)
         .unwrap_or("")
         .to_string()
+}
+
+fn param_numbers(params: &Value, key: &str) -> Result<Vec<f64>, ApiError> {
+    match params.get(key) {
+        None | Some(Value::Null) => Ok(Vec::new()),
+        Some(Value::Array(items)) => items
+            .iter()
+            .map(|item| {
+                item.as_f64()
+                    .filter(|value| value.is_finite())
+                    .ok_or_else(|| ApiError::bad("a weight must be a positive number"))
+            })
+            .collect(),
+        Some(_) => Err(ApiError::bad("a weight must be a positive number")),
+    }
 }
 
 fn param_strings(params: &Value, key: &str) -> Vec<String> {

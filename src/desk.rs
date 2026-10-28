@@ -294,6 +294,92 @@ pub fn choose_arrange(count: usize, requested: Option<&str>) -> Result<VisitArra
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct VisitWeights {
+    pub sizes: Vec<f64>,
+    pub columns: Vec<f64>,
+    pub rows: Vec<f64>,
+}
+
+/// Weights are shares. A row or column has one per panel. A grid has one per column and one per row.
+pub fn visit_weights(
+    count: usize,
+    arrange: VisitArrange,
+    sizes: &[f64],
+    columns: &[f64],
+    rows: &[f64],
+) -> Result<VisitWeights, &'static str> {
+    if count <= 1 {
+        if !sizes.is_empty() || !columns.is_empty() || !rows.is_empty() {
+            return Err("a single panel has no size");
+        }
+        return Ok(VisitWeights {
+            sizes: Vec::new(),
+            columns: Vec::new(),
+            rows: Vec::new(),
+        });
+    }
+    match arrange {
+        VisitArrange::Row | VisitArrange::Column => {
+            if !columns.is_empty() || !rows.is_empty() {
+                return Err("columns and rows are for a grid");
+            }
+            let sizes = if sizes.is_empty() {
+                vec![1.0; count]
+            } else if sizes.len() != count {
+                return Err("size has one weight per panel");
+            } else {
+                sizes.to_vec()
+            };
+            positive(&sizes)?;
+            Ok(VisitWeights {
+                sizes,
+                columns: Vec::new(),
+                rows: Vec::new(),
+            })
+        }
+        VisitArrange::Grid => {
+            if !sizes.is_empty() {
+                return Err("size is for a row or a column");
+            }
+            let column_count = if count <= 4 { 2 } else { 3 };
+            let row_count = count.div_ceil(column_count);
+            let columns = if columns.is_empty() {
+                vec![1.0; column_count]
+            } else if columns.len() != column_count {
+                return Err("columns has one weight per column");
+            } else {
+                columns.to_vec()
+            };
+            let rows = if rows.is_empty() {
+                vec![1.0; row_count]
+            } else if rows.len() != row_count {
+                return Err("rows has one weight per row");
+            } else {
+                rows.to_vec()
+            };
+            positive(&columns)?;
+            positive(&rows)?;
+            Ok(VisitWeights {
+                sizes: Vec::new(),
+                columns,
+                rows,
+            })
+        }
+    }
+}
+
+fn positive(values: &[f64]) -> Result<(), &'static str> {
+    if values
+        .iter()
+        .any(|value| !value.is_finite() || *value <= 0.0)
+    {
+        Err("a weight must be a positive number")
+    } else {
+        Ok(())
+    }
+}
+
 #[derive(Debug)]
 pub struct VisitTarget {
     pub panel_id: String,
@@ -727,6 +813,38 @@ mod tests {
         assert_eq!(
             choose_arrange(2, Some("diagonal")).unwrap_err(),
             "arrange is row, column, or grid"
+        );
+    }
+
+    #[test]
+    fn a_visit_size_is_one_weight_per_panel() {
+        let row = visit_weights(3, VisitArrange::Row, &[2.0, 1.0, 1.0], &[], &[]).unwrap();
+        assert_eq!(row.sizes, vec![2.0, 1.0, 1.0]);
+        assert!(row.columns.is_empty());
+        let even = visit_weights(2, VisitArrange::Row, &[], &[], &[]).unwrap();
+        assert_eq!(even.sizes, vec![1.0, 1.0]);
+        let grid = visit_weights(4, VisitArrange::Grid, &[], &[2.0, 1.0], &[1.0, 3.0]).unwrap();
+        assert_eq!(grid.columns, vec![2.0, 1.0]);
+        assert_eq!(grid.rows, vec![1.0, 3.0]);
+        assert_eq!(
+            visit_weights(2, VisitArrange::Row, &[2.0], &[], &[]).unwrap_err(),
+            "size has one weight per panel"
+        );
+        assert_eq!(
+            visit_weights(4, VisitArrange::Grid, &[2.0, 1.0], &[], &[]).unwrap_err(),
+            "size is for a row or a column"
+        );
+        assert_eq!(
+            visit_weights(2, VisitArrange::Row, &[0.0, 1.0], &[], &[]).unwrap_err(),
+            "a weight must be a positive number"
+        );
+        assert_eq!(
+            visit_weights(1, VisitArrange::Row, &[2.0], &[], &[]).unwrap_err(),
+            "a single panel has no size"
+        );
+        assert_eq!(
+            visit_weights(2, VisitArrange::Column, &[], &[2.0], &[]).unwrap_err(),
+            "columns and rows are for a grid"
         );
     }
 }

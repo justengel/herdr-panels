@@ -192,7 +192,7 @@ POST /api/agent/resize    {"panelId","ratio"}
 POST /api/agent/update    {"panelId","title?","panel?"}
 POST /api/agent/move      {"panelId","target","place":"swap"|"right"|"below"}
 POST /api/agent/zoom      {"panelId":null}
-POST /api/agent/visit     {"panelId"} or {"panelIds":["..."],"arrange?":"row"|"column"|"grid"}
+POST /api/agent/visit     {"panelId"} or {"panelIds","arrange?","sizes?","columns?","rows?"}
 GET  /api/agent/spaces
 GET  /api/agent/panels/{id}?selector=h2&text=workspace
 POST /api/agent/panels/{id}/write   {"text":"echo hi","keys":["enter"]}
@@ -200,7 +200,7 @@ POST /api/agent/panels/{id}/select  {"selector":"h2","text":"workspace"}
 POST /api/agent/say       {"to":"chat"|"*","from":"planner","text":"look at the note"}
 ```
 
-`panelId`, `{id}`, and `say.to` accept a panel id or its unique name, compared without case. `*` still means every chat. `visit` shows one panel, or several, from any space over the one that is open. `panelIds` lists them. Two sit side by side. Three or more use a grid. `arrange` is `row`, `column`, or `grid`. At most six. The reply has `arrange` and `panels`, and a single panel also keeps `panelId`, `title`, `spaceId`, and `space` at the top. A name that is not on any space is `panel was not found`, and the error names that panel when the visit lists more than one. Two different panels with the same name are refused. A repeated panel is refused. One failure opens nothing. `spaces` lists every saved space, which is how to find a title that `workspace` does not show. `workspace` stays the focused space. `viewer` is true when a page is connected. The overlay appears in that page. A page built before the visit ignores the message. [The skill](skills/herdr-panels/SKILL.md) is the procedure an agent should follow for these calls.
+`panelId`, `{id}`, and `say.to` accept a panel id or its unique name, compared without case. `*` still means every chat. `visit` shows one panel, or several, from any space over the one that is open. `panelIds` lists them. Two sit side by side. Three or more use a grid. `arrange` is `row`, `column`, or `grid`. `sizes` is one positive weight per panel for a row or a column, so `2,1` makes the first panel twice the second. A grid uses `columns` and `rows`, one weight per track. The same call again resizes the visit already on screen and leaves what those panels are showing. At most six. The reply has `arrange` and `panels`, and a single panel also keeps `panelId`, `title`, `spaceId`, and `space` at the top. A name that is not on any space is `panel was not found`, and the error names that panel when the visit lists more than one. Two different panels with the same name are refused. A repeated panel is refused. One failure opens nothing. `spaces` lists every saved space, which is how to find a title that `workspace` does not show. `workspace` stays the focused space. `viewer` is true when a page is connected. The overlay appears in that page. A page built before the visit ignores the message. [The skill](skills/herdr-panels/SKILL.md) is the procedure an agent should follow for these calls.
 
 `ratio` is that panel's share of the nearest divider, from 0.12 to 0.88. `herdr: true` also calls Herdr `pane.split` and binds the new terminal. `move` swaps two panels or places one to the right of or below the other. `say` appends to a chat panel; `to` is a panel id, a unique panel name, or `*` for every chat. A chat linked to a pane also types the message into that pane. `write` types into a terminal panel. `select` outlines the match in the open page. Browser HTML that is loopback or served from `/content` can be fetched directly; a same-origin frame, or a custom HTML panel, also returns the live elements and computed style. The proxy still refuses anything that is not loopback.
 
@@ -269,6 +269,8 @@ herdr-panels panel visit
 herdr-panels panel visit google
 herdr-panels panel visit google Notes Agents Files
 herdr-panels panel visit google Notes --arrange column
+herdr-panels panel visit google Notes --size 2,1
+herdr-panels panel visit google Notes Agents Files --columns 2,1 --rows 1,2
 herdr-panels plugin list
 herdr-panels plugin install --example
 herdr-panels plugin install <directory>

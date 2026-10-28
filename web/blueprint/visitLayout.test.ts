@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { openVisit, type VisitSpace } from "../src/borrowPanel";
+import { openVisit, reuseVisit, type VisitSpace } from "../src/borrowPanel";
 import type { LayoutNode } from "../src/types";
 
 function space(id: string, label: string, root: LayoutNode, current = false): VisitSpace {
@@ -64,6 +64,58 @@ describe("a visit of several panels", () => {
     if (!("node" in stacked) || stacked.node.type !== "split") throw new Error("expected a column");
     expect(stacked.arrange).toBe("column");
     expect(stacked.node.direction).toBe("column");
+  });
+
+  it("gives a row the weights it was given and keeps a panel already on the visit", () => {
+    const opened = openVisit(
+      spaces,
+      [{ panelId: "google" }, { panelId: "Notes" }, { panelId: "Agents" }],
+      "row",
+      { sizes: [2, 1, 1] },
+    );
+    if (!("node" in opened) || opened.node.type !== "split") throw new Error("expected a row");
+    expect(opened.sizes).toEqual([2, 1, 1]);
+    expect(opened.node.ratio).toBeCloseTo(0.5);
+    if (opened.node.second.type !== "split") throw new Error("expected the rest to split");
+    expect(opened.node.second.ratio).toBeCloseTo(0.5);
+
+    const live = structuredClone(opened.node);
+    if (live.type === "split" && live.first.type === "panel") live.first.title = "changed";
+    const again = openVisit(
+      spaces,
+      [{ panelId: "google" }, { panelId: "Notes" }, { panelId: "Agents" }],
+      "row",
+      { sizes: [3, 1, 1] },
+    );
+    if (!("node" in again)) throw new Error(again.error);
+    const kept = reuseVisit(live, again);
+    if (kept.type !== "split" || kept.first.type !== "panel") throw new Error("expected the same row");
+    expect(kept.ratio).toBeCloseTo(0.6);
+    expect(kept.first.title).toBe("changed");
+  });
+
+  it("weights a grid by column and row and refuses a size that does not fit", () => {
+    const grid = openVisit(
+      spaces,
+      [{ panelId: "google" }, { panelId: "Notes" }, { panelId: "Agents" }, { panelId: "Files" }],
+      "grid",
+      { columns: [2, 1], rows: [1, 3] },
+    );
+    if (!("node" in grid) || grid.node.type !== "grid") throw new Error("expected a grid");
+    expect(grid.node.columns).toEqual([2, 1]);
+    expect(grid.node.rows).toEqual([1, 3]);
+    expect(openVisit(spaces, [{ panelId: "google" }, { panelId: "Notes" }], "row", { sizes: [2] })).toEqual({
+      error: "size has one weight per panel",
+    });
+    expect(openVisit(spaces, [{ panelId: "google" }, { panelId: "Notes" }], "grid", { sizes: [2, 1] })).toEqual({
+      error: "size is for a row or a column",
+    });
+    expect(openVisit(spaces, [{ panelId: "google" }, { panelId: "Notes" }], "row", { sizes: [0, 1] })).toEqual({
+      error: "a weight must be a positive number",
+    });
+    expect(openVisit(spaces, [{ panelId: "google" }], undefined, { sizes: [2] })).toEqual({
+      error: "a single panel has no size",
+    });
   });
 
   it("fails the whole visit when one panel is missing or repeated", () => {

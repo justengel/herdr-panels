@@ -32,7 +32,7 @@ import { TopBar } from "./components/TopBar";
 import { DesignBar } from "./components/DesignBar";
 import { ElementSelect } from "./components/ElementSelect";
 import { DeskKeyboard, KeyedPanelProvider } from "./deskKeyboard";
-import { openVisit, type OpenedVisit } from "./borrowPanel";
+import { openVisit, reuseVisit, type OpenedVisit, type VisitWeights } from "./borrowPanel";
 import { layoutForFocusedPane, layoutForPaneFocus, panelForPane, panelRefs } from "./deskKeys";
 import { installDisplayZoom } from "./displayZoom";
 import { pushClosedPanel, takeClosedPanel } from "./panelHistory";
@@ -499,11 +499,12 @@ export function App() {
     (
       panels: { panelId: string; spaceId?: string }[],
       arrange?: string,
+      weights?: VisitWeights,
     ) => OpenedVisit | { error: string }
   >(() => ({
     error: "The desk could not show that panel.",
   }));
-  visitRef.current = (panels, arrange) => {
+  visitRef.current = (panels, arrange, weights) => {
     const current = spaceRef.current;
     const stored = readSpaceLayouts();
     const workspaces = runtimeRef.current?.workspaces ?? [];
@@ -536,9 +537,15 @@ export function App() {
       if (listed.has(key) || (current && spaceLayoutKey(current) === key)) continue;
       spaces.push({ id: key, label: key, root, current: false });
     }
-    const opened = openVisit(spaces, panels, arrange);
+    const opened = openVisit(spaces, panels, arrange, weights);
     if ("error" in opened) return opened;
-    setVisit({ ...opened, openedOn: current ?? "" });
+    const openedOn = current ?? "";
+    setVisit((showing) => ({
+      ...opened,
+      node:
+        showing && showing.arrange === opened.arrange ? reuseVisit(showing.node, opened) : opened.node,
+      openedOn: showing?.openedOn ?? openedOn,
+    }));
     return opened;
   };
 
@@ -547,9 +554,10 @@ export function App() {
       __hwpVisitPanel?: (
         panels: { panelId: string; spaceId?: string }[],
         arrange?: string,
+        weights?: VisitWeights,
       ) => OpenedVisit | { error: string };
     };
-    page.__hwpVisitPanel = (panels, arrange) => visitRef.current(panels, arrange);
+    page.__hwpVisitPanel = (panels, arrange, weights) => visitRef.current(panels, arrange, weights);
     return () => {
       delete page.__hwpVisitPanel;
     };
@@ -584,6 +592,9 @@ export function App() {
         spaceId?: string;
         arrange?: string;
         panels?: { panelId?: string; spaceId?: string }[];
+        sizes?: number[];
+        columns?: number[];
+        rows?: number[];
         selector?: string;
         text?: string;
         requestId?: string;
@@ -626,7 +637,11 @@ export function App() {
         const panels = listed.length
           ? listed
           : [{ panelId: msg.panelId ?? "", spaceId: msg.spaceId }];
-        const result = visitRef.current(panels, msg.arrange);
+        const result = visitRef.current(panels, msg.arrange, {
+          sizes: msg.sizes,
+          columns: msg.columns,
+          rows: msg.rows,
+        });
         if ("error" in result) notify(result.error);
         return;
       }
@@ -1021,8 +1036,16 @@ export function App() {
                 layoutId={layout.id}
                 pending={{}}
                 onConsume={() => undefined}
-                onRatio={() => undefined}
-                onTracks={() => undefined}
+                onRatio={(path, ratio) =>
+                  setVisit((current) =>
+                    current ? { ...current, node: setSplitRatio(current.node, path, ratio) } : current,
+                  )
+                }
+                onTracks={(path, columns, rows) =>
+                  setVisit((current) =>
+                    current ? { ...current, node: setGridTracks(current.node, path, columns, rows) } : current,
+                  )
+                }
                 onPanel={(id, panel, retitle) =>
                   setVisit((current) =>
                     current

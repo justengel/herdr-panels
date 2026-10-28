@@ -155,6 +155,9 @@ export function PluginView({
                       panelId?: unknown;
                       spaceId?: unknown;
                       arrange?: unknown;
+                      sizes?: unknown;
+                      columns?: unknown;
+                      rows?: unknown;
                       panels?: { panelId?: unknown; spaceId?: unknown }[];
                     })
                   : {};
@@ -174,7 +177,11 @@ export function PluginView({
                     },
                   ];
               const arrange = typeof record.arrange === "string" ? record.arrange : undefined;
-              const shown = requestVisit(panels, arrange);
+              const shown = requestVisit(panels, arrange, {
+                sizes: numberList(record.sizes),
+                columns: numberList(record.columns),
+                rows: numberList(record.rows),
+              });
               if ("error" in shown) {
                 frame?.postMessage(
                   { source: "hwp-host", id: call.id, ok: false, error: shown.error },
@@ -256,6 +263,12 @@ export function PluginView({
       }}
     />
   );
+}
+
+function numberList(value: unknown): number[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const weights = value.filter((item): item is number => typeof item === "number" && Number.isFinite(item));
+  return weights.length === value.length ? weights : undefined;
 }
 
 function deliver(

@@ -58,6 +58,15 @@ export interface OpenedVisit {
   arrange: VisitArrange;
   spaceLabel: string;
   panelIds: string[];
+  sizes: number[];
+  columns: number[];
+  rows: number[];
+}
+
+export interface VisitWeights {
+  sizes?: number[];
+  columns?: number[];
+  rows?: number[];
 }
 
 export function chooseArrange(count: number, requested?: string): VisitArrange | { error: string } {
@@ -68,11 +77,47 @@ export function chooseArrange(count: number, requested?: string): VisitArrange |
   return { error: "arrange is row, column, or grid" };
 }
 
+/** Shares of a row, a column, or a grid. Omitted weights are even. */
+export function visitWeights(
+  count: number,
+  arrange: VisitArrange,
+  requested?: VisitWeights,
+): { sizes: number[]; columns: number[]; rows: number[] } | { error: string } {
+  const sizes = requested?.sizes ?? [];
+  const columns = requested?.columns ?? [];
+  const rows = requested?.rows ?? [];
+  if (count <= 1) {
+    if (sizes.length || columns.length || rows.length) return { error: "a single panel has no size" };
+    return { sizes: [], columns: [], rows: [] };
+  }
+  if (arrange === "grid") {
+    if (sizes.length) return { error: "size is for a row or a column" };
+    const columnCount = count <= 4 ? 2 : 3;
+    const rowCount = Math.ceil(count / columnCount);
+    const nextColumns = columns.length ? columns : Array.from({ length: columnCount }, () => 1);
+    const nextRows = rows.length ? rows : Array.from({ length: rowCount }, () => 1);
+    if (nextColumns.length !== columnCount) return { error: "columns has one weight per column" };
+    if (nextRows.length !== rowCount) return { error: "rows has one weight per row" };
+    if (!positive(nextColumns) || !positive(nextRows)) return { error: "a weight must be a positive number" };
+    return { sizes: [], columns: nextColumns, rows: nextRows };
+  }
+  if (columns.length || rows.length) return { error: "columns and rows are for a grid" };
+  const nextSizes = sizes.length ? sizes : Array.from({ length: count }, () => 1);
+  if (nextSizes.length !== count) return { error: "size has one weight per panel" };
+  if (!positive(nextSizes)) return { error: "a weight must be a positive number" };
+  return { sizes: nextSizes, columns: [], rows: [] };
+}
+
+function positive(values: number[]): boolean {
+  return values.every((value) => Number.isFinite(value) && value > 0);
+}
+
 /** Resolve every panel, then place them. One failure returns only the error. */
 export function openVisit(
   spaces: readonly VisitSpace[],
   requests: { panelId: string; spaceId?: string }[],
   requested?: string,
+  weights?: VisitWeights,
 ): OpenedVisit | { error: string } {
   if (requests.length === 0) return { error: "panel was not found" };
   const arrange = chooseArrange(requests.length, requested);
@@ -97,13 +142,16 @@ export function openVisit(
   }
   const origins: Record<string, string> = {};
   for (const visit of visits) origins[visit.panelId] = visit.spaceLabel;
+  const weighted = visitWeights(visits.length, arrange, weights);
+  if ("error" in weighted) return weighted;
   const node =
     visits.length === 1
       ? visits[0].node
       : arrange === "grid"
-        ? gridOf(visits)
+        ? gridOf(visits, weighted.columns, weighted.rows)
         : stack(
             visits.map((visit) => visit.node),
+            weighted.sizes,
             arrange,
           );
   return {
@@ -113,38 +161,66 @@ export function openVisit(
     arrange,
     spaceLabel: visits[0].spaceLabel,
     panelIds: visits.map((visit) => visit.panelId),
+    sizes: weighted.sizes,
+    columns: weighted.columns,
+    rows: weighted.rows,
   };
 }
 
-function stack(nodes: LayoutNode[], direction: "row" | "column"): LayoutNode {
+/** Keep panels that are already on this visit, and apply a new share to each divider. */
+export function reuseVisit(current: LayoutNode, opened: OpenedVisit): LayoutNode {
+  const ids = listPanels(current)
+    .map((panel) => panel.id)
+    .join("\0");
+  if (ids !== opened.panelIds.join("\0")) return opened.node;
+  const framed = copyFrame(current, opened.node);
+  return framed === current ? opened.node : framed;
+}
+
+function copyFrame(current: LayoutNode, next: LayoutNode): LayoutNode {
+  if (current.type === "split" && next.type === "split" && current.direction === next.direction) {
+    return {
+      ...current,
+      ratio: next.ratio,
+      first: copyFrame(current.first, next.first),
+      second: copyFrame(current.second, next.second),
+    };
+  }
+  if (current.type === "grid" && next.type === "grid") {
+    return { ...current, columns: [...next.columns], rows: [...next.rows] };
+  }
+  return current;
+}
+
+function stack(nodes: LayoutNode[], weights: number[], direction: "row" | "column"): LayoutNode {
   if (nodes.length === 1) return nodes[0];
+  const total = weights.reduce((sum, weight) => sum + weight, 0);
   return {
     type: "split",
     direction,
-    ratio: 1 / nodes.length,
+    ratio: weights[0] / total,
     first: nodes[0],
-    second: stack(nodes.slice(1), direction),
+    second: stack(nodes.slice(1), weights.slice(1), direction),
   };
 }
 
-function gridOf(visits: PanelVisit[]): LayoutNode {
-  const columns = visits.length <= 4 ? 2 : 3;
-  const rows = Math.ceil(visits.length / columns);
+function gridOf(visits: PanelVisit[], columns: number[], rows: number[]): LayoutNode {
+  const columnCount = columns.length;
   return {
     type: "grid",
-    columns: Array.from({ length: columns }, () => 1),
-    rows: Array.from({ length: rows }, () => 1),
+    columns,
+    rows,
     cells: visits.map((visit, index) => {
-      const column = index % columns;
-      const row = Math.floor(index / columns);
-      const remainder = visits.length % columns;
+      const column = index % columnCount;
+      const row = Math.floor(index / columnCount);
+      const remainder = visits.length % columnCount;
       const last = index === visits.length - 1;
       return {
         id: visit.panelId,
         title: visit.title,
         column,
         row,
-        colSpan: last && remainder !== 0 ? columns - column : 1,
+        colSpan: last && remainder !== 0 ? columnCount - column : 1,
         rowSpan: 1,
         node: visit.node,
       };
@@ -166,6 +242,7 @@ function toVisit(hit: Hit): PanelVisit {
 export function requestVisit(
   panels: { panelId: string; spaceId?: string }[],
   arrange?: string,
+  weights?: VisitWeights,
 ): OpenedVisit | { error: string } {
   if (typeof window === "undefined" || panels.length === 0) return { error: "panel was not found" };
   const hook = (
@@ -173,11 +250,12 @@ export function requestVisit(
       __hwpVisitPanel?: (
         panels: { panelId: string; spaceId?: string }[],
         arrange?: string,
+        weights?: VisitWeights,
       ) => OpenedVisit | { error: string };
     }
   ).__hwpVisitPanel;
   if (!hook) return { error: "The desk could not show that panel." };
-  return hook(panels, arrange);
+  return hook(panels, arrange, weights);
 }
 
 export function requestPanelVisit(query: string, spaceId?: string): { panelId: string } | { error: string } {

@@ -621,6 +621,12 @@ struct VisitBody {
     panel_ids: Vec<String>,
     #[serde(default)]
     arrange: Option<String>,
+    #[serde(default)]
+    sizes: Vec<f64>,
+    #[serde(default)]
+    columns: Vec<f64>,
+    #[serde(default)]
+    rows: Vec<f64>,
 }
 
 async fn visit(
@@ -632,9 +638,16 @@ async fn visit(
     } else {
         body.panel_ids
     };
-    visit_desk(&state, &queries, body.arrange.as_deref())
-        .await
-        .map(Json)
+    visit_desk(
+        &state,
+        &queries,
+        body.arrange.as_deref(),
+        &body.sizes,
+        &body.columns,
+        &body.rows,
+    )
+    .await
+    .map(Json)
 }
 
 async fn spaces(State(state): State<AppState>) -> Result<Json<Value>, AgentError> {
@@ -706,6 +719,9 @@ pub(crate) async fn visit_desk(
     state: &AppState,
     queries: &[String],
     arrange: Option<&str>,
+    sizes: &[f64],
+    columns: &[f64],
+    rows: &[f64],
 ) -> Result<Value, AgentError> {
     if queries.is_empty()
         || queries
@@ -715,6 +731,8 @@ pub(crate) async fn visit_desk(
         return Err(AgentError::bad("panelId is required"));
     }
     let arrange = desk::choose_arrange(queries.len(), arrange).map_err(AgentError::bad)?;
+    let weights = desk::visit_weights(queries.len(), arrange, sizes, columns, rows)
+        .map_err(AgentError::bad)?;
     let owned = visit_spaces(state).await?;
     let views: Vec<desk::VisitSpace<'_>> = owned
         .iter()
@@ -743,13 +761,21 @@ pub(crate) async fn visit_desk(
         })
         .collect();
     let first = &found[0];
-    state.agent.publish(&json!({
+    let mut message = json!({
         "type": "visit",
         "arrange": arrange.as_str(),
         "panelId": first.panel_id,
         "spaceId": first.space_id,
         "panels": panels,
-    }));
+    });
+    if !weights.sizes.is_empty() {
+        message["sizes"] = json!(weights.sizes);
+    }
+    if !weights.columns.is_empty() {
+        message["columns"] = json!(weights.columns);
+        message["rows"] = json!(weights.rows);
+    }
+    state.agent.publish(&message);
     let named: Vec<Value> = found
         .iter()
         .map(|visit| {
@@ -761,7 +787,7 @@ pub(crate) async fn visit_desk(
             })
         })
         .collect();
-    Ok(json!({
+    let mut reply = json!({
         "ok": true,
         "viewer": state.agent.viewers() > 0,
         "arrange": arrange.as_str(),
@@ -770,7 +796,15 @@ pub(crate) async fn visit_desk(
         "title": first.title,
         "spaceId": first.space_id,
         "space": first.space_label,
-    }))
+    });
+    if !weights.sizes.is_empty() {
+        reply["sizes"] = json!(weights.sizes);
+    }
+    if !weights.columns.is_empty() {
+        reply["columns"] = json!(weights.columns);
+        reply["rows"] = json!(weights.rows);
+    }
+    Ok(reply)
 }
 
 pub(crate) async fn list_spaces(state: &AppState) -> Result<Value, AgentError> {
