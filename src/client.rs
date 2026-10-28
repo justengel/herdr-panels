@@ -13,7 +13,7 @@ use crate::plugins;
     name = "herdr-panels",
     version,
     about = "Herdr viewer with installable HTML panels",
-    long_about = "herdr-panels starts the viewer and opens the desktop window when that program is installed, or a browser tab otherwise.\nherdr-panels server runs the viewer without opening a window.\nherdr-panels desktop opens the desktop window.\nherdr-panels panel, plugin, and token talk to that viewer or its config."
+    long_about = "herdr-panels starts the viewer and opens the desktop window when that program is installed, or a browser tab otherwise.\nherdr-panels server runs the viewer without opening a window.\nherdr-panels desktop opens the desktop window.\nherdr-panels update downloads the latest GitHub release and replaces this program. When the desktop window is beside it, that program is replaced from the same release.\nherdr-panels panel, plugin, and token talk to that viewer or its config."
 )]
 struct ClientCli {
     /// Viewer URL. Defaults to the address recorded by the running server.

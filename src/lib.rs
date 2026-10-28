@@ -29,6 +29,7 @@ pub mod plugin_files;
 pub mod plugin_grant;
 pub mod plugins;
 pub mod proxy;
+pub mod self_update;
 pub mod server;
 pub mod session;
 pub mod session_proc;

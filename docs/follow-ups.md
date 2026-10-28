@@ -2,6 +2,11 @@
 
 Recorded 2026-10-27 from the review before the first public release. Closed items are here so this list stays the place to come back to.
 
+## Done in 0.1.3
+
+- `herdr-panels update` downloads the latest GitHub release and replaces the program. When the desktop window is in the same folder, that program is replaced from the same release.
+- The release includes an Intel Mac archive, built on GitHub's free `macos-15-intel` runner. The archives stay unsigned.
+
 ## Done in 0.1.2
 
 - The release archive includes `herdr-panels-desktop`. Running `herdr-panels` from that folder opens the window. Linux needs `libwebkit2gtk-4.1-0`.
@@ -30,7 +35,7 @@ The archives are unsigned on purpose. Windows SmartScreen and macOS Gatekeeper w
 
 ### Machines the release does not cover
 
-There is no Intel Mac archive and no Linux arm64 archive. The macOS archive is Apple Silicon because that is the current GitHub macOS runner. The Linux archive is built on the current Ubuntu runner. It links that system's OpenSSL 3 and Wayland client libraries. Ubuntu 22.04 and 24.04 desktops have both. Ubuntu 20.04 does not have OpenSSL 3.
+There is no Linux arm64 archive. The Linux archive is built on the current Ubuntu runner. It links that system's OpenSSL 3 and Wayland client libraries. Ubuntu 22.04 and 24.04 desktops have both. Ubuntu 20.04 does not have OpenSSL 3.
 
 ### Herdr action lifetime
 

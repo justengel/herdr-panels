@@ -15,6 +15,7 @@ Prebuilt programs are on the [latest release](https://github.com/justengel/herdr
 | Linux x64 | `linux-x64.tar.gz` |
 | Windows x64 | `windows-x64.zip` |
 | macOS Apple Silicon | `macos-arm64.tar.gz` |
+| macOS Intel | `macos-x64.tar.gz` |
 
 The Linux build is for an Ubuntu 22.04 or newer desktop. It uses the system OpenSSL, Wayland client, and WebKitGTK libraries. Install the web view once if it is not already there:
 
@@ -24,7 +25,11 @@ sudo apt install libwebkit2gtk-4.1-0
 
 Unpack the archive and run `./herdr-panels` from that folder. The desktop program is beside it, so this opens the window and listens on http://127.0.0.1:4737. The first start writes the viewer token and the example layouts into the config directory. A browser tab at that address shows the same desk. `herdr-panels server` starts the server and leaves the window closed.
 
-On Windows, unpack the zip and run `herdr-panels.exe`. The window uses the WebView2 already on Windows 10 and 11. On macOS, unpack the archive and run `./herdr-panels`. The window uses the system web view. Those systems may ask before an unsigned program runs.
+`herdr-panels update` downloads the latest GitHub release for this system and replaces `herdr-panels`. When `herdr-panels-desktop` is in the same folder, that program is replaced from the same release. Restart the viewer afterward. `herdr-panels upgrade` is the same command. A copy that is still in a cargo target directory is left unchanged.
+
+On Windows, unpack the zip and run `herdr-panels.exe`. The window uses the WebView2 already on Windows 10 and 11.
+
+On macOS, unpack the archive and run `./herdr-panels`. The window uses the system web view. The archive is unsigned, so the first launch can be blocked. Right-click the program and choose Open, or in that folder run `xattr -cr .` once. An Apple developer account is not required. `herdr-panels update` clears that download mark on the programs it replaces.
 
 With `herdr-panels` on `PATH`, Herdr can start that same program. The manifest in this repository does not compile anything:
 

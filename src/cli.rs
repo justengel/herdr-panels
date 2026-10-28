@@ -41,6 +41,7 @@ pub async fn execute() -> anyhow::Result<()> {
     let mut raw: Vec<std::ffi::OsString> = std::env::args_os().collect();
     let first = raw.get(1).and_then(|arg| arg.to_str());
     match first {
+        Some("update") | Some("upgrade") => crate::self_update::execute().await,
         Some("panel") | Some("plugin") | Some("status") | Some("token") | Some("help")
         | Some("--help") | Some("-h") | Some("--version") | Some("-V") => {
             crate::client::execute().await
