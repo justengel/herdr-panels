@@ -36,6 +36,9 @@ interface Props {
   pinLabel?: string;
   onPin?: () => void;
   onClick?: (event: React.MouseEvent<HTMLElement>) => void;
+  /** A borrowed panel. Back dismisses the visit and does not close the original. */
+  onBack?: () => void;
+  fromSpace?: string;
   children: ReactNode;
 }
 
@@ -80,6 +83,8 @@ export function PanelChrome({
   pinLabel = "Pin…",
   onPin,
   onClick,
+  onBack,
+  fromSpace,
   children,
 }: Props) {
   const panelActions = usePanelActions();
@@ -316,6 +321,30 @@ export function PanelChrome({
     : menu
       ? { left: menu.left, right: menu.right, top: menu.top }
       : undefined;
+
+  if (onBack) {
+    return (
+      <section className={classes} data-panel-id={panelId} data-kind={kind} tabIndex={-1}>
+        <header className="panel-header borrow-header">
+          <div className="panel-title">
+            <strong>{title}</strong>
+            {fromSpace ? <span className="subtitle">from {fromSpace}</span> : null}
+          </div>
+          <button
+            type="button"
+            className="borrow-back"
+            onClick={(event) => {
+              event.stopPropagation();
+              onBack();
+            }}
+          >
+            Back
+          </button>
+        </header>
+        <div className="panel-body">{children}</div>
+      </section>
+    );
+  }
 
   return (
     <section

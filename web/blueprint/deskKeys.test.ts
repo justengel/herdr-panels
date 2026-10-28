@@ -14,6 +14,8 @@ import {
   isDeskKey,
   joinBindings,
   layoutForFocusedPane,
+  layoutForPaneFocus,
+  revealPaneOnDesk,
   arrowMovesList,
   listDelta,
   matchDesk,
@@ -227,6 +229,93 @@ describe("which panel shows a pane", () => {
       type: "herdr",
       paneId: "w1:p2",
     });
+  });
+
+  it("keeps the terminal that already shows the pane", () => {
+    const root: LayoutNode = {
+      type: "panel",
+      id: "term",
+      title: "Terminal",
+      panel: { type: "herdr", paneId: "wC:p1" },
+    };
+    expect(revealPaneOnDesk(root, "wC:p1", null)).toEqual({ root, panelId: "term" });
+  });
+
+  it("rebinds the focused terminal and leaves the other pane alone", () => {
+    const root: LayoutNode = {
+      type: "split",
+      direction: "row",
+      ratio: 0.5,
+      first: { type: "panel", id: "a", title: "Terminal", panel: { type: "herdr", paneId: "w1:p1" } },
+      second: { type: "panel", id: "b", title: "Other", panel: { type: "herdr", paneId: "w1:p2" } },
+    };
+    const revealed = revealPaneOnDesk(root, "w2:p4", "b");
+    expect(revealed.panelId).toBe("b");
+    expect(revealed.root).toMatchObject({
+      first: { panel: { type: "herdr", paneId: "w1:p1" } },
+      second: { panel: { type: "herdr", paneId: "w2:p4" } },
+    });
+  });
+
+  it("opens a terminal when the space has none", () => {
+    const root: LayoutNode = {
+      type: "panel",
+      id: "report",
+      title: "Check-in",
+      panel: { type: "plugin", plugin: "checkin-report", control: true },
+    };
+    const revealed = revealPaneOnDesk(root, "wC:p1", null);
+    expect(revealed.panelId).not.toBe("report");
+    expect(revealed.root).toMatchObject({
+      type: "split",
+      direction: "row",
+      first: { id: "report" },
+      second: { id: revealed.panelId, panel: { type: "herdr", paneId: "wC:p1" } },
+    });
+  });
+
+  it("activates a background tab that already shows the pane", () => {
+    const root: LayoutNode = {
+      type: "panel",
+      id: "stack",
+      title: "Stack",
+      panel: {
+        type: "tabs",
+        edge: "top",
+        active: "note",
+        tabs: [
+          { id: "note", title: "Note", panel: { type: "markdown", path: "n.md" } },
+          { id: "term", title: "Terminal", panel: { type: "herdr", paneId: "wC:p1" } },
+        ],
+      },
+    };
+    const revealed = revealPaneOnDesk(root, "wC:p1", null);
+    expect(revealed.panelId).toBe("stack");
+    expect(revealed.root).toMatchObject({
+      panel: { type: "tabs", active: "term" },
+    });
+  });
+
+  it("switches to the pane's workspace layout and binds that pane", () => {
+    const here: LayoutNode = {
+      type: "panel",
+      id: "report",
+      title: "Check-in",
+      panel: { type: "plugin", plugin: "checkin-report", control: true },
+    };
+    const there: LayoutNode = {
+      type: "panel",
+      id: "term",
+      title: "Terminal",
+      panel: { type: "herdr", paneId: "w1:p1" },
+    };
+    const next = layoutForPaneFocus("w1", here, "w2", there, "w2:p4", "report");
+    expect(next).toMatchObject({
+      workspaceId: "w2",
+      panelId: "term",
+      root: { id: "term", panel: { type: "herdr", paneId: "w2:p4" } },
+    });
+    expect(here).toMatchObject({ panel: { type: "plugin", plugin: "checkin-report" } });
   });
 });
 

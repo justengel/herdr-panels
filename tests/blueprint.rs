@@ -1268,6 +1268,13 @@ async fn a_plugin_bridge_is_refused_without_permission_or_the_panel_flag() {
             .contains("cannot type into a pane"),
         "{body}"
     );
+    assert!(
+        body["error"]
+            .as_str()
+            .unwrap_or("")
+            .contains("Turn on \"control\" in the design bar"),
+        "{body}"
+    );
 
     write_plugin_panel(&desk.root, true);
     let (status, page) = desk
@@ -1678,6 +1685,65 @@ fn write_plugin_panel(root: &std::path::Path, control: bool) {
         serde_json::to_vec_pretty(&document).unwrap(),
     )
     .unwrap();
+}
+
+#[tokio::test]
+async fn a_visit_names_the_space_and_a_miss_is_an_error() {
+    let desk = desk().await;
+    std::fs::create_dir_all(desk.root.join("desks")).unwrap();
+    std::fs::write(
+        desk.root.join("desks").join("default.json"),
+        serde_json::to_vec_pretty(&json!({
+            "revision": 1,
+            "pins": [],
+            "spaces": {
+                "wj": {
+                    "type": "panel",
+                    "id": "terminal",
+                    "title": "Terminal",
+                    "panel": {"type": "herdr", "paneId": null}
+                },
+                "wh": {
+                    "type": "panel",
+                    "id": "panel-1",
+                    "title": "google",
+                    "panel": {"type": "iframe", "url": "https://google.com", "proxy": false}
+                }
+            }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let (status, body) = desk
+        .call(
+            "POST",
+            "/api/agent/visit",
+            Some(json!({"panelId": "google"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["panelId"], "panel-1");
+    assert_eq!(body["title"], "google");
+    assert_eq!(body["spaceId"], "wh");
+    assert_eq!(body["ok"], true);
+
+    let (status, body) = desk
+        .call(
+            "POST",
+            "/api/agent/visit",
+            Some(json!({"panelId": "missing"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    assert_eq!(body["error"], "panel was not found");
+
+    let (status, body) = desk.call("GET", "/api/agent/spaces", None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let spaces = body["spaces"].as_array().unwrap();
+    let google = spaces.iter().find(|space| space["id"] == "wh").unwrap();
+    assert_eq!(google["panels"][0]["title"], "google");
+    assert_eq!(google["panels"][0]["summary"], "https://google.com");
 }
 
 fn query_url(url: &str) -> String {

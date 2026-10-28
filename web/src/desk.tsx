@@ -4,6 +4,7 @@ import type { TabView } from "./types";
 export interface PluginInfo {
   id: string;
   title: string;
+  permissions?: string[];
   addressBar?: { show: boolean; modify: boolean; replace?: boolean };
   views?: { id: string; title: string; opens: Array<"file" | "markdown" | "html" | "directory" | "url"> }[];
 }

@@ -2,6 +2,8 @@ import { useEffect, useRef } from "react";
 import { api, wsUrl } from "../../api";
 import { desktopHost } from "../../desktopBrowser";
 import { openableHttpUrl, openExternalUrl } from "../../externalLink";
+import { requestPanelVisit } from "../../borrowPanel";
+import { requestPaneReveal } from "../../deskKeys";
 import { readPluginAddressMessage, readPluginBridgeCall, readPluginFileCommand } from "../../pluginAddress";
 import type { PluginOpen } from "../../viewMenu";
 
@@ -145,6 +147,43 @@ export function PluginView({
                 return;
               }
               window.dispatchEvent(new CustomEvent("herdr-zoom-set", { detail: scale }));
+            }
+            if (call.method === "visitPanel") {
+              const record =
+                result && typeof result === "object"
+                  ? (result as { panelId?: unknown; spaceId?: unknown })
+                  : {};
+              const requested =
+                typeof record.panelId === "string" ? record.panelId : String(call.params.panelId ?? "");
+              const spaceId = typeof record.spaceId === "string" ? record.spaceId : undefined;
+              const shown = requestPanelVisit(requested, spaceId);
+              if ("error" in shown) {
+                frame?.postMessage(
+                  { source: "hwp-host", id: call.id, ok: false, error: shown.error },
+                  "*",
+                );
+                return;
+              }
+            }
+            if (call.method === "focusPane") {
+              const record =
+                result && typeof result === "object"
+                  ? (result as { paneId?: unknown; workspaceId?: unknown })
+                  : {};
+              const paneId = typeof record.paneId === "string" ? record.paneId : String(call.params.paneId ?? "");
+              const workspaceId = typeof record.workspaceId === "string" ? record.workspaceId : "";
+              if (!requestPaneReveal(paneId, workspaceId)) {
+                frame?.postMessage(
+                  {
+                    source: "hwp-host",
+                    id: call.id,
+                    ok: false,
+                    error: "The desk could not show that pane.",
+                  },
+                  "*",
+                );
+                return;
+              }
             }
             frame?.postMessage({ source: "hwp-host", id: call.id, ok: true, result }, "*");
           })

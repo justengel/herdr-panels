@@ -1,3 +1,5 @@
+import { controlHintSeen, controlHintVisible, rememberControlEnabled } from "../controlHint";
+import type { PluginInfo } from "../desk";
 import type { Attachment, LayoutDocument, PaneView, PanelConfig, WorkspaceView } from "../types";
 import { findPanel, listPanels, panelKind, panelSummary } from "../layoutEdit";
 
@@ -5,6 +7,7 @@ interface Props {
   layout: LayoutDocument;
   panes: PaneView[];
   workspaces: WorkspaceView[];
+  plugins: PluginInfo[];
   selectedId: string | null;
   element: { panelId: string; tag: string; text: string } | null;
   zoomedId: string | null;
@@ -64,7 +67,14 @@ export function DesignBar(props: Props) {
               <option value="file">File</option>
             </select>
           </label>
-          <ConfigFields panelId={panel.id} panel={shownConfig(panel.panel)} panes={props.panes} workspaces={props.workspaces} onConfig={props.onConfig} />
+          <ConfigFields
+            panelId={panel.id}
+            panel={shownConfig(panel.panel)}
+            panes={props.panes}
+            workspaces={props.workspaces}
+            plugins={props.plugins}
+            onConfig={props.onConfig}
+          />
           <div className="design-actions">
             <button type="button" onClick={() => props.onSplit(panel.id, "row")}>
               Split right
@@ -124,12 +134,14 @@ function ConfigFields({
   panel,
   panes,
   workspaces,
+  plugins,
   onConfig,
 }: {
   panelId: string;
   panel: PanelConfig;
   panes: PaneView[];
   workspaces: WorkspaceView[];
+  plugins: PluginInfo[];
   onConfig: (id: string, panel: PanelConfig) => void;
 }) {
   if (panel.type === "herdr" || panel.type === "chat") {
@@ -163,10 +175,22 @@ function ConfigFields({
             type="checkbox"
             aria-label="Allow typing into Herdr"
             checked={Boolean(panel.control)}
-            onChange={(event) => onConfig(panelId, { ...panel, control: event.target.checked })}
+            onChange={(event) => {
+              if (event.target.checked) rememberControlEnabled(panel.plugin);
+              onConfig(panelId, { ...panel, control: event.target.checked });
+            }}
           />
           Allow this panel to type into Herdr
         </label>
+        {controlHintVisible(
+          plugins.find((item) => item.id === panel.plugin)?.permissions,
+          Boolean(panel.control),
+          controlHintSeen(panel.plugin),
+        ) ? (
+          <p className="design-hint">
+            This plugin can focus a pane and type into Herdr. Turn on control. This note stays until you do.
+          </p>
+        ) : null}
       </>
     );
   }

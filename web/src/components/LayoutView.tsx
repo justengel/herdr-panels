@@ -48,6 +48,8 @@ interface Props {
   onCloseTab: (id: string, tabId: string) => void;
   onFocusPane: (paneId: string) => void;
   onOpenSpace?: (workspaceId: string) => void;
+  onBack?: () => void;
+  fromSpace?: string;
   openMenuId?: string | null;
   openMenuToken?: number;
   root?: LayoutNode;
@@ -68,6 +70,8 @@ export function LayoutView({
   onCloseTab,
   onFocusPane,
   onOpenSpace,
+  onBack,
+  fromSpace,
   openMenuId = null,
   openMenuToken = 0,
   root,
@@ -121,6 +125,8 @@ export function LayoutView({
       title={node.title}
       panel={node.panel}
       pending={pending[node.id] ?? []}
+      onBack={onBack}
+      fromSpace={fromSpace}
     />
   );
 }
@@ -240,11 +246,13 @@ function PanelView(props: {
   onCloseTab: (id: string, tabId: string) => void;
   onFocusPane: (paneId: string) => void;
   onOpenSpace?: (workspaceId: string) => void;
+  onBack?: () => void;
+  fromSpace?: string;
   openMenuId?: string | null;
   openMenuToken?: number;
   root?: LayoutNode;
 }) {
-  const { id, title, panel, panes, workspaces, onPanel, onCloseTab, openMenuId, openMenuToken, root } =
+  const { id, title, panel, panes, workspaces, onPanel, onCloseTab, openMenuId, openMenuToken, root, onBack, fromSpace } =
     props;
   const design = useDesign();
   const desk = useDesk();
@@ -290,7 +298,9 @@ function PanelView(props: {
     onMenuDismiss: blank && canClose ? () => panelActions.close(id) : undefined,
     allowPin,
     pinLabel: pinned ? "Pinned…" : "Pin…",
-    onPin: allowPin ? () => setPinning(true) : undefined,
+    onPin: allowPin && !onBack ? () => setPinning(true) : undefined,
+    onBack,
+    fromSpace,
     onAddressBar:
       addressBar === undefined
         ? undefined

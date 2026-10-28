@@ -32,7 +32,8 @@ import { TopBar } from "./components/TopBar";
 import { DesignBar } from "./components/DesignBar";
 import { ElementSelect } from "./components/ElementSelect";
 import { DeskKeyboard, KeyedPanelProvider } from "./deskKeyboard";
-import { layoutForFocusedPane, panelForPane, panelRefs } from "./deskKeys";
+import { findPanelVisit, type PanelVisit } from "./borrowPanel";
+import { layoutForFocusedPane, layoutForPaneFocus, panelForPane, panelRefs } from "./deskKeys";
 import { installDisplayZoom } from "./displayZoom";
 import { pushClosedPanel, takeClosedPanel } from "./panelHistory";
 import { HostProvider } from "./host";
@@ -59,8 +60,10 @@ import {
   markWorkspaceFocused,
   preferPendingPane,
   preferPendingSpace,
+  readSpaceLayouts,
   saveSpaceLayout,
   seedSpaceLayout,
+  spaceLayoutKey,
   writeSpaceMap,
 } from "./spaceLayout";
 
@@ -98,6 +101,7 @@ export function App() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [element, setElement] = useState<{ panelId: string; tag: string; text: string } | null>(null);
   const [zoomedId, setZoomedId] = useState<string | null>(null);
+  const [visit, setVisit] = useState<(PanelVisit & { openedOn: string }) | null>(null);
   const [chatTarget, setChatTarget] = useState("");
   const [splitHerdr, setSplitHerdr] = useState(true);
   const [inbox, setInbox] = useState<Record<string, Attachment[]>>({});
@@ -364,6 +368,45 @@ export function App() {
     return refs[0]?.id ?? null;
   }, [showSpaceLayout]);
 
+  const revealRef = useRef<(paneId: string, workspaceId: string) => string | null>(() => null);
+  revealRef.current = (paneId, workspaceId) => {
+    const doc = layoutRef.current;
+    if (!doc || !paneId) return null;
+    const current = spaceRef.current;
+    const targetRoot = workspaceId ? layoutForSpace(workspaceId, seedSpaceLayout()) : doc.root;
+    const next = layoutForPaneFocus(current, doc.root, workspaceId, targetRoot, paneId, keyIdRef.current);
+    const switched = Boolean(next.workspaceId) && next.workspaceId !== current;
+    if (switched) {
+      if (current) saveSpaceLayout(current, doc.root);
+      pendingSpaceRef.current = next.workspaceId;
+      spaceRef.current = next.workspaceId;
+      writeSpaceMap(next.workspaceId);
+    }
+    if (switched || next.root !== doc.root) {
+      showSpaceLayout(doc, next.root);
+      if (next.workspaceId) saveSpaceLayout(next.workspaceId, next.root);
+    }
+    pendingPaneRef.current = paneId;
+    const snapshot = runtimeRef.current;
+    if (snapshot && next.workspaceId) setRuntime(markWorkspaceFocused(snapshot, next.workspaceId, paneId));
+    setZoomedId((zoomed) => (zoomed && zoomed !== next.panelId ? null : zoomed));
+    setKeyId(next.panelId);
+    const page = window as Window & { __hwpFocusPanel?: (id: string) => void };
+    page.__hwpFocusPanel?.(next.panelId);
+    void api.focus({ paneId }).catch(() => undefined);
+    return next.panelId;
+  };
+
+  useEffect(() => {
+    const page = window as Window & {
+      __hwpRevealPane?: (paneId: string, workspaceId: string) => string | null;
+    };
+    page.__hwpRevealPane = (paneId, workspaceId) => revealRef.current(paneId, workspaceId);
+    return () => {
+      delete page.__hwpRevealPane;
+    };
+  }, []);
+
   useEffect(() => {
     if (!layout) return;
     const ids = listPanels(layout.root).map((panel) => panel.id);
@@ -452,6 +495,76 @@ export function App() {
     setInbox((current) => ({ ...current, [panelId]: [] }));
   }, []);
 
+  const visitRef = useRef<(query: string, spaceId?: string) => { panelId: string } | { error: string }>(() => ({
+    error: "The desk could not show that panel.",
+  }));
+  visitRef.current = (query, spaceId) => {
+    const current = spaceRef.current;
+    const stored = readSpaceLayouts();
+    const workspaces = runtimeRef.current?.workspaces ?? [];
+    const listed = new Set<string>();
+    const spaces: { id: string; label: string; root: LayoutNode; current: boolean }[] = [];
+    for (const workspace of workspaces) {
+      const key = spaceLayoutKey(workspace.workspaceId);
+      listed.add(key);
+      const root =
+        current === workspace.workspaceId && layoutRef.current
+          ? layoutRef.current.root
+          : (stored[key] ?? null);
+      if (!root) continue;
+      spaces.push({
+        id: workspace.workspaceId,
+        label: workspace.label || workspace.workspaceId,
+        root,
+        current: current === workspace.workspaceId,
+      });
+    }
+    if (current && layoutRef.current && !spaces.some((space) => space.current)) {
+      spaces.push({
+        id: current,
+        label: workspaces.find((workspace) => workspace.workspaceId === current)?.label || current,
+        root: layoutRef.current.root,
+        current: true,
+      });
+    }
+    for (const [key, root] of Object.entries(stored)) {
+      if (listed.has(key) || (current && spaceLayoutKey(current) === key)) continue;
+      spaces.push({ id: key, label: key, root, current: false });
+    }
+    const found = findPanelVisit(spaces, query, spaceId);
+    if ("error" in found) return found;
+    setVisit({ ...found.visit, openedOn: current ?? "" });
+    return { panelId: found.visit.panelId };
+  };
+
+  useEffect(() => {
+    const page = window as Window & {
+      __hwpVisitPanel?: (query: string, spaceId?: string) => { panelId: string } | { error: string };
+    };
+    page.__hwpVisitPanel = (query, spaceId) => visitRef.current(query, spaceId);
+    return () => {
+      delete page.__hwpVisitPanel;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!visit) return;
+    if ((spaceRef.current ?? "") === visit.openedOn) return;
+    setVisit(null);
+  }, [layout, focusedSpaceId, visit]);
+
+  useEffect(() => {
+    if (!visit) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopPropagation();
+      setVisit(null);
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [visit]);
+
   useEffect(() => {
     const socket = new WebSocket(wsUrl("/ws/agent"));
     socket.onmessage = (event) => {
@@ -460,6 +573,7 @@ export function App() {
         layout?: LayoutDocument;
         desk?: DeskFile;
         panelId?: string | null;
+        spaceId?: string;
         selector?: string;
         text?: string;
         requestId?: string;
@@ -493,6 +607,11 @@ export function App() {
       }
       if (msg.type === "zoom") {
         setZoomedId(msg.panelId ?? null);
+        return;
+      }
+      if (msg.type === "visit" && msg.panelId) {
+        const result = visitRef.current(msg.panelId, msg.spaceId);
+        if ("error" in result) notify(result.error);
         return;
       }
       if (msg.type === "select" && msg.panelId) {
@@ -868,6 +987,33 @@ export function App() {
             onOpenSpace={switchSpace}
             onFocusPane={focusAgentPane}
           />
+          {visit ? (
+            <div className="borrow-visit">
+              <LayoutView
+                node={visit.node}
+                root={visit.node}
+                panes={runtime?.panes ?? []}
+                workspaces={runtime?.workspaces ?? []}
+                agents={runtime?.agents ?? []}
+                layoutId={layout.id}
+                pending={{}}
+                onConsume={() => undefined}
+                onRatio={() => undefined}
+                onTracks={() => undefined}
+                onPanel={(_id, panel) =>
+                  setVisit((current) =>
+                    current && current.node.type === "panel"
+                      ? { ...current, node: { ...current.node, panel } }
+                      : current,
+                  )
+                }
+                onCloseTab={() => undefined}
+                onFocusPane={focusAgentPane}
+                onBack={() => setVisit(null)}
+                fromSpace={visit.spaceLabel}
+              />
+            </div>
+          ) : null}
           </DeskProvider>
         </main>
         {selecting ? (
@@ -885,6 +1031,7 @@ export function App() {
             layout={layout}
             panes={runtime?.panes ?? []}
             workspaces={runtime?.workspaces ?? []}
+            plugins={plugins}
             selectedId={selectedId}
             element={element}
             zoomedId={zoomedId}

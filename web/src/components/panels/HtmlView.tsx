@@ -5,6 +5,7 @@ import bridge from "../../../../assets/panel-bridge.js?raw";
 import { api, contentUrl } from "../../api";
 import { desktopHost } from "../../desktopBrowser";
 import { openableHttpUrl, openExternalUrl } from "../../externalLink";
+import { CONTROL_OFF_MESSAGE } from "../../controlHint";
 import { isHerdrPaneId } from "../../paneId";
 
 interface Props {
@@ -138,7 +139,7 @@ async function fulfill(message: BridgeMessage, control: boolean): Promise<unknow
       return api.runtime();
     case "sendText":
     case "sendKeys":
-      if (!control) throw new Error("This panel cannot type into a pane");
+      if (!control) throw new Error(CONTROL_OFF_MESSAGE);
       if (message.method === "sendText") {
         await api.sendInput({
           paneId: String(params.paneId ?? ""),
@@ -161,6 +162,7 @@ async function fulfill(message: BridgeMessage, control: boolean): Promise<unknow
     case "resizePanel":
     case "fillPanel":
     case "showDesk":
+    case "visitPanel":
       throw new Error("This panel cannot change the desk");
     case "setZoom":
       throw new Error("This panel cannot change the window zoom");
@@ -176,7 +178,7 @@ async function fulfill(message: BridgeMessage, control: boolean): Promise<unknow
     case "scrollPane":
       throw new Error("This panel cannot scroll a pane");
     case "focusPane": {
-      if (!control) throw new Error("This panel cannot type into a pane");
+      if (!control) throw new Error(CONTROL_OFF_MESSAGE);
       const paneId = String(params.paneId ?? "");
       if (!isHerdrPaneId(paneId)) throw new Error("invalid pane id");
       const runtime = await api.runtime();

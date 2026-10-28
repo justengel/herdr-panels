@@ -60,6 +60,7 @@
     resizePanel: (panelId, ratio) => call("resizePanel", { panelId, ratio }),
     fillPanel: (panelId) => call("fillPanel", { panelId }),
     showDesk: () => call("showDesk"),
+    visitPanel: (panelId) => call("visitPanel", { panelId }),
     setZoom: (scale) => call("setZoom", { scale }),
     scrollPane: (paneId, direction, lines) => call("scrollPane", { paneId, direction, lines }),
     openExternal: (url) => {

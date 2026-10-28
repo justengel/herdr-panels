@@ -15,6 +15,11 @@ pub const PANELS_READ: &str = "panels:read";
 pub const PANELS_CONTROL: &str = "panels:control";
 pub const LINKS: &str = "links:open";
 
+/// Reply when the plugin declared control but this panel's layout has it off.
+/// Keep in step with `CONTROL_OFF_MESSAGE` in `web/src/controlHint.ts`.
+pub const CONTROL_OFF: &str =
+    "This panel cannot type into a pane. Turn on \"control\" in the design bar.";
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PluginGrants {
     pub permissions: Vec<String>,
@@ -96,7 +101,11 @@ fn posix_absolute(path: &str) -> bool {
 
 pub fn wants_bridge(permissions: &[String]) -> bool {
     permissions.iter().any(|name| {
-        name == READ || name == CONTROL || name == PANELS_READ || name == PANELS_CONTROL || name == LINKS
+        name == READ
+            || name == CONTROL
+            || name == PANELS_READ
+            || name == PANELS_CONTROL
+            || name == LINKS
     })
 }
 
@@ -153,7 +162,7 @@ pub fn consent_text(id: &str, title: &str, permissions: &[String], files: &[Path
                 lines.push("- List the panels on this desk.".into());
             }
             PANELS_CONTROL => lines.push(
-                "- Open, update, close, move, and resize panels on this desk. Fill the screen with one panel, or show the whole desk again. Set the desktop window zoom. This does not type into a Herdr pane.".into(),
+                "- Open, update, close, move, and resize panels on this desk. Fill the screen with one panel, show the whole desk again, or visit a panel from another space without changing that space. Set the desktop window zoom. This does not type into a Herdr pane.".into(),
             ),
             LINKS => lines.push(
                 "- Open http and https links in the browser. Other links are refused.".into(),
@@ -395,6 +404,7 @@ fn decide(permissions: &[String], method: &str, flag: Result<bool, String>) -> R
             | "resizePanel"
             | "fillPanel"
             | "showDesk"
+            | "visitPanel"
             | "setZoom"
     );
     let links = method == "openExternal";
@@ -425,7 +435,7 @@ fn decide(permissions: &[String], method: &str, flag: Result<bool, String>) -> R
             return Err("This plugin does not have herdr:control".into());
         }
         if !flag {
-            return Err("This panel cannot type into a pane".into());
+            return Err(CONTROL_OFF.into());
         }
         return Ok(());
     }
@@ -677,7 +687,10 @@ mod tests {
             assert_eq!(err, "This plugin does not have herdr:control");
             let err =
                 bridge_allowed(&control, &quiet, "checkin-report", "report", method).unwrap_err();
-            assert_eq!(err, "This panel cannot type into a pane");
+            assert_eq!(
+                err,
+                "This panel cannot type into a pane. Turn on \"control\" in the design bar."
+            );
             assert!(bridge_allowed(&control, &live, "checkin-report", "report", method).is_ok());
         }
         assert_eq!(
@@ -723,6 +736,7 @@ mod tests {
             "resizePanel",
             "fillPanel",
             "showDesk",
+            "visitPanel",
             "setZoom",
         ] {
             assert_eq!(
@@ -788,7 +802,8 @@ mod tests {
         assert!(wants_bridge(&links));
         assert!(bridge_allowed(&links, &quiet, "checkin-report", "report", "openExternal").is_ok());
         assert_eq!(
-            bridge_allowed(&panels, &quiet, "checkin-report", "report", "openExternal").unwrap_err(),
+            bridge_allowed(&panels, &quiet, "checkin-report", "report", "openExternal")
+                .unwrap_err(),
             "This plugin does not have links:open"
         );
         assert_eq!(
@@ -829,7 +844,7 @@ mod tests {
         assert_eq!(
             bridge_allowed_in_layout(&control, &quiet, "checkin-report", "report", "focusPane")
                 .unwrap_err(),
-            "This panel cannot type into a pane"
+            "This panel cannot type into a pane. Turn on \"control\" in the design bar."
         );
     }
 

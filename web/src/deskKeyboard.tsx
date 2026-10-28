@@ -77,6 +77,7 @@ export function DeskKeyboard({
   hostRef.current = host;
   const focusRef = useRef(focusedId);
   focusRef.current = focusedId;
+  const aimRef = useRef<(id: string) => void>(() => {});
   const panelActions = usePanelActions();
   const enterRef = useRef<string | null>(null);
   const runRef = useRef<(command: DeskCommand) => void>(() => {});
@@ -89,6 +90,7 @@ export function DeskKeyboard({
     onFocus(id);
     setFocusTick((tick) => tick + 1);
   }
+  aimRef.current = aim;
 
   function currentSpaceId(): string {
     return runtime?.focusedWorkspaceId || runtime?.workspaces.find((space) => space.focused)?.workspaceId || "";
@@ -225,13 +227,12 @@ export function DeskKeyboard({
     const page = window as Window & { __hwpFocusPanel?: (id: string) => void };
     page.__hwpFocusPanel = (id) => {
       if (!id) return;
-      focusRef.current = id;
-      onFocus(id);
+      aimRef.current(id);
     };
     return () => {
       delete page.__hwpFocusPanel;
     };
-  }, [onFocus]);
+  }, []);
 
   useEffect(() => {
     if (!focusedId || enterRef.current !== focusedId) return;

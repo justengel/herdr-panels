@@ -1057,12 +1057,22 @@ async fn plugin_bridge(
                     ApiError::bad(err)
                 }
             })?;
+            let workspace_id = snapshot
+                .panes
+                .iter()
+                .find(|pane| pane.pane_id == pane_id)
+                .map(|pane| pane.workspace_id.clone())
+                .unwrap_or_default();
             client
                 .call("pane.focus", json!({ "pane_id": pane_id }))
                 .await
                 .map_err(|err| ApiError::upstream(err.to_string()))?;
             state.runtime.invalidate();
-            Ok(Json(json!({ "ok": true })))
+            Ok(Json(json!({
+                "ok": true,
+                "paneId": pane_id,
+                "workspaceId": workspace_id,
+            })))
         }
         "listPanels" => crate::agent::list_desk(&state)
             .await
@@ -1154,6 +1164,10 @@ async fn plugin_bridge(
                 .map(Json)
                 .map_err(agent_error)
         }
+        "visitPanel" => crate::agent::visit_desk(&state, &param_str(&body.params, "panelId"))
+            .await
+            .map(Json)
+            .map_err(agent_error),
         "fillPanel" => {
             let panel_id = param_str(&body.params, "panelId");
             if panel_id.trim().is_empty() {

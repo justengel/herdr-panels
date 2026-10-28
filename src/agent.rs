@@ -115,6 +115,8 @@ pub fn router() -> Router<AppState> {
         .route("/api/agent/update", post(update_panel))
         .route("/api/agent/move", post(move_panel))
         .route("/api/agent/zoom", post(zoom))
+        .route("/api/agent/visit", post(visit))
+        .route("/api/agent/spaces", get(spaces))
         .route("/api/agent/open", post(open_target))
         .route("/api/agent/resolve", post(resolve_target))
         .route("/api/agent/say", post(say))
@@ -134,6 +136,8 @@ async fn index(State(state): State<AppState>) -> Json<Value> {
         "update": "POST /api/agent/update {panelId, title?, panel?}",
         "move": "POST /api/agent/move {panelId, target, place?: swap|right|below}",
         "zoom": "POST /api/agent/zoom {panelId?}",
+        "visit": "POST /api/agent/visit {panelId} -> {panelId, title, spaceId, space}",
+        "spaces": "GET /api/agent/spaces",
         "open": "POST /api/agent/open {target, panelId?, from?, direction?: right|down, reuse?: bool, title?}",
         "resolve": "POST /api/agent/resolve {target}",
         "read": "GET /api/agent/panels/{id}?selector=&text=",
@@ -606,6 +610,140 @@ pub(crate) async fn zoom_desk(
         "panelId": panel_id,
     }));
     Ok(json!({"ok": true, "viewer": state.agent.viewers() > 0}))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct VisitBody {
+    panel_id: String,
+}
+
+async fn visit(
+    State(state): State<AppState>,
+    Json(body): Json<VisitBody>,
+) -> Result<Json<Value>, AgentError> {
+    visit_desk(&state, &body.panel_id).await.map(Json)
+}
+
+async fn spaces(State(state): State<AppState>) -> Result<Json<Value>, AgentError> {
+    list_spaces(&state).await.map(Json)
+}
+
+struct OwnedSpace {
+    id: String,
+    label: String,
+    root: LayoutNode,
+    current: bool,
+}
+
+async fn visit_spaces(state: &AppState) -> Result<Vec<OwnedSpace>, AgentError> {
+    let snapshot = state.runtime.snapshot().await;
+    let session = session_name(&snapshot);
+    let stored = desk::load_desk(&state.config_dir, &session).map_err(AgentError::bad)?;
+    let focused = focused_workspace(&snapshot);
+    if stored.spaces.is_empty() {
+        let settings = store::load_settings(&state.config_dir).map_err(AgentError::bad)?;
+        let doc = store::load_layout(&state.config_dir, &settings.active_layout)
+            .map_err(AgentError::bad)?;
+        let label = doc.title.trim();
+        return Ok(vec![OwnedSpace {
+            id: doc.id,
+            label: if label.is_empty() {
+                "Desk".into()
+            } else {
+                label.to_string()
+            },
+            root: doc.root,
+            current: true,
+        }]);
+    }
+    let mut spaces = Vec::new();
+    for key in stored.spaces.keys() {
+        let workspace = snapshot
+            .workspaces
+            .iter()
+            .find(|space| desk::space_key(&space.workspace_id) == key.as_str());
+        let id = workspace
+            .map(|space| space.workspace_id.clone())
+            .unwrap_or_else(|| workspace_id_for_key(&stored, key));
+        let label = workspace
+            .map(|space| {
+                let label = space.label.trim();
+                if label.is_empty() {
+                    id.clone()
+                } else {
+                    label.to_string()
+                }
+            })
+            .unwrap_or_else(|| id.clone());
+        let current = focused
+            .as_deref()
+            .is_some_and(|focus| desk::space_key(focus) == key.as_str());
+        spaces.push(OwnedSpace {
+            label,
+            root: desk::open_space(&stored, &id),
+            current,
+            id,
+        });
+    }
+    Ok(spaces)
+}
+
+/// Show a panel from any saved space. A missing name is an error, and the reply names the space.
+pub(crate) async fn visit_desk(state: &AppState, panel_id: &str) -> Result<Value, AgentError> {
+    let panel_id = panel_id.trim();
+    if panel_id.is_empty() || panel_id.chars().count() > 200 {
+        return Err(AgentError::bad("panelId is required"));
+    }
+    let owned = visit_spaces(state).await?;
+    let views: Vec<desk::VisitSpace<'_>> = owned
+        .iter()
+        .map(|space| desk::VisitSpace {
+            id: &space.id,
+            label: &space.label,
+            root: &space.root,
+            current: space.current,
+        })
+        .collect();
+    let found = desk::find_visit(&views, panel_id).map_err(|err| {
+        if err == "panel was not found" {
+            AgentError::missing(err)
+        } else {
+            AgentError::bad(err)
+        }
+    })?;
+    state.agent.publish(&json!({
+        "type": "visit",
+        "panelId": found.panel_id,
+        "spaceId": found.space_id,
+    }));
+    Ok(json!({
+        "ok": true,
+        "viewer": state.agent.viewers() > 0,
+        "panelId": found.panel_id,
+        "title": found.title,
+        "spaceId": found.space_id,
+        "space": found.space_label,
+    }))
+}
+
+pub(crate) async fn list_spaces(state: &AppState) -> Result<Value, AgentError> {
+    let owned = visit_spaces(state).await?;
+    let spaces: Vec<Value> = owned
+        .iter()
+        .map(|space| {
+            json!({
+                "id": space.id,
+                "label": space.label,
+                "current": space.current,
+                "panels": panel_rows(&space.root),
+            })
+        })
+        .collect();
+    Ok(json!({
+        "viewer": state.agent.viewers() > 0,
+        "spaces": spaces,
+    }))
 }
 
 #[derive(Deserialize)]

@@ -252,6 +252,78 @@ fn drop_foreign(root: LayoutNode, desk: &DeskDocument, workspace_id: &str) -> La
     next
 }
 
+pub struct VisitSpace<'a> {
+    pub id: &'a str,
+    pub label: &'a str,
+    pub root: &'a LayoutNode,
+    pub current: bool,
+}
+
+#[derive(Debug)]
+pub struct VisitTarget {
+    pub panel_id: String,
+    pub title: String,
+    pub space_id: String,
+    pub space_label: String,
+}
+
+/// Find a panel on any space. The same id on several spaces prefers one that is not current.
+pub fn find_visit(spaces: &[VisitSpace<'_>], query: &str) -> Result<VisitTarget, &'static str> {
+    let needle = query.trim();
+    if needle.is_empty() {
+        return Err("panel was not found");
+    }
+    let mut hits: Vec<(usize, String, String)> = Vec::new();
+    for (index, space) in spaces.iter().enumerate() {
+        for panel in layout_ops::list_panels(space.root) {
+            let title = panel.title.unwrap_or_default();
+            let titled = title.trim();
+            let id_match = panel.id == needle;
+            let title_match = !titled.is_empty() && titled.eq_ignore_ascii_case(needle);
+            if id_match || title_match {
+                hits.push((index, panel.id, titled.to_string()));
+            }
+        }
+    }
+    let by_id: Vec<_> = hits.iter().filter(|hit| hit.1 == needle).cloned().collect();
+    let chosen = if !by_id.is_empty() {
+        by_id
+    } else {
+        let mut ids = std::collections::BTreeSet::new();
+        for hit in &hits {
+            if hit.2.eq_ignore_ascii_case(needle) {
+                ids.insert(hit.1.clone());
+            }
+        }
+        if ids.len() > 1 {
+            return Err("more than one panel has that name");
+        }
+        if ids.is_empty() {
+            return Err("panel was not found");
+        }
+        hits
+    };
+    let pick = chosen
+        .iter()
+        .find(|hit| !spaces[hit.0].current)
+        .unwrap_or(&chosen[0]);
+    let space = &spaces[pick.0];
+    Ok(VisitTarget {
+        panel_id: pick.1.clone(),
+        title: if pick.2.is_empty() {
+            pick.1.clone()
+        } else {
+            pick.2.clone()
+        },
+        space_id: space.id.to_string(),
+        space_label: if space.label.is_empty() {
+            space.id.to_string()
+        } else {
+            space.label.to_string()
+        },
+    })
+}
+
 /// The tree for one workspace: the saved space, or the Spaces, Agents, and Terminal seed, plus pins that belong there.
 pub fn open_space(desk: &DeskDocument, workspace_id: &str) -> LayoutNode {
     let stored = desk
@@ -457,5 +529,85 @@ mod tests {
             ..DeskDocument::default()
         };
         assert!(store_space(&chosen, "wG", terminal()).pins.is_empty());
+    }
+
+    fn iframe(id: &str, title: &str, url: &str) -> LayoutNode {
+        LayoutNode::Panel {
+            id: id.into(),
+            title: Some(title.into()),
+            panel: PanelConfig::Iframe {
+                url: url.into(),
+                proxy: false,
+                address_bar: None,
+            },
+            collapsed: false,
+        }
+    }
+
+    #[test]
+    fn a_visit_finds_a_panel_on_another_space_and_names_a_miss() {
+        let chief = terminal();
+        let google = iframe("panel-1", "google", "https://google.com");
+        let spaces = [
+            VisitSpace {
+                id: "wJ",
+                label: "herdr-panels",
+                root: &chief,
+                current: true,
+            },
+            VisitSpace {
+                id: "wH",
+                label: "my_sixth_grimoire",
+                root: &google,
+                current: false,
+            },
+        ];
+        let found = find_visit(&spaces, "google").unwrap();
+        assert_eq!(found.panel_id, "panel-1");
+        assert_eq!(found.title, "google");
+        assert_eq!(found.space_id, "wH");
+        assert_eq!(found.space_label, "my_sixth_grimoire");
+        assert_eq!(
+            find_visit(&spaces, "missing").unwrap_err(),
+            "panel was not found"
+        );
+        assert_eq!(
+            find_visit(&spaces, "  ").unwrap_err(),
+            "panel was not found"
+        );
+        let duplicate = iframe("panel-2", "google", "https://example.com");
+        let both = [
+            VisitSpace {
+                id: "wJ",
+                label: "herdr-panels",
+                root: &google,
+                current: true,
+            },
+            VisitSpace {
+                id: "wH",
+                label: "my_sixth_grimoire",
+                root: &duplicate,
+                current: false,
+            },
+        ];
+        assert_eq!(
+            find_visit(&both, "google").unwrap_err(),
+            "more than one panel has that name"
+        );
+        let same = [
+            VisitSpace {
+                id: "wJ",
+                label: "herdr-panels",
+                root: &google,
+                current: true,
+            },
+            VisitSpace {
+                id: "wH",
+                label: "my_sixth_grimoire",
+                root: &google,
+                current: false,
+            },
+        ];
+        assert_eq!(find_visit(&same, "panel-1").unwrap().space_id, "wH");
     }
 }

@@ -122,6 +122,11 @@ enum PanelCommand {
     },
     /// Fill the page with one panel. Omit the panel to restore the layout
     Zoom { panel: Option<String> },
+    /// Show a panel from any space over this one. Omit the name to list every space
+    Visit {
+        /// Panel name or id. Leave this out to list panels on every space
+        panel: Option<String>,
+    },
     /// Open a file, directory, or http URL in a panel
     Open {
         /// File path, directory, or http(s) URL
@@ -410,6 +415,53 @@ async fn panel_command(base: &str, token: &str, command: PanelCommand) -> anyhow
             println!("{response}");
             Ok(())
         }
+        PanelCommand::Visit { panel } => match panel {
+            Some(panel) => {
+                let response = call(
+                    base,
+                    token,
+                    "POST",
+                    "/api/agent/visit",
+                    Some(json!({ "panelId": panel })),
+                )
+                .await?;
+                println!("{response}");
+                Ok(())
+            }
+            None => {
+                let body = call(base, token, "GET", "/api/agent/spaces", None).await?;
+                let value: Value = serde_json::from_str(&body)?;
+                for space in value
+                    .get("spaces")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                {
+                    let mark = if space.get("current").and_then(Value::as_bool) == Some(true) {
+                        "*"
+                    } else {
+                        ""
+                    };
+                    let space_id = space.get("id").and_then(Value::as_str).unwrap_or("");
+                    let label = space.get("label").and_then(Value::as_str).unwrap_or("");
+                    for panel in space
+                        .get("panels")
+                        .and_then(Value::as_array)
+                        .into_iter()
+                        .flatten()
+                    {
+                        println!(
+                            "{mark}\t{space_id}\t{label}\t{}\t{}\t{}\t{}",
+                            panel.get("id").and_then(Value::as_str).unwrap_or(""),
+                            panel.get("title").and_then(Value::as_str).unwrap_or(""),
+                            panel.get("type").and_then(Value::as_str).unwrap_or(""),
+                            panel.get("summary").and_then(Value::as_str).unwrap_or("")
+                        );
+                    }
+                }
+                Ok(())
+            }
+        },
         PanelCommand::Open {
             target,
             panel,

@@ -1,7 +1,7 @@
 import { chordMatches, eventKey, expandBinding, type Chord } from "./herdrKeys";
-import { listPanels } from "./layoutEdit";
+import { findPanel, freshPanelId, listPanels, setPanel, splitPanel } from "./layoutEdit";
 import { bindTerminalPane } from "./spaceLayout";
-import type { LayoutNode, PanelConfig } from "./types";
+import type { LayoutNode, PanelConfig, PanelNode } from "./types";
 
 export type Direction = "left" | "right" | "up" | "down";
 
@@ -682,4 +682,121 @@ export function panelForKind(panels: PanelRef[], kind: string): string | null {
 export function layoutForFocusedPane(root: LayoutNode, paneId: string): LayoutNode {
   if (panelRefs(listPanels(root)).some((panel) => panel.paneId === paneId)) return root;
   return bindTerminalPane(root, paneId);
+}
+
+interface TerminalSlot {
+  panelId: string;
+  tabId: string | null;
+  paneId: string | null;
+  active: boolean;
+}
+
+function terminalSlots(root: LayoutNode): TerminalSlot[] {
+  const slots: TerminalSlot[] = [];
+  for (const panel of listPanels(root)) {
+    if (panel.panel.type === "tabs") {
+      for (const tab of panel.panel.tabs) {
+        if (tab.panel.type !== "herdr") continue;
+        slots.push({
+          panelId: panel.id,
+          tabId: tab.id,
+          paneId: tab.panel.paneId ?? null,
+          active: tab.id === panel.panel.active,
+        });
+      }
+      continue;
+    }
+    if (panel.panel.type !== "herdr") continue;
+    slots.push({
+      panelId: panel.id,
+      tabId: null,
+      paneId: panel.panel.paneId ?? null,
+      active: true,
+    });
+  }
+  return slots;
+}
+
+function withSlotPane(root: LayoutNode, slot: TerminalSlot, paneId: string): LayoutNode {
+  const panel = findPanel(root, slot.panelId);
+  if (!panel) return root;
+  if (panel.panel.type === "tabs" && slot.tabId) {
+    const showing = panel.panel.tabs.some(
+      (tab) => tab.id === slot.tabId && tab.panel.type === "herdr" && (tab.panel.paneId ?? null) === paneId,
+    );
+    if (showing && panel.panel.active === slot.tabId) return root;
+    return setPanel(root, slot.panelId, {
+      ...panel.panel,
+      active: slot.tabId,
+      tabs: panel.panel.tabs.map((tab) =>
+        tab.id === slot.tabId && tab.panel.type === "herdr" ? { ...tab, panel: { ...tab.panel, paneId } } : tab,
+      ),
+    });
+  }
+  if (panel.panel.type === "herdr") {
+    if ((panel.panel.paneId ?? null) === paneId) return root;
+    return setPanel(root, slot.panelId, { ...panel.panel, paneId });
+  }
+  return root;
+}
+
+function preferredSlot(slots: TerminalSlot[], preferId: string | null): TerminalSlot | undefined {
+  if (preferId) {
+    const matches = slots.filter((slot) => slot.panelId === preferId);
+    const chosen = matches.find((slot) => slot.active) ?? matches[0];
+    if (chosen) return chosen;
+  }
+  return slots[0];
+}
+
+/** Show `paneId` in this layout. Rebind a terminal, or open one when the space has none. */
+export function revealPaneOnDesk(
+  root: LayoutNode,
+  paneId: string,
+  preferId: string | null,
+): { root: LayoutNode; panelId: string } {
+  const slots = terminalSlots(root);
+  const showing = slots.find((slot) => slot.paneId === paneId);
+  if (showing) return { root: withSlotPane(root, showing, paneId), panelId: showing.panelId };
+  const target = preferredSlot(slots, preferId);
+  if (target) return { root: withSlotPane(root, target, paneId), panelId: target.panelId };
+  const created: PanelNode = {
+    type: "panel",
+    id: freshPanelId(root),
+    title: "Terminal",
+    panel: { type: "herdr", paneId },
+  };
+  const host = listPanels(root).at(-1);
+  if (!host) return { root: created, panelId: created.id };
+  return { root: splitPanel(root, host.id, "row", created), panelId: created.id };
+}
+
+/**
+ * The desk after a plugin focuses a pane. A different workspace uses that space's
+ * layout. The current layout is left unchanged.
+ */
+export function layoutForPaneFocus(
+  currentWorkspace: string | null,
+  currentRoot: LayoutNode,
+  workspaceId: string,
+  targetRoot: LayoutNode,
+  paneId: string,
+  preferId: string | null,
+): { workspaceId: string; root: LayoutNode; panelId: string } {
+  const switched = Boolean(workspaceId) && workspaceId !== currentWorkspace;
+  const revealed = revealPaneOnDesk(switched ? targetRoot : currentRoot, paneId, switched ? null : preferId);
+  return {
+    workspaceId: workspaceId || currentWorkspace || "",
+    root: revealed.root,
+    panelId: revealed.panelId,
+  };
+}
+
+/** Ask the open desk to show a pane. Returns the panel id, or null when the desk is not ready. */
+export function requestPaneReveal(paneId: string, workspaceId: string): string | null {
+  if (typeof window === "undefined" || !paneId) return null;
+  const hook = (window as Window & { __hwpRevealPane?: (paneId: string, workspaceId: string) => string | null })
+    .__hwpRevealPane;
+  if (!hook) return null;
+  return hook(paneId, workspaceId) || null;
 }
