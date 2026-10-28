@@ -25,7 +25,7 @@ sudo apt install libwebkit2gtk-4.1-0
 
 Unpack the archive and run `./herdr-panels` from that folder. The desktop program is beside it, so this opens the window and listens on http://127.0.0.1:4737. The first start writes the viewer token and the example layouts into the config directory. A browser tab at that address shows the same desk. `herdr-panels server` starts the server and leaves the window closed.
 
-`herdr-panels update` downloads the latest GitHub release for this system and replaces `herdr-panels`. When `herdr-panels-desktop` is in the same folder, that program is replaced from the same release. Restart the viewer afterward. A copy that is still in a cargo target directory is left unchanged. The command is on `herdr-panels`, not on the desktop program. Run `herdr-panels install-launcher` again after an update so the application menu keeps the new program path.
+`herdr-panels update` downloads the latest GitHub release for this system and replaces `herdr-panels`. When `herdr-panels-desktop` is in the same folder, that program is replaced from the same release. A viewer that is already running is stopped and started again on the same address. An open desktop window is closed and opened again so it loads the new page. A copy that is still in a cargo target directory is left unchanged. The command is on `herdr-panels`, not on the desktop program. Run `herdr-panels install-launcher` again after an update so the application menu keeps the new program path.
 
 `herdr-panels` with no arguments starts the viewer and the desktop window. When that viewer is already running, the same command opens the window and exits. It checks the address in `server.json`, the same address `herdr-panels status` uses. If that address belongs to another program, the message says it is not a herdr-panels viewer. `herdr-panels server` still only starts the viewer. A second server on the same address does not start.
 
@@ -177,7 +177,7 @@ The Design button turns the workspace into an editor:
 <config>/plugins/<id>/index.html
 ```
 
-`plugin.json` has `id`, `title`, and `entry` (default `index.html`). `views` says which addresses a plugin can open, so it can sit beside Markdown or Text for that file. Leave `views` out and the plugin is its own panel. `addressBar` shows that bar, lets `modify` change it, or uses `replace` so the plugin can draw its own. The panel gear can show or hide the bar. An optional `permissions` list can ask for `herdr:read`, `herdr:control`, `panels:read`, `panels:control`, or `files:read`. `files:read` also needs a `files` list of absolute paths or directories. Those paths use the system's own separators. Install asks before granting those, unless you pass `--yes`. `herdr-panels plugin list` prints each plugin's permissions. A plugin with no `permissions` is unchanged. Install the sample with `herdr-panels plugin install --example`, or install another directory with `herdr-panels plugin install <directory>`. `examples/plugins/desk-sample` asks for `panels:read` and `panels:control`, opens `https://example.com`, and does not draw the rest of the desk. The page loads a plugin at `/plugins/<id>`. See `examples/plugins/README.md`.
+`plugin.json` has `id`, `title`, and `entry` (default `index.html`). `views` says which addresses a plugin can open, so it can sit beside Markdown or Text for that file. Leave `views` out and the plugin is its own panel. `addressBar` shows that bar, lets `modify` change it, or uses `replace` so the plugin can draw its own. The panel gear can show or hide the bar. An optional `permissions` list can ask for `herdr:read`, `herdr:control`, `panels:read`, `panels:control`, or `files:read`. `files:read` also needs a `files` list of absolute paths or directories. Those paths use the system's own separators. Install asks before granting those, unless you pass `--yes`. `herdr-panels plugin list` prints each plugin's permissions. A plugin with no `permissions` is unchanged. Install the sample with `herdr-panels plugin install --example`, or install another directory with `herdr-panels plugin install <directory>`. The open desk reads that directory again and shows a new plugin, or drops one that was removed, without restarting the viewer. `herdr-panels plugin uninstall <id>` deletes that plugin directory. An open panel that was showing it stays until you close the panel. `examples/plugins/desk-sample` asks for `panels:read` and `panels:control`, opens `https://example.com`, and does not draw the rest of the desk. The page loads a plugin at `/plugins/<id>`. See `examples/plugins/README.md`.
 
 ### Agents
 
@@ -267,6 +267,7 @@ herdr-panels plugin list
 herdr-panels plugin install --example
 herdr-panels plugin install <directory>
 herdr-panels plugin install <directory> --yes
+herdr-panels plugin uninstall <id>
 herdr-panels update
 herdr-panels install-launcher
 herdr-panels token rotate

@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+`herdr-panels update` stops a running viewer and starts the new program on the same address. An open desktop window is closed and opened again so it loads the new page. The viewer records its process id in `server.json`. The open desk reloads its plugin list, so `herdr-panels plugin install` shows up without restarting the viewer. `herdr-panels plugin uninstall <id>` removes that plugin, and the desk drops it from the menu.
+
 ## 0.1.6 - 2026-10-28
 
 `herdr-panels` opens the desktop window and exits when the viewer is already running. Another program on that address is reported as not a herdr-panels viewer. The desktop child is waited on, so closing the window does not leave a zombie, and the viewer keeps running. `herdr-panels install-launcher` writes a desktop entry with `StartupWMClass=herdr-panels-desktop` and hicolor icons at 48, 128, and 256 pixels plus the SVG. The window icon is the 256 pixel image.

@@ -13,7 +13,7 @@ use crate::plugins;
     name = "herdr-panels",
     version,
     about = "Herdr viewer with installable HTML panels",
-    long_about = "herdr-panels starts the viewer and opens the desktop window when that program is installed, or a browser tab otherwise. When the viewer is already running, it opens the window and exits.\nherdr-panels server runs the viewer without opening a window.\nherdr-panels desktop opens the desktop window. On its own it starts a viewer when the address is closed, and that viewer stops when the window closes.\nherdr-panels install-launcher writes the Linux application menu entry and icons.\nherdr-panels update downloads the latest GitHub release and replaces this program. When the desktop window is beside it, that program is replaced from the same release.\nherdr-panels panel, plugin, and token talk to that viewer or its config."
+    long_about = "herdr-panels starts the viewer and opens the desktop window when that program is installed, or a browser tab otherwise. When the viewer is already running, it opens the window and exits.\nherdr-panels server runs the viewer without opening a window.\nherdr-panels desktop opens the desktop window. On its own it starts a viewer when the address is closed, and that viewer stops when the window closes.\nherdr-panels install-launcher writes the Linux application menu entry and icons.\nherdr-panels update downloads the latest GitHub release and replaces this program. When the desktop window is beside it, that program is replaced from the same release. A viewer that is already running is stopped and started again on the same address, and an open desktop window is opened again.\nherdr-panels panel, plugin, and token talk to that viewer or its config."
 )]
 struct ClientCli {
     /// Viewer URL. Defaults to the address recorded by the running server.
@@ -37,7 +37,7 @@ enum ClientCommand {
         #[command(subcommand)]
         command: PanelCommand,
     },
-    /// Install and list view plugins
+    /// Install, uninstall, and list view plugins
     Plugin {
         #[command(subcommand)]
         command: PluginCommand,
@@ -158,6 +158,11 @@ enum PluginCommand {
         #[arg(long)]
         yes: bool,
     },
+    /// Remove an installed view plugin
+    Uninstall {
+        /// Plugin id printed by plugin list
+        id: String,
+    },
 }
 
 pub async fn execute() -> anyhow::Result<()> {
@@ -210,6 +215,11 @@ pub async fn execute() -> anyhow::Result<()> {
                     plugins::install_plugin(&config_dir, &path, replace)?
                 };
                 println!("installed {} ({})", manifest.id, manifest.title);
+                Ok(())
+            }
+            PluginCommand::Uninstall { id } => {
+                let manifest = plugins::uninstall_plugin(&config_dir, &id)?;
+                println!("uninstalled {} ({})", manifest.id, manifest.title);
                 Ok(())
             }
         },
@@ -464,7 +474,7 @@ fn panel_config(
 
 pub fn record_server(config_dir: &std::path::Path, url: &str) -> anyhow::Result<()> {
     let path = config_dir.join("server.json");
-    let body = json!({ "url": url }).to_string();
+    let body = json!({ "url": url, "pid": std::process::id() }).to_string();
     std::fs::write(&path, body).with_context(|| format!("writing {}", path.display()))?;
     Ok(())
 }

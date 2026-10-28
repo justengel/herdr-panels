@@ -394,6 +394,26 @@ pub fn install_bundled_example(config_dir: &Path, replace: bool) -> anyhow::Resu
     result
 }
 
+pub fn uninstall_plugin(config_dir: &Path, id: &str) -> anyhow::Result<PluginManifest> {
+    validate_plugin_id(id)?;
+    let destination = plugins_dir(config_dir).join(id);
+    if !destination.join("plugin.json").is_file() {
+        bail!("plugin {id} is not installed");
+    }
+    let manifest = load_installed(config_dir, id)?;
+    let root = plugins_dir(config_dir)
+        .canonicalize()
+        .context("plugins directory was not found")?;
+    let resolved = destination
+        .canonicalize()
+        .with_context(|| format!("plugin {id} is not installed"))?;
+    if resolved.parent() != Some(root.as_path()) {
+        bail!("plugin {id} is not inside the plugins directory");
+    }
+    fs::remove_dir_all(&resolved).with_context(|| format!("removing {}", resolved.display()))?;
+    Ok(manifest)
+}
+
 pub fn install_plugin(
     config_dir: &Path,
     source: &Path,
@@ -611,6 +631,45 @@ mod tests {
             .join("welcome")
             .join("index.html")
             .is_file());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn uninstall_removes_that_plugin_and_leaves_the_guide() {
+        let root = std::env::temp_dir().join(format!("hwp-uninstall-plugin-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let config = root.join("config");
+        let source = root.join("welcome");
+        fs::create_dir_all(&source).unwrap();
+        fs::write(
+            source.join("plugin.json"),
+            r#"{"id":"welcome","title":"Welcome","entry":"index.html"}"#,
+        )
+        .unwrap();
+        fs::write(source.join("index.html"), "<p>Welcome</p>").unwrap();
+        install_plugin(&config, &source, false).unwrap();
+        let plugins = config.join("plugins");
+        fs::write(plugins.join("README.md"), "guide").unwrap();
+        fs::create_dir_all(plugins.join("other")).unwrap();
+        fs::write(plugins.join("other").join("keep.txt"), "stay").unwrap();
+
+        let manifest = uninstall_plugin(&config, "welcome").unwrap();
+        assert_eq!(manifest.id, "welcome");
+        assert_eq!(manifest.title, "Welcome");
+        assert!(!plugins.join("welcome").exists());
+        assert_eq!(fs::read_to_string(plugins.join("README.md")).unwrap(), "guide");
+        assert_eq!(
+            fs::read_to_string(plugins.join("other").join("keep.txt")).unwrap(),
+            "stay"
+        );
+
+        let missing = uninstall_plugin(&config, "welcome").unwrap_err().to_string();
+        assert!(missing.contains("not installed"), "{missing}");
+        let escaped = uninstall_plugin(&config, "../welcome").unwrap_err().to_string();
+        assert!(
+            escaped.contains("plugin id") || escaped.contains("lowercase"),
+            "{escaped}"
+        );
         let _ = fs::remove_dir_all(&root);
     }
 

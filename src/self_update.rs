@@ -54,7 +54,9 @@ impl Platform {
 pub async fn execute() -> anyhow::Result<()> {
     let extra: Vec<String> = std::env::args().skip(2).collect();
     if extra.iter().any(|arg| arg == "--help" || arg == "-h") {
-        println!("Download and install the latest GitHub release\n\nUsage: herdr-panels update");
+        println!(
+            "Download and install the latest GitHub release. A viewer that is already running is stopped and started again on the same address.\n\nUsage: herdr-panels update"
+        );
         return Ok(());
     }
     if let Some(arg) = extra.first() {
@@ -118,19 +120,38 @@ async fn apply_update() -> anyhow::Result<()> {
                 files.push((dest, bytes));
             }
             let leftovers = install_files(&files).map_err(anyhow::Error::msg)?;
-            if targets.len() > 1 {
-                println!("Updated herdr-panels and herdr-panels-desktop to {version}.");
-            } else {
-                println!("Updated herdr-panels to {version}.");
+            let outcome = restart_installed_viewer(&exe).await;
+            for path in &leftovers {
+                let _ = std::fs::remove_file(path);
             }
-            println!("Restart the viewer to use it.");
-            for path in leftovers {
-                println!(
-                    "An older copy is still at {} because it is running. Delete it after restarting.",
-                    path.display()
-                );
+            let still: Vec<_> = leftovers.into_iter().filter(|path| path.exists()).collect();
+            let desktop_replaced = targets.len() > 1;
+            match outcome {
+                Ok(outcome) => {
+                    for line in update_result_lines(&version, desktop_replaced, &outcome) {
+                        println!("{line}");
+                    }
+                    for path in still {
+                        println!(
+                            "An older copy is still at {} because it is running. Delete it after the new viewer is the one you are using.",
+                            path.display()
+                        );
+                    }
+                    Ok(())
+                }
+                Err(err) => {
+                    for line in update_result_lines(
+                        &version,
+                        desktop_replaced,
+                        &RestartOutcome::NotRunning,
+                    ) {
+                        if line.starts_with("Updated ") {
+                            println!("{line}");
+                        }
+                    }
+                    Err(anyhow::Error::msg(err))
+                }
             }
-            Ok(())
         }
     }
 }
@@ -472,6 +493,816 @@ fn restore(staged: &Staged) {
     let _ = std::fs::remove_file(&staged.dest);
     if let Some(backup) = &staged.backup {
         let _ = std::fs::rename(backup, &staged.dest);
+    }
+}
+
+/// What `herdr-panels update` should do with a viewer after the new files are in place.
+#[derive(Debug, PartialEq, Eq)]
+pub enum ViewerRestart {
+    NotRunning,
+    Restart {
+        pid: u32,
+        server_args: Vec<String>,
+        open_desktop: bool,
+    },
+    CouldNotFind { url: String },
+}
+
+/// What to tell the user after the files were replaced.
+#[derive(Debug, PartialEq, Eq)]
+pub enum RestartOutcome {
+    Restarted { url: String, desktop: bool },
+    NotRunning,
+    CouldNotFind { url: String },
+}
+
+pub fn viewer_restart(
+    url: &str,
+    running: bool,
+    server_pid: Option<u32>,
+    desktop_was_open: bool,
+) -> ViewerRestart {
+    if !running {
+        return ViewerRestart::NotRunning;
+    }
+    let Some(pid) = server_pid else {
+        return ViewerRestart::CouldNotFind {
+            url: url.to_string(),
+        };
+    };
+    match relaunch_server_args(url) {
+        Ok(server_args) => ViewerRestart::Restart {
+            pid,
+            server_args,
+            open_desktop: desktop_was_open,
+        },
+        Err(_) => ViewerRestart::CouldNotFind {
+            url: url.to_string(),
+        },
+    }
+}
+
+pub fn relaunch_server_args(url: &str) -> Result<Vec<String>, String> {
+    let parsed = url::Url::parse(url).map_err(|_| format!("could not read {url}"))?;
+    if parsed.scheme() != "http" {
+        return Err(format!("{url} is not an http address"));
+    }
+    let host = parsed
+        .host_str()
+        .filter(|host| !host.is_empty())
+        .ok_or_else(|| format!("could not read {url}"))?;
+    let port = parsed
+        .port()
+        .ok_or_else(|| format!("could not read the port in {url}"))?;
+    Ok(vec![
+        "server".to_string(),
+        "--host".to_string(),
+        host.to_string(),
+        "--port".to_string(),
+        port.to_string(),
+    ])
+}
+
+pub fn choose_server_pid(
+    recorded: Option<u32>,
+    recorded_alive_server: bool,
+    listeners: &[u32],
+    listener_is_server: impl Fn(u32) -> bool,
+) -> Option<u32> {
+    if recorded_alive_server {
+        if let Some(pid) = recorded {
+            return Some(pid);
+        }
+    }
+    let matches: Vec<u32> = listeners
+        .iter()
+        .copied()
+        .filter(|pid| listener_is_server(*pid))
+        .collect();
+    if matches.len() == 1 {
+        Some(matches[0])
+    } else {
+        None
+    }
+}
+
+pub fn server_image(path: &str) -> bool {
+    image_stem(path) == "herdr-panels"
+}
+
+pub fn desktop_image(path: &str) -> bool {
+    image_stem(path) == "herdr-panels-desktop"
+}
+
+fn image_stem(path: &str) -> &str {
+    let name = path.rsplit(['/', '\\']).next().unwrap_or(path);
+    let name = name.strip_suffix(" (deleted)").unwrap_or(name);
+    let name = match name.split_once(".previous") {
+        Some((head, _)) => head,
+        None => name,
+    };
+    name.strip_suffix(".exe").unwrap_or(name)
+}
+
+pub fn pid_in_server_record(text: &str) -> Option<u32> {
+    let value: serde_json::Value = serde_json::from_str(text).ok()?;
+    let pid = value.get("pid")?.as_u64()?;
+    u32::try_from(pid).ok().filter(|pid| *pid > 0)
+}
+
+pub fn listen_inodes(table: &str, port: u16) -> Vec<u64> {
+    let mut inodes = Vec::new();
+    for line in table.lines() {
+        let cols: Vec<&str> = line.split_whitespace().collect();
+        if cols.len() < 10 {
+            continue;
+        }
+        let Some((_, port_hex)) = cols[1].rsplit_once(':') else {
+            continue;
+        };
+        let Ok(found) = u16::from_str_radix(port_hex, 16) else {
+            continue;
+        };
+        if found != port || !cols[3].eq_ignore_ascii_case("0A") {
+            continue;
+        }
+        if let Ok(inode) = cols[9].parse::<u64>() {
+            inodes.push(inode);
+        }
+    }
+    inodes
+}
+
+pub fn pids_listening(text: &str, port: u16) -> Vec<u32> {
+    let mut pids = Vec::new();
+    for line in text.lines() {
+        if !line.to_ascii_uppercase().contains("LISTEN") {
+            continue;
+        }
+        let cols: Vec<&str> = line.split_whitespace().collect();
+        let Some(local) = cols.iter().find(|col| col.contains(':')) else {
+            continue;
+        };
+        let Some((_, found)) = local.rsplit_once(':') else {
+            continue;
+        };
+        if found != port.to_string() {
+            continue;
+        }
+        let Some(pid) = cols.last().and_then(|col| col.parse::<u32>().ok()) else {
+            continue;
+        };
+        if pid != 0 && !pids.contains(&pid) {
+            pids.push(pid);
+        }
+    }
+    pids
+}
+
+pub fn update_result_lines(
+    version: &str,
+    desktop_replaced: bool,
+    outcome: &RestartOutcome,
+) -> Vec<String> {
+    let mut lines = Vec::new();
+    if desktop_replaced {
+        lines.push(format!(
+            "Updated herdr-panels and herdr-panels-desktop to {version}."
+        ));
+    } else {
+        lines.push(format!("Updated herdr-panels to {version}."));
+    }
+    match outcome {
+        RestartOutcome::Restarted { url, desktop: true } => {
+            lines.push(format!(
+                "Restarted the viewer at {url} and opened the desktop window."
+            ));
+        }
+        RestartOutcome::Restarted { url, desktop: false } => {
+            lines.push(format!("Restarted the viewer at {url}."));
+        }
+        RestartOutcome::NotRunning => {
+            lines.push("The next launch uses it.".to_string());
+        }
+        RestartOutcome::CouldNotFind { url } => {
+            lines.push(format!(
+                "A viewer is still running at {url}. Stop that process and start herdr-panels again."
+            ));
+        }
+    }
+    lines
+}
+
+pub fn stop_process(pid: u32) -> Result<(), String> {
+    if !process_running(pid) {
+        return Ok(());
+    }
+    #[cfg(windows)]
+    {
+        let status = std::process::Command::new("taskkill")
+            .args(["/PID", &pid.to_string(), "/F"])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map_err(|err| format!("could not stop process {pid}: {err}"))?;
+        if !status.success() && process_running(pid) {
+            return Err(format!("could not stop process {pid}"));
+        }
+    }
+    #[cfg(unix)]
+    {
+        signal_process(pid, 15)?;
+        let start = std::time::Instant::now();
+        while process_running(pid) && start.elapsed() < Duration::from_secs(3) {
+            std::thread::sleep(Duration::from_millis(30));
+        }
+        if process_running(pid) {
+            signal_process(pid, 9)?;
+        }
+    }
+    let start = std::time::Instant::now();
+    while process_running(pid) && start.elapsed() < Duration::from_secs(3) {
+        std::thread::sleep(Duration::from_millis(30));
+    }
+    if process_running(pid) {
+        Err(format!("process {pid} did not exit"))
+    } else {
+        Ok(())
+    }
+}
+
+async fn restart_installed_viewer(exe: &Path) -> Result<RestartOutcome, String> {
+    let config_dir = update_config_dir();
+    let url = config_dir
+        .as_ref()
+        .and_then(|dir| crate::launch::recorded_url(dir))
+        .unwrap_or_else(|| "http://127.0.0.1:4737".to_string());
+    let token = config_dir
+        .as_ref()
+        .and_then(|dir| crate::launch::existing_token(dir));
+    let running = matches!(
+        crate::launch::inspect(&url, token.as_deref()).await,
+        crate::launch::Probe::Up
+    );
+    if !running {
+        return Ok(RestartOutcome::NotRunning);
+    }
+    let port = url::Url::parse(&url)
+        .ok()
+        .and_then(|parsed| parsed.port())
+        .unwrap_or(4737);
+    let recorded = config_dir.as_ref().and_then(|dir| recorded_pid(dir));
+    let recorded_alive_server = recorded.is_some_and(|pid| {
+        process_running(pid) && process_image(pid).is_some_and(|image| server_image(&image))
+    });
+    let listeners = listener_pids(port);
+    let pid = choose_server_pid(recorded, recorded_alive_server, &listeners, |candidate| {
+        process_image(candidate).is_some_and(|image| server_image(&image))
+    });
+    let desktops = exe
+        .parent()
+        .map(desktop_pids_beside)
+        .unwrap_or_default();
+    match viewer_restart(&url, true, pid, !desktops.is_empty()) {
+        ViewerRestart::NotRunning => Ok(RestartOutcome::NotRunning),
+        ViewerRestart::CouldNotFind { url } => Ok(RestartOutcome::CouldNotFind { url }),
+        ViewerRestart::Restart {
+            pid,
+            server_args,
+            open_desktop,
+        } => {
+            for desktop in &desktops {
+                stop_process(*desktop)?;
+            }
+            stop_process(pid)?;
+            wait_until_not_up(&url, token.as_deref()).await?;
+            spawn_detached(exe, &server_args, &[])?;
+            wait_until_up(&url, token.as_deref()).await?;
+            let mut opened = false;
+            if open_desktop {
+                if let Some(desktop) = exe.parent().and_then(desktop_binary) {
+                    spawn_detached(
+                        &desktop,
+                        &[],
+                        &[("HERDR_PANELS_URL", url.as_str())],
+                    )?;
+                    opened = true;
+                }
+            }
+            Ok(RestartOutcome::Restarted {
+                url,
+                desktop: opened,
+            })
+        }
+    }
+}
+
+fn update_config_dir() -> Option<PathBuf> {
+    if let Some(value) = std::env::var_os("HERDR_PANELS_CONFIG") {
+        if !value.is_empty() {
+            return Some(PathBuf::from(value));
+        }
+    }
+    crate::paths::app_config_dir().ok()
+}
+
+fn recorded_pid(dir: &Path) -> Option<u32> {
+    let text = std::fs::read_to_string(dir.join("server.json")).ok()?;
+    pid_in_server_record(&text)
+}
+
+fn desktop_binary(dir: &Path) -> Option<PathBuf> {
+    let name = if cfg!(windows) {
+        "herdr-panels-desktop.exe"
+    } else {
+        "herdr-panels-desktop"
+    };
+    let path = dir.join(name);
+    path.is_file().then_some(path)
+}
+
+fn desktop_pids_beside(install_dir: &Path) -> Vec<u32> {
+    listed_pids()
+        .into_iter()
+        .filter(|pid| {
+            process_image(*pid).is_some_and(|image| {
+                desktop_image(&image) && parent_is_install(&image, install_dir)
+            })
+        })
+        .collect()
+}
+
+fn parent_is_install(image: &str, install_dir: &Path) -> bool {
+    let trimmed = image.trim().trim_end_matches(" (deleted)");
+    let Some(parent) = Path::new(trimmed).parent() else {
+        return false;
+    };
+    if parent == install_dir {
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        parent
+            .to_string_lossy()
+            .eq_ignore_ascii_case(&install_dir.to_string_lossy())
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = parent;
+        false
+    }
+}
+
+async fn wait_until_not_up(url: &str, token: Option<&str>) -> Result<(), String> {
+    let start = std::time::Instant::now();
+    while start.elapsed() < Duration::from_secs(5) {
+        if !matches!(
+            crate::launch::inspect(url, token).await,
+            crate::launch::Probe::Up
+        ) {
+            return Ok(());
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    Err(format!(
+        "the viewer at {url} did not stop. Stop that process and start herdr-panels again."
+    ))
+}
+
+async fn wait_until_up(url: &str, token: Option<&str>) -> Result<(), String> {
+    let start = std::time::Instant::now();
+    while start.elapsed() < Duration::from_secs(15) {
+        if matches!(
+            crate::launch::inspect(url, token).await,
+            crate::launch::Probe::Up
+        ) {
+            return Ok(());
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    Err(format!(
+        "stopped the old viewer, but the new one did not start at {url}. Start herdr-panels again."
+    ))
+}
+
+fn spawn_detached(exe: &Path, args: &[String], extra_env: &[(&str, &str)]) -> Result<(), String> {
+    let mut command = std::process::Command::new(exe);
+    command
+        .args(args)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    for (key, value) in extra_env {
+        command.env(key, value);
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        unsafe {
+            command.pre_exec(|| {
+                extern "C" {
+                    fn setsid() -> i32;
+                }
+                if setsid() < 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        const CREATE_NEW_PROCESS_GROUP: u32 = 0x00000200;
+        command.creation_flags(CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP);
+    }
+    command
+        .spawn()
+        .map(|_| ())
+        .map_err(|err| format!("could not start {}: {err}", exe.display()))
+}
+
+fn listener_pids(port: u16) -> Vec<u32> {
+    #[cfg(windows)]
+    {
+        windows_listener_pids(port)
+    }
+    #[cfg(target_os = "linux")]
+    {
+        linux_listener_pids(port)
+    }
+    #[cfg(target_os = "macos")]
+    {
+        macos_listener_pids(port)
+    }
+    #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
+    {
+        let _ = port;
+        Vec::new()
+    }
+}
+
+#[cfg(windows)]
+fn windows_listener_pids(port: u16) -> Vec<u32> {
+    let pids = tcp_table_listener_pids(port);
+    if !pids.is_empty() {
+        return pids;
+    }
+    command_output("netstat", &["-ano", "-p", "TCP"])
+        .map(|text| pids_listening(&text, port))
+        .unwrap_or_default()
+}
+
+#[cfg(windows)]
+fn tcp_table_listener_pids(port: u16) -> Vec<u32> {
+    #[link(name = "iphlpapi")]
+    extern "system" {
+        fn GetExtendedTcpTable(
+            table: *mut std::ffi::c_void,
+            size: *mut u32,
+            order: i32,
+            af: u32,
+            class: i32,
+            reserved: u32,
+        ) -> u32;
+    }
+    const AF_INET: u32 = 2;
+    const TCP_TABLE_OWNER_PID_LISTENER: i32 = 3;
+    const ERROR_INSUFFICIENT_BUFFER: u32 = 122;
+    #[repr(C)]
+    struct Row {
+        state: u32,
+        local_addr: u32,
+        local_port: u32,
+        remote_addr: u32,
+        remote_port: u32,
+        owning_pid: u32,
+    }
+    unsafe {
+        let mut size = 0u32;
+        let first = GetExtendedTcpTable(
+            std::ptr::null_mut(),
+            &mut size,
+            0,
+            AF_INET,
+            TCP_TABLE_OWNER_PID_LISTENER,
+            0,
+        );
+        if first != ERROR_INSUFFICIENT_BUFFER && first != 0 {
+            return Vec::new();
+        }
+        if size < 4 {
+            return Vec::new();
+        }
+        let mut buffer = vec![0u8; size as usize];
+        let status = GetExtendedTcpTable(
+            buffer.as_mut_ptr() as *mut std::ffi::c_void,
+            &mut size,
+            0,
+            AF_INET,
+            TCP_TABLE_OWNER_PID_LISTENER,
+            0,
+        );
+        if status != 0 || buffer.len() < 4 {
+            return Vec::new();
+        }
+        let count = u32::from_ne_bytes([buffer[0], buffer[1], buffer[2], buffer[3]]) as usize;
+        let row_size = std::mem::size_of::<Row>();
+        let available = buffer.len().saturating_sub(4) / row_size;
+        let mut pids = Vec::new();
+        for index in 0..count.min(available) {
+            let start = 4 + index * row_size;
+            let row = std::ptr::read_unaligned(buffer[start..].as_ptr() as *const Row);
+            let found = u16::from_be(row.local_port as u16);
+            if found == port && row.owning_pid != 0 && !pids.contains(&row.owning_pid) {
+                pids.push(row.owning_pid);
+            }
+        }
+        pids
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn linux_listener_pids(port: u16) -> Vec<u32> {
+    let mut inodes = Vec::new();
+    for name in ["/proc/net/tcp", "/proc/net/tcp6"] {
+        if let Ok(text) = std::fs::read_to_string(name) {
+            inodes.extend(listen_inodes(&text, port));
+        }
+    }
+    let mut pids = Vec::new();
+    for inode in inodes {
+        if let Some(pid) = pid_for_socket_inode(inode) {
+            if !pids.contains(&pid) {
+                pids.push(pid);
+            }
+        }
+    }
+    pids
+}
+
+#[cfg(target_os = "linux")]
+fn pid_for_socket_inode(inode: u64) -> Option<u32> {
+    let needle = format!("socket:[{inode}]");
+    let entries = std::fs::read_dir("/proc").ok()?;
+    for entry in entries.flatten() {
+        let Ok(pid) = entry.file_name().to_string_lossy().parse::<u32>() else {
+            continue;
+        };
+        let Ok(fds) = std::fs::read_dir(entry.path().join("fd")) else {
+            continue;
+        };
+        for fd in fds.flatten() {
+            let Ok(target) = std::fs::read_link(fd.path()) else {
+                continue;
+            };
+            if target.to_string_lossy() == needle {
+                return Some(pid);
+            }
+        }
+    }
+    None
+}
+
+#[cfg(target_os = "macos")]
+fn macos_listener_pids(port: u16) -> Vec<u32> {
+    let query = format!("-iTCP:{port}");
+    command_output("lsof", &["-nP", &query, "-sTCP:LISTEN", "-t"])
+        .map(|text| {
+            text.split_whitespace()
+                .filter_map(|item| item.parse().ok())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+#[cfg(any(windows, target_os = "macos"))]
+fn command_output(program: &str, args: &[&str]) -> Option<String> {
+    let output = std::process::Command::new(program)
+        .args(args)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    String::from_utf8(output.stdout).ok()
+}
+
+fn process_image(pid: u32) -> Option<String> {
+    #[cfg(windows)]
+    {
+        windows_process_image(pid)
+    }
+    #[cfg(target_os = "linux")]
+    {
+        std::fs::read_link(format!("/proc/{pid}/exe"))
+            .ok()
+            .map(|path| path.to_string_lossy().into_owned())
+    }
+    #[cfg(target_os = "macos")]
+    {
+        command_output("ps", &["-p", &pid.to_string(), "-o", "command="]).and_then(|text| {
+            let line = text.trim();
+            if line.is_empty() {
+                None
+            } else {
+                Some(line.split_whitespace().next()?.to_string())
+            }
+        })
+    }
+    #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
+    {
+        let _ = pid;
+        None
+    }
+}
+
+#[cfg(windows)]
+fn windows_process_image(pid: u32) -> Option<String> {
+    extern "system" {
+        fn OpenProcess(access: u32, inherit: i32, pid: u32) -> *mut std::ffi::c_void;
+        fn CloseHandle(handle: *mut std::ffi::c_void) -> i32;
+        fn QueryFullProcessImageNameW(
+            process: *mut std::ffi::c_void,
+            flags: u32,
+            name: *mut u16,
+            size: *mut u32,
+        ) -> i32;
+    }
+    const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
+    unsafe {
+        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if handle.is_null() {
+            return None;
+        }
+        let mut buf = vec![0u16; 1024];
+        let mut len = buf.len() as u32;
+        let ok = QueryFullProcessImageNameW(handle, 0, buf.as_mut_ptr(), &mut len);
+        CloseHandle(handle);
+        if ok == 0 {
+            return None;
+        }
+        buf.truncate(len as usize);
+        use std::os::windows::ffi::OsStringExt;
+        Some(
+            std::ffi::OsString::from_wide(&buf)
+                .to_string_lossy()
+                .into_owned(),
+        )
+    }
+}
+
+fn process_running(pid: u32) -> bool {
+    #[cfg(windows)]
+    {
+        windows_process_running(pid)
+    }
+    #[cfg(target_os = "linux")]
+    {
+        linux_process_running(pid)
+    }
+    #[cfg(all(unix, not(target_os = "linux")))]
+    {
+        unix_process_running(pid)
+    }
+    #[cfg(not(any(windows, unix)))]
+    {
+        let _ = pid;
+        false
+    }
+}
+
+#[cfg(windows)]
+fn windows_process_running(pid: u32) -> bool {
+    extern "system" {
+        fn OpenProcess(access: u32, inherit: i32, pid: u32) -> *mut std::ffi::c_void;
+        fn CloseHandle(handle: *mut std::ffi::c_void) -> i32;
+        fn GetExitCodeProcess(process: *mut std::ffi::c_void, code: *mut u32) -> i32;
+    }
+    const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
+    const STILL_ACTIVE: u32 = 259;
+    unsafe {
+        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if handle.is_null() {
+            return false;
+        }
+        let mut code = 0u32;
+        let ok = GetExitCodeProcess(handle, &mut code);
+        CloseHandle(handle);
+        ok != 0 && code == STILL_ACTIVE
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn linux_process_running(pid: u32) -> bool {
+    let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) else {
+        return false;
+    };
+    let Some((_, after)) = stat.rsplit_once(')') else {
+        return false;
+    };
+    let state = after.trim_start().chars().next();
+    matches!(state, Some(state) if state != 'Z' && state != 'X')
+}
+
+#[cfg(all(unix, not(target_os = "linux")))]
+fn unix_process_running(pid: u32) -> bool {
+    let Some(text) = command_output("ps", &["-o", "stat=", "-p", &pid.to_string()]) else {
+        return false;
+    };
+    let text = text.trim();
+    !text.is_empty() && !text.starts_with('Z')
+}
+
+#[cfg(unix)]
+fn signal_process(pid: u32, signal: i32) -> Result<(), String> {
+    let status = std::process::Command::new("kill")
+        .arg(format!("-{signal}"))
+        .arg(pid.to_string())
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map_err(|err| format!("could not stop process {pid}: {err}"))?;
+    if status.success() || !process_running(pid) {
+        Ok(())
+    } else {
+        Err(format!("could not stop process {pid}"))
+    }
+}
+
+fn listed_pids() -> Vec<u32> {
+    #[cfg(windows)]
+    {
+        windows_pids()
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let Ok(entries) = std::fs::read_dir("/proc") else {
+            return Vec::new();
+        };
+        entries
+            .flatten()
+            .filter_map(|entry| entry.file_name().to_string_lossy().parse().ok())
+            .collect()
+    }
+    #[cfg(target_os = "macos")]
+    {
+        command_output("ps", &["-ax", "-o", "pid="])
+            .map(|text| text.split_whitespace().filter_map(|item| item.parse().ok()).collect())
+            .unwrap_or_default()
+    }
+    #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
+    {
+        Vec::new()
+    }
+}
+
+#[cfg(windows)]
+fn windows_pids() -> Vec<u32> {
+    #[repr(C)]
+    struct ProcessEntry {
+        size: u32,
+        cnt_usage: u32,
+        pid: u32,
+        heap: usize,
+        module: u32,
+        threads: u32,
+        parent: u32,
+        priority: i32,
+        flags: u32,
+        exe: [u16; 260],
+    }
+    extern "system" {
+        fn CreateToolhelp32Snapshot(flags: u32, pid: u32) -> *mut std::ffi::c_void;
+        fn Process32FirstW(snap: *mut std::ffi::c_void, entry: *mut ProcessEntry) -> i32;
+        fn Process32NextW(snap: *mut std::ffi::c_void, entry: *mut ProcessEntry) -> i32;
+        fn CloseHandle(handle: *mut std::ffi::c_void) -> i32;
+    }
+    const TH32CS_SNAPPROCESS: u32 = 0x00000002;
+    unsafe {
+        let snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+        if snap == -1isize as *mut std::ffi::c_void || snap.is_null() {
+            return Vec::new();
+        }
+        let mut entry = std::mem::zeroed::<ProcessEntry>();
+        entry.size = std::mem::size_of::<ProcessEntry>() as u32;
+        let mut pids = Vec::new();
+        if Process32FirstW(snap, &mut entry) != 0 {
+            loop {
+                if entry.pid != 0 {
+                    pids.push(entry.pid);
+                }
+                entry.size = std::mem::size_of::<ProcessEntry>() as u32;
+                if Process32NextW(snap, &mut entry) == 0 {
+                    break;
+                }
+            }
+        }
+        CloseHandle(snap);
+        pids
     }
 }
 
@@ -861,5 +1692,313 @@ mod tests {
         assert!(!is_development_build(Path::new(
             "/home/target/bin/herdr-panels"
         )));
+    }
+
+    #[test]
+    fn update_restarts_a_running_viewer_and_reopens_its_window() {
+        assert_eq!(
+            viewer_restart("http://127.0.0.1:4737", true, Some(42), true),
+            ViewerRestart::Restart {
+                pid: 42,
+                server_args: vec![
+                    "server".into(),
+                    "--host".into(),
+                    "127.0.0.1".into(),
+                    "--port".into(),
+                    "4737".into(),
+                ],
+                open_desktop: true,
+            }
+        );
+    }
+
+    #[test]
+    fn update_leaves_a_stopped_viewer_stopped() {
+        assert_eq!(
+            viewer_restart("http://127.0.0.1:4737", false, None, false),
+            ViewerRestart::NotRunning
+        );
+    }
+
+    #[test]
+    fn update_does_not_guess_when_the_viewer_process_is_unknown() {
+        assert_eq!(
+            viewer_restart("http://127.0.0.1:48001", true, None, false),
+            ViewerRestart::CouldNotFind {
+                url: "http://127.0.0.1:48001".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn the_recorded_process_wins_and_one_listener_is_the_fallback() {
+        assert_eq!(
+            choose_server_pid(Some(7), true, &[8], |_| true),
+            Some(7)
+        );
+        assert_eq!(
+            choose_server_pid(Some(7), false, &[8], |_| true),
+            Some(8)
+        );
+        assert_eq!(choose_server_pid(None, false, &[8, 9], |_| true), None);
+        assert_eq!(choose_server_pid(None, false, &[8], |_| false), None);
+    }
+
+    #[test]
+    fn a_renamed_running_image_is_still_the_server() {
+        assert!(server_image("herdr-panels"));
+        assert!(server_image("herdr-panels.exe"));
+        assert!(server_image("herdr-panels.exe.previous"));
+        assert!(server_image(
+            r"C:\Users\x\.local\bin\herdr-panels.exe.previous-2"
+        ));
+        assert!(server_image("/usr/local/bin/herdr-panels (deleted)"));
+        assert!(!server_image("herdr-panels-desktop"));
+        assert!(!server_image("herdr-panels-desktop.exe"));
+        assert!(!server_image("herdr-panels-desktop.exe.previous"));
+        assert!(!server_image("nginx"));
+    }
+
+    #[test]
+    fn the_desktop_window_is_separate_from_the_server() {
+        assert!(desktop_image("herdr-panels-desktop"));
+        assert!(desktop_image("/home/x/.local/bin/herdr-panels-desktop"));
+        assert!(desktop_image("herdr-panels-desktop.exe.previous"));
+        assert!(!desktop_image("herdr-panels"));
+        assert!(!desktop_image("herdr-panels.exe"));
+    }
+
+    #[test]
+    fn server_record_keeps_the_listener_pid() {
+        assert_eq!(
+            pid_in_server_record(r#"{"url":"http://127.0.0.1:4737","pid":4242}"#),
+            Some(4242)
+        );
+        assert_eq!(
+            pid_in_server_record(r#"{"url":"http://127.0.0.1:4737"}"#),
+            None
+        );
+        assert_eq!(pid_in_server_record(r#"{"pid":0}"#), None);
+    }
+
+    #[test]
+    fn the_saved_server_record_includes_this_process() {
+        let dir = scratch();
+        crate::client::record_server(&dir, "http://127.0.0.1:47991").unwrap();
+        let text = std::fs::read_to_string(dir.join("server.json")).unwrap();
+        assert_eq!(pid_in_server_record(&text), Some(std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn proc_net_tcp_finds_the_listening_socket() {
+        let table = "\
+  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode
+   0: 0100007F:1281 00000000:0000 0A 00000000:00000000 00:00000000 00000000     0        0 555 1 0000000000000000 100 0 0 10 0
+   1: 0100007F:1282 00000000:0000 0A 00000000:00000000 00:00000000 00000000     0        0 556 1 0000000000000000 100 0 0 10 0
+   2: 0100007F:1281 0100007F:1F90 01 00000000:00000000 00:00000000 00000000     0        0 557 1 0000000000000000 100 0 0 10 0
+";
+        assert_eq!(listen_inodes(table, 4737), vec![555]);
+    }
+
+    #[test]
+    fn netstat_finds_the_listening_pid() {
+        let text = "\
+  TCP    127.0.0.1:4737         0.0.0.0:0              LISTENING       4242
+  TCP    127.0.0.1:47370        0.0.0.0:0              LISTENING       99
+  TCP    127.0.0.1:80           127.0.0.1:4737         ESTABLISHED     7
+";
+        assert_eq!(pids_listening(text, 4737), vec![4242]);
+    }
+
+    #[test]
+    fn stopping_a_process_ends_it() {
+        let mut child = long_sleeper();
+        let pid = child.id();
+        let stopped = stop_process(pid);
+        let exited = wait_until_exited(&mut child, Duration::from_secs(4));
+        if !exited {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        assert!(stopped.is_ok(), "{stopped:?}");
+        assert!(exited, "process {pid} was still running");
+    }
+
+    #[test]
+    fn a_restart_says_the_viewer_is_running_again() {
+        let lines = update_result_lines(
+            "0.1.7",
+            true,
+            &RestartOutcome::Restarted {
+                url: "http://127.0.0.1:4737".into(),
+                desktop: true,
+            },
+        );
+        assert!(
+            lines.iter().any(|line| line.contains("herdr-panels-desktop")),
+            "{lines:?}"
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("Restarted the viewer at http://127.0.0.1:4737")),
+            "{lines:?}"
+        );
+        assert!(
+            lines.iter().any(|line| line.contains("desktop window")),
+            "{lines:?}"
+        );
+        assert!(
+            lines.iter().all(|line| !line.contains("Restart the viewer")),
+            "{lines:?}"
+        );
+    }
+
+    fn long_sleeper() -> std::process::Child {
+        #[cfg(windows)]
+        {
+            std::process::Command::new("powershell.exe")
+                .args(["-NoProfile", "-Command", "Start-Sleep -Seconds 40"])
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .unwrap()
+        }
+        #[cfg(not(windows))]
+        {
+            std::process::Command::new("sleep")
+                .arg("40")
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .unwrap()
+        }
+    }
+
+    fn wait_until_exited(child: &mut std::process::Child, limit: Duration) -> bool {
+        let start = std::time::Instant::now();
+        while start.elapsed() < limit {
+            if child.try_wait().ok().flatten().is_some() {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(30));
+        }
+        child.try_wait().ok().flatten().is_some()
+    }
+
+    #[test]
+    fn a_bound_port_belongs_to_this_process() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let pids = listener_pids(port);
+        assert!(
+            pids.contains(&std::process::id()),
+            "port {port} pids {pids:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_running_server_is_replaced_by_a_new_process() {
+        let current = std::env::current_exe().unwrap();
+        let exe = current.parent().unwrap().parent().unwrap().join(if cfg!(windows) {
+            "herdr-panels.exe"
+        } else {
+            "herdr-panels"
+        });
+        assert!(
+            exe.is_file(),
+            "missing {} — build herdr-panels before this test",
+            exe.display()
+        );
+        let dir = scratch();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+        let url = format!("http://127.0.0.1:{port}");
+        let config = dir.to_string_lossy().into_owned();
+        let port_text = port.to_string();
+        let socket = dir.join("missing-herdr.sock").to_string_lossy().into_owned();
+        let mut child = std::process::Command::new(&exe)
+            .args([
+                "server",
+                "--config",
+                &config,
+                "--port",
+                &port_text,
+                "--herdr-socket",
+                &socket,
+            ])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let old_pid = child.id();
+        let started = std::time::Instant::now();
+        let mut up = false;
+        while started.elapsed() < Duration::from_secs(8) {
+            if matches!(
+                crate::launch::inspect(&url, None).await,
+                crate::launch::Probe::Up
+            ) {
+                up = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        if !up {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("viewer did not start on {url}");
+        }
+
+        let previous = std::env::var_os("HERDR_PANELS_CONFIG");
+        std::env::set_var("HERDR_PANELS_CONFIG", &dir);
+        let outcome = restart_installed_viewer(&exe).await;
+        match &previous {
+            Some(value) => std::env::set_var("HERDR_PANELS_CONFIG", value),
+            None => std::env::remove_var("HERDR_PANELS_CONFIG"),
+        }
+        let outcome = match outcome {
+            Ok(outcome) => outcome,
+            Err(err) => {
+                let _ = stop_process(old_pid);
+                let _ = child.wait();
+                panic!("{err}");
+            }
+        };
+        assert_eq!(
+            outcome,
+            RestartOutcome::Restarted {
+                url: url.clone(),
+                desktop: false,
+            }
+        );
+        let _ = child.wait();
+        assert!(!process_running(old_pid), "old viewer {old_pid} is still running");
+        let text = std::fs::read_to_string(dir.join("server.json")).unwrap();
+        let new_pid = pid_in_server_record(&text).expect("new pid");
+        assert_ne!(new_pid, old_pid);
+        assert!(process_running(new_pid), "new viewer {new_pid} is not running");
+        assert!(matches!(
+            crate::launch::inspect(&url, None).await,
+            crate::launch::Probe::Up
+        ));
+        stop_process(new_pid).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn this_process_has_an_image_and_is_in_the_process_list() {
+        let image = process_image(std::process::id()).expect("process image");
+        assert!(!server_image(&image), "{image}");
+        assert!(
+            listed_pids().contains(&std::process::id()),
+            "process list omitted {}",
+            std::process::id()
+        );
     }
 }

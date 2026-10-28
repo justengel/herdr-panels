@@ -141,11 +141,12 @@ A plugin is a view. `views` lists the viewers it adds. Each view has an `id`, a 
 herdr-panels plugin install --example
 herdr-panels plugin install <directory>
 herdr-panels plugin install <directory> --yes
+herdr-panels plugin uninstall <id>
 herdr-panels plugin list
 herdr-panels panel open plugin:my-plugin --from Notes
 ```
 
-Install prints any permissions and file paths and asks before copying. `--yes` skips the question. Pass it when there is no prompt, including for `checkin-report`. `plugin list` shows each plugin's permissions. Pass `--replace` to overwrite an installed plugin. The page is sandboxed. It cannot call the viewer API. A plugin can talk to another localhost server that it runs itself. Open the check-in report with `herdr-panels panel open plugin:checkin-report`. `examples/plugins/desk-sample` is the desk-permission sample. It asks for `panels:read` and `panels:control`, opens `https://example.com`, can set the desktop window zoom, and does not show the other panels. Install it with `--yes`. Focusing a pane from it also needs `"control": true` on that panel. The command cannot set that flag. Use `POST /api/agent/update` with the panel object when it has to be set from here.
+Install prints any permissions and file paths and asks before copying. `--yes` skips the question. Pass it when there is no prompt, including for `checkin-report`. `plugin list` shows each plugin's permissions. Pass `--replace` to overwrite an installed plugin. `plugin uninstall <id>` removes that plugin directory. The open desk drops it from the menu. An open panel that was showing it stays until it is closed. The page is sandboxed. It cannot call the viewer API. A plugin can talk to another localhost server that it runs itself. Open the check-in report with `herdr-panels panel open plugin:checkin-report`. `examples/plugins/desk-sample` is the desk-permission sample. It asks for `panels:read` and `panels:control`, opens `https://example.com`, can set the desktop window zoom, and does not show the other panels. Install it with `--yes`. Focusing a pane from it also needs `"control": true` on that panel. The command cannot set that flag. Use `POST /api/agent/update` with the panel object when it has to be set from here.
 
 ## Sessions
 

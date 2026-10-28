@@ -95,9 +95,10 @@ Install the Welcome sample, or copy another directory into the config folder:
 ```text
 herdr-panels plugin install --example
 herdr-panels plugin install <directory>
+herdr-panels plugin uninstall <id>
 ```
 
-Pass `--replace` to overwrite a plugin that is already installed. `herdr-panels plugin list` prints the ones the menu can show.
+Pass `--replace` to overwrite a plugin that is already installed. `herdr-panels plugin uninstall <id>` removes that plugin. The open desk drops it from the menu. `herdr-panels plugin list` prints the ones the menu can show.
 
 An agent can turn a panel into that plugin with `{"type":"plugin","plugin":"my-plugin"}`. A file view also stores the view and the address: `{"type":"plugin","plugin":"vim","view":"edit","path":"notes/a.md"}`. A directory view sets `"directory": true`. A page view stores `"url"` instead of `"path"`.
 

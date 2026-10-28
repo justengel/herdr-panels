@@ -2,6 +2,10 @@
 
 Recorded 2026-10-27 from the review before the first public release. Closed items are here so this list stays the place to come back to.
 
+## Unreleased
+
+- `herdr-panels update` stops a running viewer and starts the new program on the same address. The open desk shows a plugin after `plugin install` and drops it after `plugin uninstall`.
+
 ## Done in 0.1.6
 
 - `herdr-panels` opens the desktop window when the viewer is already running, and `herdr-panels install-launcher` writes the Linux menu entry and hicolor icons.

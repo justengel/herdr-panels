@@ -24,6 +24,7 @@ import {
   splitPanel,
 } from "./layoutEdit";
 import { DeskProvider, type PluginInfo } from "./desk";
+import { pluginListChanged } from "./pluginList";
 import { PanelActionsProvider } from "./panelActions";
 import type { Attachment, LayoutDocument, LayoutNode, PanelConfig, RuntimeSnapshot } from "./types";
 import { LayoutView } from "./components/LayoutView";
@@ -190,9 +191,6 @@ export function App() {
         void api.sessions().then((list) => {
           if (!stopped) setSessions(list.sessions.map((item) => item.name));
         });
-        void api.plugins().then((list) => {
-          if (!stopped) setPlugins(list.plugins);
-        });
       })
       .catch((err: unknown) => {
         if (!stopped) setError(err instanceof Error ? err.message : String(err));
@@ -206,7 +204,19 @@ export function App() {
       );
     };
     refreshCtl();
+    const refreshPlugins = () => {
+      void api.plugins().then(
+        (list) => {
+          if (!stopped) {
+            setPlugins((current) => (pluginListChanged(current, list.plugins) ? list.plugins : current));
+          }
+        },
+        () => undefined,
+      );
+    };
+    refreshPlugins();
     const poll = window.setInterval(() => {
+      refreshPlugins();
       api
         .runtime()
         .then((next) => {

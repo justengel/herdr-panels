@@ -141,7 +141,7 @@ export const api = {
       method: "POST",
       body: JSON.stringify(body),
     }),
-  plugins: () => request<{ plugins: PluginInfo[] }>("/api/plugins"),
+  plugins: () => request<{ plugins: PluginInfo[] }>("/api/plugins", { cache: "no-store" }),
   pluginBridge: (
     pluginId: string,
     body: { panelId: string; method: string; params?: Record<string, unknown> },
