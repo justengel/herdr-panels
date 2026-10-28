@@ -25,7 +25,23 @@ sudo apt install libwebkit2gtk-4.1-0
 
 Unpack the archive and run `./herdr-panels` from that folder. The desktop program is beside it, so this opens the window and listens on http://127.0.0.1:4737. The first start writes the viewer token and the example layouts into the config directory. A browser tab at that address shows the same desk. `herdr-panels server` starts the server and leaves the window closed.
 
-`herdr-panels update` downloads the latest GitHub release for this system and replaces `herdr-panels`. When `herdr-panels-desktop` is in the same folder, that program is replaced from the same release. Restart the viewer afterward. A copy that is still in a cargo target directory is left unchanged. The command is on `herdr-panels`, not on the desktop program.
+`herdr-panels update` downloads the latest GitHub release for this system and replaces `herdr-panels`. When `herdr-panels-desktop` is in the same folder, that program is replaced from the same release. Restart the viewer afterward. A copy that is still in a cargo target directory is left unchanged. The command is on `herdr-panels`, not on the desktop program. Run `herdr-panels install-launcher` again after an update so the application menu keeps the new program path.
+
+`herdr-panels` with no arguments starts the viewer and the desktop window. When that viewer is already running, the same command opens the window and exits. It checks the address in `server.json`, the same address `herdr-panels status` uses. If that address belongs to another program, the message says it is not a herdr-panels viewer. `herdr-panels server` still only starts the viewer. A second server on the same address does not start.
+
+Closing the window does not stop the viewer that `herdr-panels` started. The desk stays available to a browser tab and to `herdr-panels panel`. Stop that viewer by ending the `herdr-panels` process. The exited desktop window is waited on, so it does not stay behind as a zombie. `herdr-panels-desktop` is different: when nothing is listening, it starts a viewer inside the desktop process, and closing that window stops the viewer it started. The application menu runs `herdr-panels` so the viewer stays up.
+
+### Linux application menu
+
+On a desktop session, install the menu entry from the program you want the menu to run:
+
+```sh
+herdr-panels install-launcher
+```
+
+This writes `$XDG_DATA_HOME/applications/herdr-panels.desktop`, or `~/.local/share/applications/herdr-panels.desktop` when `XDG_DATA_HOME` is unset. `Exec` is the absolute path of that `herdr-panels` program. `Icon` is the name `herdr-panels`. The icons are installed under `icons/hicolor` at 48, 128, and 256 pixels, plus the SVG in `scalable`. `StartupWMClass` is `herdr-panels-desktop`, which is the class the window uses. The command then runs `update-desktop-database` on the applications directory when that program is installed (`desktop-file-utils`).
+
+The menu's starting spinner ends when a window of that class appears. `gtk-launch` itself returns as soon as the process has been started. The window shows after the desktop program creates its web view.
 
 On Windows, unpack the zip and run `herdr-panels.exe`. The window uses the WebView2 already on Windows 10 and 11.
 
@@ -69,7 +85,7 @@ cargo install --path src-tauri
 
 Run that from the repository root. After it is installed, `herdr-panels` opens the native window instead of a browser tab. `herdr-panels desktop` opens that window directly. The window uses the operating system's web view. Windows uses the WebView2 already on the machine, and macOS uses the system web view. The Linux build needs WebKitGTK. A browser tab can still open http://127.0.0.1:4737 while the window is open. They share the Herdr session and that session's desk.
 
-`herdr-panels server` starts the server and leaves the window and the browser closed. `herdr-panels server --open` opens a browser tab even when the desktop program is installed. A second server on port 4737 will not start. From this checkout, before `herdr-panels` is on your PATH, `cargo run --release` does the same thing.
+`herdr-panels server` starts the server and leaves the window and the browser closed. `herdr-panels server --open` opens a browser tab even when the desktop program is installed. Running `herdr-panels` again, with the viewer already up, opens the desktop window and exits. A second `herdr-panels server` on the same address does not start. From this checkout, before `herdr-panels` is on your PATH, `cargo run --release` does the same thing. `herdr-panels install-launcher` writes the Linux menu entry described under [Linux application menu](#linux-application-menu).
 
 UI development, server flags, and the short layout commands are in [Setup](#setup).
 
@@ -252,6 +268,7 @@ herdr-panels plugin install --example
 herdr-panels plugin install <directory>
 herdr-panels plugin install <directory> --yes
 herdr-panels update
+herdr-panels install-launcher
 herdr-panels token rotate
 herdr-panels token set <value>
 ```
@@ -289,7 +306,7 @@ cargo run -- server --herdr-session demo
 
 ## Desktop shell
 
-`src-tauri` opens this same viewer in a native window. How to start it is in [Install and run](#install-and-run). Ctrl or Cmd with the mouse wheel, plus, minus, or 0 scales the desktop panels together, from 25% to 500%. The session bar stays the same size, and a terminal keeps its place in its history. A browser tab uses the browser's own zoom. A browser panel whose address is `http` or `https` is a child webview laid on that panel's content rectangle, so the site is its own top-level page. Moving a divider sends the new rectangle to the webview. A right-click menu stays on screen and the webview shifts out from under it. The settings dialog, design mode, and a panel drag hide the webview so those controls can take the pointer. Element selection stays on the page and runs inside it. A normal browser tab still uses an iframe.
+`src-tauri` opens this same viewer in a native window. How to start it is in [Install and run](#install-and-run). The window class is `herdr-panels-desktop`. Closing the window leaves the viewer running when `herdr-panels` started it. Ctrl or Cmd with the mouse wheel, plus, minus, or 0 scales the desktop panels together, from 25% to 500%. The session bar stays the same size, and a terminal keeps its place in its history. A browser tab uses the browser's own zoom. A browser panel whose address is `http` or `https` is a child webview laid on that panel's content rectangle, so the site is its own top-level page. Moving a divider sends the new rectangle to the webview. A right-click menu stays on screen and the webview shifts out from under it. The settings dialog, design mode, and a panel drag hide the webview so those controls can take the pointer. Element selection stays on the page and runs inside it. A normal browser tab still uses an iframe.
 
 ## Development checks
 

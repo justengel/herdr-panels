@@ -275,6 +275,16 @@ pub fn run() {
             set_frame_focus
         ])
         .setup(|app| {
+            if let Ok(raw) = std::env::var("HERDR_PANELS_URL") {
+                let raw = raw.trim().trim_end_matches('/').to_string();
+                if !raw.is_empty() && raw != VIEWER {
+                    if let Some(window) = app.get_webview_window("main") {
+                        if let Ok(target) = format!("{raw}/").parse() {
+                            let _ = window.navigate(target);
+                        }
+                    }
+                }
+            }
             #[cfg(windows)]
             browser_wheel::install(app.handle().clone());
             Ok(())

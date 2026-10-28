@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.6 - 2026-10-28
+
+`herdr-panels` opens the desktop window and exits when the viewer is already running. Another program on that address is reported as not a herdr-panels viewer. The desktop child is waited on, so closing the window does not leave a zombie, and the viewer keeps running. `herdr-panels install-launcher` writes a desktop entry with `StartupWMClass=herdr-panels-desktop` and hicolor icons at 48, 128, and 256 pixels plus the SVG. The window icon is the 256 pixel image.
+
 ## 0.1.5 - 2026-10-28
 
 The Windows path helper is compiled only on Windows, so the macOS and Linux builds succeed.

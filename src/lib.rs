@@ -21,6 +21,8 @@ pub mod herdr;
 pub mod herdr_config;
 pub mod herdr_ctl;
 pub mod keys;
+pub mod launch;
+pub mod launcher;
 pub mod layout;
 pub mod layout_ops;
 pub mod open_target;

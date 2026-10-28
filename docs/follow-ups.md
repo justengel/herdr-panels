@@ -2,6 +2,10 @@
 
 Recorded 2026-10-27 from the review before the first public release. Closed items are here so this list stays the place to come back to.
 
+## Done in 0.1.6
+
+- `herdr-panels` opens the desktop window when the viewer is already running, and `herdr-panels install-launcher` writes the Linux menu entry and hicolor icons.
+
 ## Done in 0.1.5
 
 - The Windows path helper is compiled only on Windows, so the macOS and Linux builds succeed.
@@ -31,7 +35,7 @@ Recorded 2026-10-27 from the review before the first public release. Closed item
 
 ### Desktop installers
 
-The window is in the release archive. Tauri packaging is still off (`bundle.active` is false), so there is no `.deb`, `.msi`, or `.dmg`. The window turns devtools on and sets no content security policy. Linux still needs the system WebKitGTK package named above.
+The window is in the release archive. Tauri packaging is still off (`bundle.active` is false), so there is no `.deb`, `.msi`, or `.dmg`. `herdr-panels install-launcher` writes the Linux application menu entry and the hicolor icons. The window turns devtools on and sets no content security policy. Linux still needs the system WebKitGTK package named above. The dock icon and the menu's starting spinner still need a check on an X11 session.
 
 ### Code signing
 

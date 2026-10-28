@@ -135,7 +135,15 @@ pub async fn serve(config: ServerConfig) -> anyhow::Result<()> {
         config.port,
     )?;
     let addr = SocketAddr::from((config.host, config.port));
-    let listener = tokio::net::TcpListener::bind(addr).await?;
+    let listener = match tokio::net::TcpListener::bind(addr).await {
+        Ok(listener) => listener,
+        Err(err) => {
+            if let Some(message) = crate::launch::explain_bind(err.kind(), &config.url) {
+                return Err(anyhow::anyhow!(message));
+            }
+            return Err(anyhow::Error::from(err).context("server stopped"));
+        }
+    };
     crate::client::record_server(&config.config_dir, &config.url)?;
     tracing::info!("listening on {}", config.url);
     tracing::info!("config directory {}", config.config_dir.display());
@@ -148,7 +156,7 @@ pub async fn serve(config: ServerConfig) -> anyhow::Result<()> {
         tracing::info!("UI bundle not found; run `npm run dev` in web/ or `npm run build`");
     }
     if config.open_desktop {
-        match crate::cli::spawn_desktop() {
+        match crate::cli::spawn_desktop_at(Some(&config.url)) {
             Ok(()) => tracing::info!("opened the desktop window"),
             Err(err) => {
                 tracing::warn!("desktop window: {err:#}");
