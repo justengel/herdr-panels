@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.5 - 2026-10-28
+
+The Windows path helper is compiled only on Windows, so the macOS and Linux builds succeed.
+
 ## 0.1.4 - 2026-10-28
 
 A file grant stays inside its directory on macOS when an existing folder, such as `/home` or `/Users`, is a firmlink. Path checks use each system's own separators. `herdr-panels update` is the only update command.

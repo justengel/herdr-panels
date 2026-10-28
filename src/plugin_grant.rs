@@ -316,17 +316,23 @@ fn deepest_existing(path: &Path) -> Option<PathBuf> {
 }
 
 fn same_place(path: &Path, canon: &Path) -> bool {
-    if cfg!(windows) {
+    #[cfg(windows)]
+    {
         strip_verbatim(path).eq_ignore_ascii_case(&strip_verbatim(canon))
-    } else {
+    }
+    #[cfg(not(windows))]
+    {
         path == canon
     }
 }
 
 fn display_path(path: &Path) -> String {
-    if cfg!(windows) {
+    #[cfg(windows)]
+    {
         strip_verbatim(path)
-    } else {
+    }
+    #[cfg(not(windows))]
+    {
         path.display().to_string()
     }
 }

@@ -1,6 +1,6 @@
 id = "herdr-panels"
 name = "Herdr Panels"
-version = "0.1.4"
+version = "0.1.5"
 min_herdr_version = "0.8.0"
 description = "Open the Herdr Panels desk. Requires the herdr-panels release binary on PATH."
 platforms = ["linux", "macos", "windows"]

@@ -2,6 +2,10 @@
 
 Recorded 2026-10-27 from the review before the first public release. Closed items are here so this list stays the place to come back to.
 
+## Done in 0.1.5
+
+- The Windows path helper is compiled only on Windows, so the macOS and Linux builds succeed.
+
 ## Done in 0.1.4
 
 - A file grant stays inside its directory on macOS when an existing folder is a firmlink. Paths use each system's own separators.
