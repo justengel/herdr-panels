@@ -191,6 +191,7 @@ export const api = {
     label?: string;
     direction?: string;
     beforeWorkspaceId?: string;
+    insertIndex?: number;
   }) =>
     request<{ ok: boolean }>("/api/herdr/action", {
       method: "POST",

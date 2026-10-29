@@ -60,6 +60,7 @@ import {
   markWorkspaceFocused,
   preferPendingPane,
   preferPendingSpace,
+  spaceReturnFocus,
   readSpaceLayouts,
   saveSpaceLayout,
   seedSpaceLayout,
@@ -327,18 +328,17 @@ export function App() {
     const doc = layoutRef.current;
     if (!doc || !workspaceId) return null;
     const snapshot = runtimeRef.current;
-    const panes = snapshot?.panes ?? [];
-    const inSpace = panes.filter((pane) => pane.workspaceId === workspaceId);
-    const chosen =
-      (paneId ? inSpace.find((pane) => pane.paneId === paneId) : null) ??
-      inSpace.find((pane) => pane.focused) ??
-      inSpace[0] ??
-      null;
-    const focusPane = chosen?.paneId ?? null;
+    const choice = snapshot
+      ? spaceReturnFocus(snapshot, workspaceId, paneId)
+      : {
+          request: (paneId ? { paneId } : { workspaceId }) as { paneId: string } | { workspaceId: string },
+          paneId: paneId ?? null,
+        };
+    const displayPane = choice.paneId;
 
     if (spaceRef.current === workspaceId && !paneId) {
       pendingSpaceRef.current = workspaceId;
-      void (focusPane ? api.focus({ paneId: focusPane }) : api.focus({ workspaceId })).catch(() => undefined);
+      void api.focus({ workspaceId }).catch(() => undefined);
       return null;
     }
 
@@ -350,21 +350,21 @@ export function App() {
       writeSpaceMap(workspaceId);
       setZoomedId(null);
       landed = paneId
-        ? layoutForFocusedPane(layoutForSpace(workspaceId, seedSpaceLayout()), paneId)
-        : bindTerminalPane(layoutForSpace(workspaceId, seedSpaceLayout()), focusPane);
+        ? layoutForFocusedPane(layoutForSpace(workspaceId, seedSpaceLayout()), displayPane ?? paneId)
+        : bindTerminalPane(layoutForSpace(workspaceId, seedSpaceLayout()), displayPane);
       showSpaceLayout(doc, landed);
-      if (snapshot) setRuntime(markWorkspaceFocused(snapshot, workspaceId, focusPane));
-    } else if (paneId && focusPane) {
+      if (snapshot) setRuntime(markWorkspaceFocused(snapshot, workspaceId, displayPane));
+    } else if (paneId && displayPane) {
       pendingSpaceRef.current = workspaceId;
-      landed = layoutForFocusedPane(doc.root, focusPane);
+      landed = layoutForFocusedPane(doc.root, displayPane);
       if (landed !== doc.root) showSpaceLayout(doc, landed);
-      if (snapshot) setRuntime(markWorkspaceFocused(snapshot, workspaceId, focusPane));
+      if (snapshot) setRuntime(markWorkspaceFocused(snapshot, workspaceId, displayPane));
     }
 
-    if (paneId) pendingPaneRef.current = focusPane;
-    void (focusPane ? api.focus({ paneId: focusPane }) : api.focus({ workspaceId })).catch(() => undefined);
+    if ("paneId" in choice.request) pendingPaneRef.current = choice.request.paneId;
+    void api.focus(choice.request).catch(() => undefined);
     const refs = panelRefs(listPanels(landed));
-    if (focusPane) return panelForPane(refs, focusPane, null)?.id ?? refs[0]?.id ?? null;
+    if (displayPane) return panelForPane(refs, displayPane, null)?.id ?? refs[0]?.id ?? null;
     return refs[0]?.id ?? null;
   }, [showSpaceLayout]);
 

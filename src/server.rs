@@ -1640,6 +1640,9 @@ struct HerdrAction {
     /// Space that the dragged space should sit in front of. Absent means the end of the list.
     #[serde(default)]
     before_workspace_id: Option<String>,
+    /// Index in the tab strip before the move. The length of the strip puts the tab at the end.
+    #[serde(default)]
+    insert_index: Option<u32>,
 }
 
 async fn herdr_action(
@@ -1701,6 +1704,38 @@ async fn herdr_action(
         "tab.close" => {
             let tab_id = required(body.tab_id, "a tab")?;
             client.call("tab.close", json!({ "tab_id": tab_id })).await
+        }
+        "tab.rename" => {
+            let tab_id = required(body.tab_id, "a tab")?;
+            if !is_pane_id(&tab_id) {
+                return Err(ApiError::bad("invalid tab id"));
+            }
+            let label = required(body.label.filter(|label| !label.trim().is_empty()), "a name")?;
+            let label = label.trim();
+            if label.chars().count() > 80 {
+                return Err(ApiError::bad("a tab name is at most 80 characters"));
+            }
+            client
+                .call("tab.rename", json!({ "tab_id": tab_id, "label": label }))
+                .await
+        }
+        "tab.move" => {
+            let tab_id = required(body.tab_id, "a tab")?;
+            if !is_pane_id(&tab_id) {
+                return Err(ApiError::bad("invalid tab id"));
+            }
+            let Some(insert_index) = body.insert_index else {
+                return Err(ApiError::bad("needs a place"));
+            };
+            if insert_index > 64 {
+                return Err(ApiError::bad("invalid place"));
+            }
+            client
+                .call(
+                    "tab.move",
+                    json!({ "tab_id": tab_id, "insert_index": insert_index }),
+                )
+                .await
         }
         "pane.focus_direction" => {
             let direction = required(body.direction, "a direction")?;

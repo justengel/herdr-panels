@@ -37,6 +37,9 @@ interface HostValue {
   /** Create a Herdr tab in this space, the same action as the TUI new-tab key. */
   newTab: (workspaceId?: string) => Promise<void>;
   closeTab: (tabId: string) => Promise<void>;
+  renameTab: (tabId: string, label: string) => Promise<void>;
+  /** Move a Herdr tab. `insertIndex` is the index in the strip before the move, or the strip length for the end. */
+  moveTab: (tabId: string, insertIndex: number) => Promise<boolean>;
   renameSpace: (workspaceId: string, label: string) => Promise<void>;
   closeSpace: (workspaceId: string) => Promise<void>;
   /** Move one space before another. A null anchor puts it at the end of the list. */
@@ -382,6 +385,28 @@ export function HostProvider({
     }
   }
 
+  async function renameTab(tabId: string, label: string) {
+    const name = label.trim().slice(0, 80);
+    if (!name) return;
+    try {
+      await api.herdrAction({ action: "tab.rename", tabId, label: name });
+      await refresh();
+    } catch (err) {
+      noticeRef.current(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  async function moveTab(tabId: string, insertIndex: number): Promise<boolean> {
+    try {
+      await api.herdrAction({ action: "tab.move", tabId, insertIndex });
+      await refresh();
+      return true;
+    } catch (err) {
+      noticeRef.current(err instanceof Error ? err.message : String(err));
+      return false;
+    }
+  }
+
   async function newTab(workspaceId?: string) {
     const space = workspaceId || runtimeRef.current?.focusedWorkspaceId || undefined;
     try {
@@ -505,6 +530,8 @@ export function HostProvider({
     createSpace,
     newTab,
     closeTab,
+    renameTab,
+    moveTab,
     renameSpace,
     closeSpace,
     moveSpace,

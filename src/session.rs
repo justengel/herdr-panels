@@ -41,6 +41,9 @@ pub struct WorkspaceView {
     pub workspace_id: String,
     pub label: String,
     pub focused: bool,
+    /// Tab this workspace returns to. Herdr keeps one per workspace.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub active_tab_id: Option<String>,
     pub root: Option<String>,
     pub branch: Option<String>,
     pub dirty: bool,
@@ -208,6 +211,7 @@ pub fn map_snapshot(socket: &str, result: &Value) -> Result<RuntimeSnapshot, Str
                     .get("focused")
                     .and_then(Value::as_bool)
                     .unwrap_or(false),
+                active_tab_id: text(&workspace, "active_tab_id"),
                 root: workspace.get("worktree").and_then(|worktree| {
                     text(worktree, "checkout_path").or_else(|| text(worktree, "repo_root"))
                 }),
@@ -553,7 +557,7 @@ mod tests {
             "focused_pane_id": "w4:p2",
             "focused_tab_id": "w4:t2",
             "focused_workspace_id": "w4",
-            "workspaces": [{"workspace_id": "w4", "label": "projects", "focused": true}],
+            "workspaces": [{"workspace_id": "w4", "label": "projects", "focused": true, "active_tab_id": "w4:t2"}],
             "tabs": [
               {"tab_id": "w4:t1", "workspace_id": "w4", "label": "1", "focused": false},
               {"tab_id": "w4:t2", "workspace_id": "w4", "label": "2", "focused": true}
@@ -576,6 +580,7 @@ mod tests {
         let runtime = map_snapshot("sock", &value).unwrap();
         assert_eq!(runtime.focused_tab_id.as_deref(), Some("w4:t2"));
         assert_eq!(runtime.focused_workspace_id.as_deref(), Some("w4"));
+        assert_eq!(runtime.workspaces[0].active_tab_id.as_deref(), Some("w4:t2"));
         assert_eq!(runtime.tabs.len(), 2);
         assert_eq!(runtime.tabs[1].label, "2");
         assert!(runtime.tabs[1].focused);
@@ -599,6 +604,7 @@ mod tests {
                 workspace_id: "w1".to_string(),
                 label: "proj".to_string(),
                 focused: true,
+                active_tab_id: None,
                 root: None,
                 branch: None,
                 dirty: false,

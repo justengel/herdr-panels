@@ -517,10 +517,7 @@ function Surface({
             onOpenSpace(workspaceId);
             return;
           }
-          const inSpace = panes.filter((pane) => pane.workspaceId === workspaceId);
-          const pane = inSpace.find((item) => item.focused) ?? inSpace[0];
-          if (pane) onFocusPane(pane.paneId);
-          else void api.focus({ workspaceId });
+          void api.focus({ workspaceId });
         }}
       />
     );

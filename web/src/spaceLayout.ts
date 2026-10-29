@@ -1,4 +1,4 @@
-import type { LayoutNode, PanelNode, RuntimeSnapshot } from "./types";
+import type { LayoutNode, PaneView, PanelNode, RuntimeSnapshot } from "./types";
 import { closePanel, ensureSidebar, listPanels, setPanel } from "./layoutEdit";
 import { findPin, pinApplies, readPins, removePin, unpinFromSpace, writePins, type PinRecord } from "./pins";
 import { touchDesk } from "./deskBus";
@@ -260,20 +260,56 @@ export function layoutForSpace(workspaceId: string, fallback: LayoutNode): Layou
   return mergePins(stored, workspaceId);
 }
 
+/** Pane Herdr shows for a space that is not the one currently focused. */
+export function paneOnActiveTab(runtime: RuntimeSnapshot, workspaceId: string): PaneView | null {
+  const inSpace = runtime.panes.filter((pane) => pane.workspaceId === workspaceId);
+  const activeTabId = runtime.workspaces.find((space) => space.workspaceId === workspaceId)?.activeTabId;
+  if (activeTabId) {
+    const onTab = inSpace.filter((pane) => pane.tabId === activeTabId);
+    const chosen = onTab.find((pane) => pane.focused) ?? onTab[0];
+    if (chosen) return chosen;
+  }
+  return inSpace.find((pane) => pane.focused) ?? inSpace[0] ?? null;
+}
+
+export interface SpaceFocus {
+  /** A named pane is focused directly. A space switch lets Herdr restore that space's tab. */
+  request: { paneId: string } | { workspaceId: string };
+  /** Pane to show until Herdr's snapshot arrives. */
+  paneId: string | null;
+}
+
+/** What to ask Herdr for when the desk shows a space. */
+export function spaceReturnFocus(
+  runtime: RuntimeSnapshot,
+  workspaceId: string,
+  paneId?: string | null,
+): SpaceFocus {
+  const inSpace = runtime.panes.filter((pane) => pane.workspaceId === workspaceId);
+  const requested = paneId ? (inSpace.find((pane) => pane.paneId === paneId) ?? null) : null;
+  if (requested) return { request: { paneId: requested.paneId }, paneId: requested.paneId };
+  return { request: { workspaceId }, paneId: paneOnActiveTab(runtime, workspaceId)?.paneId ?? null };
+}
+
 /** Optimistic runtime focus so the Spaces list updates before Herdr/poll catches up. */
 export function markWorkspaceFocused(
   runtime: RuntimeSnapshot,
   workspaceId: string,
   paneId: string | null,
 ): RuntimeSnapshot {
+  const fromPane = paneId ? runtime.panes.find((pane) => pane.paneId === paneId)?.tabId || null : null;
+  const fromSpace = runtime.workspaces.find((space) => space.workspaceId === workspaceId)?.activeTabId || null;
+  const tabId = fromPane || fromSpace || null;
   return {
     ...runtime,
     focusedWorkspaceId: workspaceId,
     focusedPaneId: paneId ?? runtime.focusedPaneId,
+    focusedTabId: tabId ?? runtime.focusedTabId,
     workspaces: runtime.workspaces.map((space) => ({
       ...space,
       focused: space.workspaceId === workspaceId,
     })),
+    tabs: tabId ? (runtime.tabs ?? []).map((tab) => ({ ...tab, focused: tab.tabId === tabId })) : runtime.tabs,
     panes: runtime.panes.map((pane) => ({
       ...pane,
       focused: paneId ? pane.paneId === paneId : false,
@@ -299,7 +335,7 @@ export function preferPendingSpace(
   }
   const inSpace = runtime.panes.filter((pane) => pane.workspaceId === pendingWorkspaceId);
   const requested = pendingPaneId ? inSpace.find((pane) => pane.paneId === pendingPaneId) : null;
-  const pane = requested ?? inSpace.find((item) => item.focused) ?? inSpace[0] ?? null;
+  const pane = requested ?? paneOnActiveTab(runtime, pendingWorkspaceId);
   return markWorkspaceFocused(runtime, pendingWorkspaceId, pane?.paneId ?? null);
 }
 

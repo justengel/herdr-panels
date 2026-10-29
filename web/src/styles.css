@@ -843,6 +843,7 @@ body.panel-dragging, body.panel-dragging * { cursor: grabbing !important; user-s
   background: var(--bg-elev);
 }
 
+.space-tabs .space-tab,
 .space-tabs button {
   border: 0;
   background: transparent;
@@ -852,10 +853,26 @@ body.panel-dragging, body.panel-dragging * { cursor: grabbing !important; user-s
   font-size: 12px;
 }
 
+.space-tab {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  max-width: 200px;
+  cursor: grab;
+  user-select: none;
+}
+
+.space-tab .tab-rename { width: 8em; }
+
+.space-tabs .space-tab.on, .space-tabs .space-tab[aria-selected="true"],
 .space-tabs button.on, .space-tabs button[aria-selected="true"] {
   background: #2a3140;
   color: var(--text);
 }
+
+.space-tab.is-drag-source, .tab.is-drag-source { opacity: 0.45; }
+.space-tab.drop-before { box-shadow: inset 2px 0 0 var(--accent); }
+.space-tabs.drop-end .space-tab:last-of-type { box-shadow: inset -2px 0 0 var(--accent); }
 
 .space-tabs .space-tab-add {
   flex: 0 0 auto;
@@ -1704,8 +1721,14 @@ body.space-dragging, body.space-dragging * { cursor: grabbing !important; user-s
   padding: 0 4px 0 10px;
   color: var(--muted);
   font-size: 12px;
-  cursor: pointer;
+  cursor: grab;
+  user-select: none;
 }
+
+.tab.drop-before { box-shadow: inset 2px 0 0 var(--accent); }
+.tab-strip.vertical .tab.drop-before { box-shadow: inset 0 2px 0 var(--accent); }
+.tab-strip.drop-end .tab:last-of-type { box-shadow: inset -2px 0 0 var(--accent); }
+.tab-strip.vertical.drop-end .tab:last-of-type { box-shadow: inset 0 -2px 0 var(--accent); }
 
 .tab-strip.vertical .tab { max-width: none; }
 

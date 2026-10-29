@@ -532,6 +532,11 @@ export function HerdrTerminal({ paneId, source, lines, onGone }: Props) {
       window.removeEventListener("herdr-theme", onTheme);
       window.removeEventListener("herdr-zoom", onZoom);
       window.clearTimeout(flushTimer.current);
+      const pendingText = bufferRef.current;
+      bufferRef.current = "";
+      if (pendingText && socket && socket.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify({ type: "text", text: pendingText }));
+      }
       window.clearTimeout(pendingTimer.current);
       observer.disconnect();
       socket?.close();

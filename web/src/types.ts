@@ -160,6 +160,8 @@ export interface WorkspaceView {
   workspaceId: string;
   label: string;
   focused: boolean;
+  /** Tab Herdr shows when this space is focused. Each space keeps its own. */
+  activeTabId?: string | null;
   root?: string | null;
   branch?: string | null;
   dirty?: boolean;

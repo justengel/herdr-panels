@@ -3,6 +3,8 @@ import { createPortal } from "react-dom";
 import { blankTab, freshTabId } from "../layoutEdit";
 import { useKeepMenuOnScreen } from "../menuPlace";
 import { baseName } from "../paths";
+import { movedSpaceOrder, sameSpaceOrder } from "../spaceDrag";
+import { useStripDrag } from "../useStripDrag";
 import type { PanelConfig, PanelTab, TabsPanel } from "../types";
 
 export function TabGroup({
@@ -70,18 +72,45 @@ export function TabGroup({
   }
 
   const menuTab = group.tabs.find((tab) => tab.id === menu?.tabId);
+  const { listRef, drag, onPointerDown, swallowClick } = useStripDrag(vertical ? "y" : "x", (draggedId, beforeId) => {
+    const ids = group.tabs.map((tab) => tab.id);
+    if (sameSpaceOrder(ids, draggedId, beforeId)) return;
+    const nextIds = movedSpaceOrder(ids, draggedId, beforeId);
+    const byId = new Map(group.tabs.map((tab) => [tab.id, tab]));
+    const tabs = nextIds.flatMap((id) => {
+      const tab = byId.get(id);
+      return tab ? [tab] : [];
+    });
+    if (tabs.length !== group.tabs.length) return;
+    onChange({ ...group, tabs });
+  });
 
   return (
     <div className={`tab-group ${group.edge}`}>
-      <div className={vertical ? "tab-strip vertical" : "tab-strip"} role="tablist" aria-orientation={vertical ? "vertical" : "horizontal"}>
+      <div
+        ref={listRef}
+        className={[vertical ? "tab-strip vertical" : "tab-strip", drag && drag.beforeId === null ? "drop-end" : ""]
+          .filter(Boolean)
+          .join(" ")}
+        role="tablist"
+        aria-orientation={vertical ? "vertical" : "horizontal"}
+      >
         {group.tabs.map((tab) => (
           <div
             key={tab.id}
-            className={tab.id === active?.id ? "tab on" : "tab"}
+            data-reorder-id={tab.id}
+            className={["tab", tab.id === active?.id ? "on" : "", drag?.id === tab.id ? "is-drag-source" : "", drag?.beforeId === tab.id ? "drop-before" : ""]
+              .filter(Boolean)
+              .join(" ")}
             role="tab"
             aria-selected={tab.id === active?.id}
             tabIndex={0}
-            onClick={() => onChange({ ...group, active: tab.id })}
+            onPointerDown={onPointerDown}
+            onDoubleClick={() => setEditing(tab.id)}
+            onClick={() => {
+              if (swallowClick(tab.id)) return;
+              onChange({ ...group, active: tab.id });
+            }}
             onKeyDown={(event) => {
               if (event.key === "Enter" || event.key === " ") onChange({ ...group, active: tab.id });
             }}
@@ -161,6 +190,16 @@ export function TabGroup({
                   : { left: menu.x, top: menu.y }
               }
             >
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  setMenu(null);
+                  addTab();
+                }}
+              >
+                New tab
+              </button>
               <button
                 type="button"
                 role="menuitem"
