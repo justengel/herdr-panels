@@ -218,6 +218,30 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ directory: directory || null }),
     }).then((body) => body.path),
+  /** System save dialog. `null` means the person cancelled and nothing was written. */
+  savePng: async (blob: Blob, name: string) => {
+    const response = await fetch("/api/save-png", {
+      method: "POST",
+      headers: {
+        ...authHeaders(),
+        "Content-Type": "image/png",
+        "X-Screenshot-Name": name,
+      },
+      body: blob,
+    });
+    if (!response.ok) {
+      let message = response.statusText || "Could not save the screenshot";
+      try {
+        const payload = (await response.json()) as { error?: string };
+        if (payload.error) message = payload.error;
+      } catch {
+        // The body was not JSON.
+      }
+      throw new Error(message);
+    }
+    const payload = (await response.json()) as { path?: string | null };
+    return payload.path ?? null;
+  },
   frame: (url: string) =>
     request<{ allowed: boolean; reason?: string }>(`/api/frame?url=${encodeURIComponent(url)}`),
   framePass: (path: string) =>

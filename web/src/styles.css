@@ -160,9 +160,21 @@ body.is-selecting * { cursor: crosshair !important; user-select: none; }
 body.is-selecting .topbar,
 body.is-selecting .topbar *,
 body.is-selecting .select-menu,
-body.is-selecting .select-menu * { cursor: default !important; }
+body.is-selecting .select-menu *,
+body.is-selecting .dialog,
+body.is-selecting .dialog *,
+body.is-selecting .dialog-backdrop,
+body.is-selecting .dialog-backdrop * { cursor: default !important; }
 body.is-selecting .select-menu button,
+body.is-selecting .dialog button,
 body.is-selecting .quiet { cursor: pointer !important; }
+
+.screenshot-dialog-backdrop { z-index: 80; }
+.screenshot-dialog p {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.45;
+}
 
 .notice { color: var(--muted); font-size: 12px; }
 

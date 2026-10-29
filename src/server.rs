@@ -87,6 +87,7 @@ pub fn build_app(config_dir: PathBuf, herdr_socket: PathBuf, port: u16) -> anyho
         .route("/api/active", put(set_active))
         .route("/api/tree", get(tree))
         .route("/api/pick-file", post(pick_file))
+        .route("/api/save-png", post(save_png))
         .route("/api/frame", get(frame_policy))
         .route("/api/frame-pass", post(issue_frame_pass))
         .route("/api/session/focus", post(focus_session))
@@ -693,6 +694,89 @@ async fn pick_file(Json(body): Json<PickFileBody>) -> Result<Json<Value>, ApiErr
     .map_err(|err| ApiError::bad(err.to_string()))?;
     Ok(Json(json!({
         "path": path.map(|value| value.to_string_lossy().into_owned()),
+    })))
+}
+
+const PNG_MAGIC: &[u8] = b"\x89PNG\r\n\x1a\n";
+
+fn checked_png(bytes: &[u8]) -> Result<&[u8], String> {
+    if bytes.len() < PNG_MAGIC.len() || &bytes[..PNG_MAGIC.len()] != PNG_MAGIC {
+        return Err("the screenshot is not a PNG".into());
+    }
+    Ok(bytes)
+}
+
+fn ensure_png_extension(path: PathBuf) -> PathBuf {
+    if path.extension().is_some() {
+        return path;
+    }
+    let mut name = path.into_os_string();
+    name.push(".png");
+    PathBuf::from(name)
+}
+
+/// `None` means the person cancelled. A file is written only for a chosen path.
+fn store_png(choice: Option<PathBuf>, bytes: &[u8]) -> Result<Option<PathBuf>, String> {
+    let Some(path) = choice else {
+        return Ok(None);
+    };
+    let bytes = checked_png(bytes)?;
+    if path.as_os_str().is_empty() || path.is_dir() {
+        return Err("choose a file name".into());
+    }
+    let path = ensure_png_extension(path);
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent).map_err(|err| err.to_string())?;
+        }
+    }
+    std::fs::write(&path, bytes).map_err(|err| err.to_string())?;
+    Ok(Some(path))
+}
+
+fn screenshot_file_name(raw: Option<&str>) -> String {
+    let fallback = "herdr-panels.png";
+    let Some(raw) = raw.map(str::trim).filter(|value| !value.is_empty()) else {
+        return fallback.to_string();
+    };
+    let Some(name) = Path::new(raw).file_name().and_then(|value| value.to_str()) else {
+        return fallback.to_string();
+    };
+    if name.is_empty() || name == "." || name == ".." || name.starts_with('.') {
+        return fallback.to_string();
+    }
+    if name.to_ascii_lowercase().ends_with(".png") {
+        return name.to_string();
+    }
+    let stem = name
+        .split('.')
+        .next()
+        .filter(|stem| !stem.is_empty())
+        .unwrap_or(name);
+    format!("{stem}.png")
+}
+
+async fn save_png(headers: HeaderMap, body: Bytes) -> Result<Json<Value>, ApiError> {
+    let bytes = body.to_vec();
+    checked_png(&bytes).map_err(ApiError::bad)?;
+    let suggested = screenshot_file_name(
+        headers
+            .get("x-screenshot-name")
+            .and_then(|value| value.to_str().ok()),
+    );
+    let saved = tokio::task::spawn_blocking(move || {
+        let chosen = rfd::FileDialog::new()
+            .set_title("Save screenshot")
+            .set_file_name(suggested)
+            .add_filter("PNG image", &["png"])
+            .save_file();
+        store_png(chosen, &bytes)
+    })
+    .await
+    .map_err(|err| ApiError::bad(err.to_string()))?
+    .map_err(ApiError::bad)?;
+    Ok(Json(json!({
+        "path": saved.map(|path| path.to_string_lossy().into_owned()),
     })))
 }
 
@@ -1894,5 +1978,62 @@ mod tests {
         assert_eq!(pick_start_dir(Some("")), None);
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_cancelled_screenshot_save_writes_nothing() {
+        let dir = std::env::temp_dir().join("herdr-panels-shot-cancel");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let target = dir.join("shot.png");
+        let saved = store_png(None, &png_fixture()).unwrap();
+        assert!(saved.is_none());
+        assert!(!target.exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_chosen_screenshot_path_writes_the_png() {
+        let dir = std::env::temp_dir().join("herdr-panels-shot-write");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let png = png_fixture();
+        let saved = store_png(Some(dir.join("shot")), &png).unwrap().unwrap();
+        assert_eq!(saved, dir.join("shot.png"));
+        assert_eq!(std::fs::read(&saved).unwrap(), png);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_non_png_screenshot_is_refused_and_not_written() {
+        let dir = std::env::temp_dir().join("herdr-panels-shot-refuse");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let target = dir.join("shot.png");
+        let error = store_png(Some(target.clone()), b"not a png").unwrap_err();
+        assert!(error.contains("PNG"), "{error}");
+        assert!(!target.exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn screenshot_names_stay_a_single_png_file_name() {
+        assert_eq!(screenshot_file_name(None), "herdr-panels.png");
+        assert_eq!(screenshot_file_name(Some("")), "herdr-panels.png");
+        assert_eq!(screenshot_file_name(Some("..")), "herdr-panels.png");
+        assert_eq!(screenshot_file_name(Some(".hidden")), "herdr-panels.png");
+        assert_eq!(
+            screenshot_file_name(Some("../../etc/passwd")),
+            "passwd.png"
+        );
+        assert_eq!(screenshot_file_name(Some("note.md")), "note.png");
+        assert_eq!(
+            screenshot_file_name(Some("herdr-panels-20261028-225103.png")),
+            "herdr-panels-20261028-225103.png"
+        );
+    }
+
+    fn png_fixture() -> Vec<u8> {
+        b"\x89PNG\r\n\x1a\nherdr".to_vec()
     }
 }

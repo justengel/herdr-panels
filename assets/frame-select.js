@@ -323,6 +323,8 @@
     }
 
     function createUi() {
+      let closeShot = () => {};
+      let shotGeneration = 0;
       const layer = document.createElement("div");
       layer.className = "hwp-select-ui";
       layer.style.cssText = "position:fixed;inset:0;z-index:2147483646;pointer-events:none;";
@@ -390,6 +392,7 @@
           menu.style.left = `${Math.min(Math.max(8, bounds.left), window.innerWidth - 280)}px`;
         },
         clear() {
+          closeShot();
           boxes.replaceChildren();
           menu.style.display = "none";
         },
@@ -402,14 +405,134 @@
       function copyHtml() {
         write(chosen.map((element) => element.outerHTML).join("\n"), chosen.length === 1 ? "Copied HTML" : `Copied HTML for ${chosen.length} elements`, "Nothing to copy");
       }
-      async function copyShot() {
+      function copyShot() {
+        const generation = ++shotGeneration;
+        const pending = raster(chosen);
+        const copied = writePng(pending);
+        const name = shotName();
+        pending.then(
+          (blob) => {
+            const giveUp = new Promise((resolve) => setTimeout(() => resolve(false), 700));
+            Promise.race([copied, giveUp]).then((ok) => {
+              if (generation !== shotGeneration) return;
+              offerShot(blob, ok === true, name, generation);
+              if (ok === true) return;
+              copied.then((later) => {
+                if (generation !== shotGeneration || later !== true) return;
+                const text = layer.querySelector(".hwp-shot-dialog p");
+                if (text) {
+                  text.textContent =
+                    "Copied to the clipboard. Save a PNG if it does not paste. Save downloads a PNG into your Downloads folder. Nothing is written until you choose Save.";
+                }
+              });
+            });
+          },
+          (err) => {
+            if (generation !== shotGeneration) return;
+            status.textContent = err instanceof Error ? err.message : "Could not take the screenshot";
+          },
+        );
+      }
+      function writePng(pending) {
+        const clipboard = navigator.clipboard;
+        if (!clipboard || !clipboard.write || typeof ClipboardItem === "undefined") return Promise.resolve(false);
+        const typed = pending.then((blob) => (blob.type === "image/png" ? blob : new Blob([blob], { type: "image/png" })));
+        const write = (blob) =>
+          clipboard.write([new ClipboardItem({ "image/png": blob })]).then(
+            () => true,
+            () => false,
+          );
         try {
-          const blob = await raster(chosen);
-          await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
-          status.textContent = "Screenshot copied";
-        } catch (err) {
-          status.textContent = err instanceof Error ? err.message : "Could not copy the screenshot";
+          return write(typed).then((ok) => (ok ? true : writeBlob(typed)));
+        } catch {
+          return writeBlob(typed);
         }
+        function writeBlob(value) {
+          return value.then(
+            (blob) => write(blob),
+            () => false,
+          );
+        }
+      }
+      function shotName() {
+        const now = new Date();
+        const pad = (value) => String(value).padStart(2, "0");
+        return `herdr-panels-${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}.png`;
+      }
+      function offerShot(blob, copied, name, generation) {
+        closeShot();
+        const lead = copied
+          ? "Copied to the clipboard. Save a PNG if it does not paste."
+          : "The clipboard did not take this image.";
+        const dialog = document.createElement("div");
+        dialog.className = "hwp-shot-dialog";
+        dialog.setAttribute("role", "dialog");
+        dialog.setAttribute("aria-label", "Screenshot");
+        dialog.style.cssText =
+          "position:fixed;inset:0;z-index:2147483647;display:grid;place-items:center;background:rgba(0,0,0,.45);pointer-events:auto;";
+        const card = document.createElement("div");
+        card.style.cssText =
+          "width:min(420px,calc(100vw - 32px));padding:16px;background:#181b20;color:#e7e4dc;border:1px solid #3c4451;border-radius:8px;display:flex;flex-direction:column;gap:12px;font:13px/1.45 Segoe UI,sans-serif;";
+        const heading = document.createElement("strong");
+        heading.textContent = "Screenshot";
+        heading.style.fontSize = "16px";
+        const text = document.createElement("p");
+        text.style.margin = "0";
+        text.textContent = `${lead} Save downloads a PNG into your Downloads folder. Nothing is written until you choose Save.`;
+        const actions = document.createElement("div");
+        actions.style.cssText = "display:flex;justify-content:space-between;gap:8px;";
+        const save = choice("Save", () => {
+          downloadBlob(blob, name);
+          status.textContent = "Saving to Downloads";
+          close();
+        });
+        const dismiss = choice("Don't save", close);
+        actions.append(save, dismiss);
+        card.append(heading, text, actions);
+        dialog.append(card);
+        dialog.addEventListener("mousedown", (event) => {
+          if (event.target === dialog) close();
+        });
+        function close() {
+          if (shotGeneration === generation) shotGeneration += 1;
+          closeShot = () => {};
+          dialog.remove();
+          window.removeEventListener("keydown", onKey, true);
+        }
+        function onKey(event) {
+          if (event.key !== "Escape") return;
+          event.preventDefault();
+          event.stopPropagation();
+          close();
+        }
+        window.addEventListener("keydown", onKey, true);
+        closeShot = close;
+        layer.append(dialog);
+        dismiss.focus();
+      }
+      function choice(label, onClick) {
+        const node = document.createElement("button");
+        node.type = "button";
+        node.textContent = label;
+        node.style.cssText =
+          "border:1px solid #3c4451;background:#22262e;color:inherit;padding:6px 10px;border-radius:4px;cursor:pointer;";
+        node.addEventListener("click", (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          onClick();
+        });
+        return node;
+      }
+      function downloadBlob(blob, name) {
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = name;
+        link.rel = "noopener";
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
       }
       function write(text, ok, empty) {
         if (!text.trim()) {
@@ -443,7 +566,7 @@
       canvas.width = Math.max(1, Math.round(bounds.width * scale));
       canvas.height = Math.max(1, Math.round(bounds.height * scale));
       const ctx = canvas.getContext("2d");
-      if (!ctx) throw new Error("Could not copy the screenshot");
+      if (!ctx) throw new Error("Could not take the screenshot");
       const css = pageCss().replace(/<\/style/gi, "<\\/style");
       const body = elements
         .map((element) => {
@@ -458,7 +581,7 @@
       await image.decode();
       ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
       const blob = await new Promise((resolve, reject) => {
-        canvas.toBlob((value) => (value ? resolve(value) : reject(new Error("Could not copy the screenshot"))), "image/png");
+        canvas.toBlob((value) => (value ? resolve(value) : reject(new Error("Could not take the screenshot"))), "image/png");
       });
       return blob;
     }

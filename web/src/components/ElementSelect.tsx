@@ -1,6 +1,15 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { createPortal } from "react-dom";
+import { api } from "../api";
 import { desktopHost } from "../desktopBrowser";
 import { intersects, shiftRect, toFrame, type LocalRect } from "../frameSelect";
+import {
+  downloadPng,
+  keepScreenshot,
+  screenshotFileName,
+  screenshotOffer,
+  writeClipboardPng,
+} from "../screenshotOffer";
 
 interface Props {
   onNotice: (message: string) => void;
@@ -58,22 +67,37 @@ interface FrameMessage {
 const ITEM =
   "button, a, input, textarea, select, label, li, h1, h2, h3, h4, h5, h6, p, pre, blockquote, .tree-row, .agent-row, .space-row, .panel-title, [role='tab']";
 
+const SELECT_CHROME = ".topbar, .select-menu, .dialog, .dialog-backdrop";
+
+interface ShotOffer {
+  blob: Blob;
+  copied: boolean;
+  name: string;
+}
+
 export function ElementSelect({ onNotice, onClose }: Props) {
   const [hover, setHover] = useState<Box | null>(null);
   const [marquee, setMarquee] = useState<Box | null>(null);
   const [selection, setSelection] = useState<Selection | null>(null);
+  const [shot, setShot] = useState<ShotOffer | null>(null);
+  const [saving, setSaving] = useState(false);
   const closeRef = useRef(onClose);
   const noticeRef = useRef(onNotice);
+  const shotRef = useRef<ShotOffer | null>(null);
+  const shotTicket = useRef<object | null>(null);
+  const alive = useRef(true);
+  shotRef.current = shot;
   const drag = useRef<{ x: number; y: number; moved: boolean } | null>(null);
   const chosen = useRef<Piece[]>([]);
   closeRef.current = onClose;
   noticeRef.current = onNotice;
 
   useEffect(() => {
+    alive.current = true;
     document.body.classList.add("is-selecting");
     let stamp = 0;
     const skip = (target: EventTarget | null) =>
-      target instanceof Element && Boolean(target.closest(".topbar, .select-menu"));
+      target instanceof Element && Boolean(target.closest(SELECT_CHROME));
     const remember = (pieces: Piece[]) => {
       chosen.current = pieces;
       setSelection(pieces.length > 0 ? pack(pieces) : null);
@@ -240,7 +264,7 @@ export function ElementSelect({ onNotice, onClose }: Props) {
       if (event.target instanceof HTMLIFrameElement) tell(event.target, true);
     };
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") closeRef.current();
+      if (event.key === "Escape" && !shotRef.current) closeRef.current();
     };
     const onScroll = () => {
       if (chosen.current.length > 0) setSelection(pack(chosen.current));
@@ -279,6 +303,7 @@ export function ElementSelect({ onNotice, onClose }: Props) {
       window.removeEventListener("keydown", onKey);
       window.removeEventListener("resize", onScroll);
       if (desktop) void desktop.invoke("set_browser_select", { enabled: false }).catch(() => undefined);
+      alive.current = false;
     };
   }, []);
 
@@ -299,18 +324,135 @@ export function ElementSelect({ onNotice, onClose }: Props) {
           <button type="button" title="Copy the HTML of the selection" onClick={() => void copyHtml(selection.pieces, onNotice)}>
             HTML
           </button>
-          <button type="button" onClick={() => void copyShot(selection, onNotice)}>
+          <button
+            type="button"
+            onClick={() => {
+              const ticket = {};
+              shotTicket.current = ticket;
+              const pending = captureShot(selection);
+              const copied = writeClipboardPng(pending);
+              const name = screenshotFileName();
+              void pending.then(
+                async (blob) => {
+                  const ok = await Promise.race([
+                    copied,
+                    new Promise<boolean>((resolve) => window.setTimeout(() => resolve(false), 700)),
+                  ]);
+                  if (!alive.current || shotTicket.current !== ticket) return;
+                  setSaving(false);
+                  setShot({ blob, copied: ok, name });
+                  if (ok) return;
+                  const later = await copied;
+                  if (!alive.current || shotTicket.current !== ticket || !later) return;
+                  setShot((current) => (current && current.blob === blob ? { ...current, copied: true } : current));
+                },
+                (err) => {
+                  if (!alive.current || shotTicket.current !== ticket) return;
+                  onNotice(clipboardMessage(err, "Could not take the screenshot"));
+                },
+              );
+            }}
+          >
             Screenshot
           </button>
         </div>
       ) : null}
+      {shot
+        ? createPortal(
+            <ScreenshotDialog
+              copied={shot.copied}
+              saving={saving}
+              onDismiss={() => {
+                if (saving) return;
+                shotTicket.current = null;
+                setShot(null);
+              }}
+              onSave={() => {
+                if (saving) return;
+                const current = shot;
+                setSaving(true);
+                void keepScreenshot(
+                  current.blob,
+                  current.name,
+                  (blob, name) => api.savePng(blob, name),
+                  (name) => downloadPng(current.blob, name),
+                ).then(
+                  (result) => {
+                    if (!alive.current) return;
+                    setSaving(false);
+                    if (result.kind === "cancelled") return;
+                    setShot(null);
+                    onNotice(result.kind === "saved" ? `Saved ${result.path}` : "Download started");
+                  },
+                  () => {
+                    if (!alive.current) return;
+                    setSaving(false);
+                    onNotice("Could not save the screenshot");
+                  },
+                );
+              }}
+            />,
+            document.body,
+          )
+        : null}
     </>
+  );
+}
+
+function ScreenshotDialog({
+  copied,
+  saving,
+  onDismiss,
+  onSave,
+}: {
+  copied: boolean;
+  saving: boolean;
+  onDismiss: () => void;
+  onSave: () => void;
+}) {
+  const dismissRef = useRef<HTMLButtonElement>(null);
+  const dismiss = useRef(onDismiss);
+  dismiss.current = onDismiss;
+  useEffect(() => {
+    dismissRef.current?.focus();
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopPropagation();
+      dismiss.current();
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, []);
+  const offer = screenshotOffer(copied, "file-dialog");
+  return (
+    <div className="dialog-backdrop screenshot-dialog-backdrop" role="presentation" onMouseDown={onDismiss}>
+      <div
+        className="dialog screenshot-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-label={offer.heading}
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <h2>{offer.heading}</h2>
+        <p>{offer.body}</p>
+        <div className="dialog-actions">
+          <button type="button" disabled={saving} onClick={onSave}>
+            {saving ? "Saving…" : "Save…"}
+          </button>
+          <span className="dialog-spacer" />
+          <button type="button" ref={dismissRef} disabled={saving} onClick={onDismiss}>
+            Don't save
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 
 function block(event: Event) {
   const target = event.target;
-  if (target instanceof Element && target.closest(".topbar, .select-menu")) return;
+  if (target instanceof Element && target.closest(SELECT_CHROME)) return;
   if (bridgedFrame(target)) return;
   event.preventDefault();
   event.stopPropagation();
@@ -318,7 +460,7 @@ function block(event: Event) {
 
 function clickTarget(target: EventTarget | null): Element | null {
   if (!(target instanceof Element)) return null;
-  if (target.closest(".topbar, .select-menu")) return null;
+  if (target.closest(SELECT_CHROME)) return null;
   if (target === document.body || target === document.documentElement) return null;
   if (target instanceof HTMLElement || target instanceof SVGElement) return target;
   return null;
@@ -618,19 +760,11 @@ async function copyHtml(pieces: Piece[], onNotice: (message: string) => void) {
   }
 }
 
-async function copyShot(selection: Selection, onNotice: (message: string) => void) {
-  try {
-    const live = selection.pieces.every((piece) => piece.live instanceof HTMLElement);
-    const blob = live
-      ? selection.pieces.length === 1
-        ? await rasterize(selection.pieces[0].live as HTMLElement)
-        : await rasterizeRegion(selection.pieces.map((piece) => piece.live as HTMLElement))
-      : await shotMarkup(selection.pieces, selection.css);
-    await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
-    onNotice("Screenshot copied");
-  } catch (err) {
-    onNotice(clipboardMessage(err, "Could not copy the screenshot"));
-  }
+function captureShot(selection: Selection): Promise<Blob> {
+  const live = selection.pieces.every((piece) => piece.live instanceof HTMLElement);
+  if (!live) return shotMarkup(selection.pieces, selection.css);
+  if (selection.pieces.length === 1) return rasterize(selection.pieces[0].live as HTMLElement);
+  return rasterizeRegion(selection.pieces.map((piece) => piece.live as HTMLElement));
 }
 
 function clipboardMessage(err: unknown, fallback: string): string {
@@ -677,7 +811,7 @@ async function rasterizeRegion(elements: HTMLElement[]): Promise<Blob> {
     cropped.width = Math.max(1, Math.round(bounds.width * scale));
     cropped.height = Math.max(1, Math.round(bounds.height * scale));
     const ctx = cropped.getContext("2d");
-    if (!ctx) throw new Error("Could not copy the screenshot");
+    if (!ctx) throw new Error("Could not take the screenshot");
     ctx.drawImage(
       full,
       (bounds.left - origin.left) * scale,
@@ -734,14 +868,14 @@ async function shotMarkup(pieces: Piece[], css: string): Promise<Blob> {
   frame.style.cssText = `position:fixed;left:-10000px;top:0;width:${Math.ceil(bounds.width)}px;height:${Math.ceil(bounds.height)}px;border:0;`;
   const loaded = new Promise<void>((resolve, reject) => {
     frame.addEventListener("load", () => resolve(), { once: true });
-    frame.addEventListener("error", () => reject(new Error("Could not copy the screenshot")), { once: true });
+    frame.addEventListener("error", () => reject(new Error("Could not take the screenshot")), { once: true });
   });
   frame.srcdoc = doc;
   document.body.appendChild(frame);
   try {
     await loaded;
     const root = frame.contentDocument?.body;
-    if (!(root instanceof HTMLElement)) throw new Error("Could not copy the screenshot");
+    if (!(root instanceof HTMLElement)) throw new Error("Could not take the screenshot");
     const { default: html2canvas } = await import("html2canvas");
     const canvas = await html2canvas(root, {
       backgroundColor: "#14181f",
@@ -759,7 +893,7 @@ async function shotMarkup(pieces: Piece[], css: string): Promise<Blob> {
 
 function blobFrom(canvas: HTMLCanvasElement): Promise<Blob> {
   return new Promise((resolve, reject) => {
-    canvas.toBlob((blob) => (blob ? resolve(blob) : reject(new Error("Could not copy the screenshot"))), "image/png");
+    canvas.toBlob((blob) => (blob ? resolve(blob) : reject(new Error("Could not take the screenshot"))), "image/png");
   });
 }
 
