@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.1.8 - 2026-10-29
+
+A plugin can declare `commands:run` and a `commands` list of program names. `herdrPanels.run(name, args, cwd)` runs that program from PATH, with no shell, in a directory the desk already has open. Install asks before granting it.
+
+`herdr-panels install-launcher` adds a Windows Start menu shortcut and a macOS app in the home Applications folder. Both start `herdr-panels`, so the viewer stays up when the window closes. On Windows the shortcut hides the console. On macOS the app does not keep a Dock icon of its own; the desktop window is the one that shows. `herdr-panels update` replaces the programs in the same folder and leaves that menu entry pointed at them. Run `install-launcher` again when the program moves.
+
 ## 0.1.7 - 2026-10-28
 
 Selecting an element and choosing Screenshot asks whether to save a PNG. The image is still copied to the clipboard when that works. Save opens a file dialog and writes nothing until a path is chosen. Don't save discards the image. Inside a browser panel, Save downloads the PNG into the Downloads folder instead. A clipboard copy that fails, or reports success without a pasteable image, can still be kept this way.

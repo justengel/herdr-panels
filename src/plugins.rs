@@ -112,6 +112,8 @@ pub struct PluginManifest {
     pub permissions: Vec<String>,
     #[serde(default)]
     pub files: Vec<std::path::PathBuf>,
+    #[serde(default)]
+    pub commands: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -133,6 +135,8 @@ struct ManifestDraft {
     permissions: Vec<String>,
     #[serde(default)]
     files: Vec<String>,
+    #[serde(default)]
+    commands: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -244,7 +248,8 @@ pub fn parse_manifest(text: &str) -> anyhow::Result<PluginManifest> {
         bail!("plugin version is limited to 32 characters");
     }
     let views = normalize_views(&draft.id, &draft.title, draft.views)?;
-    let grants = crate::plugin_grant::parse_permissions(draft.permissions, draft.files)?;
+    let grants =
+        crate::plugin_grant::parse_grants(draft.permissions, draft.files, draft.commands)?;
     Ok(PluginManifest {
         id: draft.id,
         title: draft.title,
@@ -256,6 +261,7 @@ pub fn parse_manifest(text: &str) -> anyhow::Result<PluginManifest> {
         views,
         permissions: grants.permissions,
         files: grants.files,
+        commands: grants.commands,
     })
 }
 

@@ -64,6 +64,7 @@
     visitPanels: (panelIds, arrange, options) => call("visitPanel", { panelIds, arrange, ...(options || {}) }),
     setZoom: (scale) => call("setZoom", { scale }),
     scrollPane: (paneId, direction, lines) => call("scrollPane", { paneId, direction, lines }),
+    run: (command, args, cwd) => call("run", { command, args: args || [], cwd: cwd || "" }),
     openExternal: (url) => {
       let popup = null;
       try {

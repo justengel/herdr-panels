@@ -4,6 +4,11 @@ Recorded 2026-10-27 from the review before the first public release. Closed item
 
 ## Unreleased
 
+## Done in 0.1.8
+
+- `herdr-panels install-launcher` writes a Windows Start menu shortcut and a macOS app in the home Applications folder, and still writes the Linux desktop entry. An in-place update leaves that entry pointed at the same program.
+- A plugin `commands:run` permission runs an allowlisted program from PATH, with no shell, and only inside an open project.
+
 ## Done in 0.1.7
 
 - Selecting an element and choosing Screenshot asks before saving a PNG. A cancelled save writes nothing.
@@ -42,7 +47,7 @@ Recorded 2026-10-27 from the review before the first public release. Closed item
 
 ### Desktop installers
 
-The window is in the release archive. Tauri packaging is still off (`bundle.active` is false), so there is no `.deb`, `.msi`, or `.dmg`. `herdr-panels install-launcher` writes the Linux application menu entry and the hicolor icons. The window turns devtools on and sets no content security policy. Linux still needs the system WebKitGTK package named above. The dock icon and the menu's starting spinner still need a check on an X11 session.
+The window is in the release archive. Tauri packaging is still off (`bundle.active` is false), so there is no `.deb`, `.msi`, or `.dmg`. `herdr-panels install-launcher` writes the Linux desktop entry and hicolor icons, a Windows Start menu shortcut, and a macOS app in the home Applications folder. A `cargo install` of the desktop program on the GNU Windows toolchain does not copy `WebView2Loader.dll` next to `herdr-panels-desktop.exe`. The MSVC build links that loader into the program, which is what the GitHub Windows archive uses. The window turns devtools on and sets no content security policy. Linux still needs the system WebKitGTK package named above. The dock icon and the menu's starting spinner still need a check on an X11 session.
 
 ### Code signing
 

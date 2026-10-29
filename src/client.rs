@@ -13,7 +13,7 @@ use crate::plugins;
     name = "herdr-panels",
     version,
     about = "Herdr viewer with installable HTML panels",
-    long_about = "herdr-panels starts the viewer and opens the desktop window when that program is installed, or a browser tab otherwise. When the viewer is already running, it opens the window and exits.\nherdr-panels server runs the viewer without opening a window.\nherdr-panels desktop opens the desktop window. On its own it starts a viewer when the address is closed, and that viewer stops when the window closes.\nherdr-panels install-launcher writes the Linux application menu entry and icons.\nherdr-panels update downloads the latest GitHub release and replaces this program. When the desktop window is beside it, that program is replaced from the same release. A viewer that is already running is stopped and started again on the same address, and an open desktop window is opened again.\nherdr-panels panel, plugin, and token talk to that viewer or its config."
+    long_about = "herdr-panels starts the viewer and opens the desktop window when that program is installed, or a browser tab otherwise. When the viewer is already running, it opens the window and exits.\nherdr-panels server runs the viewer without opening a window.\nherdr-panels desktop opens the desktop window. On its own it starts a viewer when the address is closed, and that viewer stops when the window closes.\nherdr-panels install-launcher writes the application menu entry: a Linux desktop file, a Windows Start menu shortcut, or a macOS app in the home Applications folder.\nherdr-panels update downloads the latest GitHub release and replaces this program. When the desktop window is beside it, that program is replaced from the same release. A viewer that is already running is stopped and started again on the same address, and an open desktop window is opened again.\nherdr-panels panel, plugin, and token talk to that viewer or its config."
 )]
 struct ClientCli {
     /// Viewer URL. Defaults to the address recorded by the running server.
@@ -195,13 +195,12 @@ pub async fn execute() -> anyhow::Result<()> {
         ClientCommand::Plugin { command } => match command {
             PluginCommand::List => {
                 for plugin in plugins::list_plugins(&config_dir)? {
-                    println!(
-                        "{}\t{}\t{}\t{}",
-                        plugin.id,
-                        plugin.title,
-                        plugin.entry,
-                        crate::plugin_grant::permission_summary(&plugin.permissions)
-                    );
+                    let mut summary =
+                        crate::plugin_grant::permission_summary(&plugin.permissions);
+                    if !plugin.commands.is_empty() {
+                        summary.push_str(&format!(" ({})", plugin.commands.join(", ")));
+                    }
+                    println!("{}\t{}\t{}\t{}", plugin.id, plugin.title, plugin.entry, summary);
                 }
                 Ok(())
             }
@@ -253,6 +252,7 @@ fn confirm_install(manifest: &plugins::PluginManifest, yes: bool) -> anyhow::Res
         &manifest.title,
         &manifest.permissions,
         &manifest.files,
+        &manifest.commands,
     );
     println!("{text}");
     if yes {

@@ -1304,6 +1304,41 @@ async fn plugin_bridge(
                 .map_err(ApiError::bad)?;
             Ok(Json(json!({ "url": url })))
         }
+        "run" => {
+            let name = param_str(&body.params, "command");
+            let args = param_command_args(&body.params)?;
+            crate::plugin_command::validate_invocation(&manifest.commands, &name, &args)
+                .map_err(ApiError::forbidden)?;
+            let roots = allowed_roots(&state).await;
+            let cwd = match param_opt(&body.params, "cwd") {
+                Some(raw) => crate::plugin_command::cwd_allowed(Path::new(&raw), &roots)
+                    .map_err(ApiError::forbidden)?,
+                None => {
+                    let snapshot = state.runtime.snapshot().await;
+                    let raw = snapshot
+                        .panes
+                        .iter()
+                        .filter(|pane| pane.cwd.as_ref().is_some_and(|cwd| !cwd.is_empty()))
+                        .find(|pane| pane.focused)
+                        .or_else(|| {
+                            snapshot
+                                .panes
+                                .iter()
+                                .find(|pane| pane.cwd.as_ref().is_some_and(|cwd| !cwd.is_empty()))
+                        })
+                        .and_then(|pane| pane.cwd.clone())
+                        .ok_or_else(|| ApiError::bad("open a terminal in the project first"))?;
+                    crate::plugin_command::cwd_allowed(Path::new(&raw), &roots).map_err(ApiError::bad)?
+                }
+            };
+            let output = tokio::task::spawn_blocking(move || {
+                crate::plugin_command::execute(&name, &args, &cwd)
+            })
+            .await
+            .map_err(|err| ApiError::bad(err.to_string()))?
+            .map_err(ApiError::bad)?;
+            Ok(Json(serde_json::to_value(output).unwrap_or_else(|_| json!({}))))
+        }
         "scrollPane" => {
             let pane_id = param_str(&body.params, "paneId");
             let direction = param_str(&body.params, "direction");
@@ -1358,6 +1393,21 @@ fn param_numbers(params: &Value, key: &str) -> Result<Vec<f64>, ApiError> {
             })
             .collect(),
         Some(_) => Err(ApiError::bad("a weight must be a positive number")),
+    }
+}
+
+fn param_command_args(params: &Value) -> Result<Vec<String>, ApiError> {
+    match params.get("args") {
+        None | Some(Value::Null) => Ok(Vec::new()),
+        Some(Value::Array(items)) => items
+            .iter()
+            .map(|item| {
+                item.as_str()
+                    .map(str::to_string)
+                    .ok_or_else(|| ApiError::bad("arguments must be text"))
+            })
+            .collect(),
+        Some(_) => Err(ApiError::bad("arguments must be a list")),
     }
 }
 

@@ -14,6 +14,7 @@ pub const FILES: &str = "files:read";
 pub const PANELS_READ: &str = "panels:read";
 pub const PANELS_CONTROL: &str = "panels:control";
 pub const LINKS: &str = "links:open";
+pub const COMMANDS: &str = "commands:run";
 
 /// Reply when the plugin declared control but this panel's layout has it off.
 /// Keep in step with `CONTROL_OFF_MESSAGE` in `web/src/controlHint.ts`.
@@ -24,17 +25,26 @@ pub const CONTROL_OFF: &str =
 pub struct PluginGrants {
     pub permissions: Vec<String>,
     pub files: Vec<PathBuf>,
+    pub commands: Vec<String>,
 }
 
 pub fn parse_permissions(
     permissions: Vec<String>,
     files: Vec<String>,
 ) -> anyhow::Result<PluginGrants> {
+    parse_grants(permissions, files, Vec::new())
+}
+
+pub fn parse_grants(
+    permissions: Vec<String>,
+    files: Vec<String>,
+    commands: Vec<String>,
+) -> anyhow::Result<PluginGrants> {
     let mut kept = Vec::new();
     for name in permissions {
         if !known(&name) {
             bail!(
-                "unknown permission \"{name}\". use herdr:read, herdr:control, files:read, panels:read, panels:control, or links:open"
+                "unknown permission \"{name}\". use herdr:read, herdr:control, files:read, panels:read, panels:control, links:open, or commands:run"
             );
         }
         if !kept.iter().any(|have: &String| have == &name) {
@@ -47,6 +57,23 @@ pub fn parse_permissions(
     if !files.is_empty() && !kept.iter().any(|name| name == FILES) {
         bail!("files is set without the files:read permission");
     }
+    if commands.is_empty() && kept.iter().any(|name| name == COMMANDS) {
+        bail!("commands:run requires a commands list of program names");
+    }
+    if !commands.is_empty() && !kept.iter().any(|name| name == COMMANDS) {
+        bail!("commands is set without the commands:run permission");
+    }
+    let mut programs = Vec::new();
+    for command in commands {
+        let command = command.trim();
+        if !crate::plugin_command::valid_command_name(command) {
+            bail!("command name is not a program name: {command}");
+        }
+        let command = command.to_string();
+        if !programs.contains(&command) {
+            programs.push(command);
+        }
+    }
     let mut grants = Vec::new();
     for file in files {
         let path = grant_path(&file)?;
@@ -57,13 +84,14 @@ pub fn parse_permissions(
     Ok(PluginGrants {
         permissions: kept,
         files: grants,
+        commands: programs,
     })
 }
 
 fn known(name: &str) -> bool {
     matches!(
         name,
-        READ | CONTROL | FILES | PANELS_READ | PANELS_CONTROL | LINKS
+        READ | CONTROL | FILES | PANELS_READ | PANELS_CONTROL | LINKS | COMMANDS
     )
 }
 
@@ -106,6 +134,7 @@ pub fn wants_bridge(permissions: &[String]) -> bool {
             || name == PANELS_READ
             || name == PANELS_CONTROL
             || name == LINKS
+            || name == COMMANDS
     })
 }
 
@@ -139,7 +168,13 @@ pub fn grant_label(path: &Path) -> String {
     }
 }
 
-pub fn consent_text(id: &str, title: &str, permissions: &[String], files: &[PathBuf]) -> String {
+pub fn consent_text(
+    id: &str,
+    title: &str,
+    permissions: &[String],
+    files: &[PathBuf],
+    commands: &[String],
+) -> String {
     let mut lines = vec![
         format!("{id} ({title}) asks for permission to:"),
         String::new(),
@@ -167,6 +202,15 @@ pub fn consent_text(id: &str, title: &str, permissions: &[String], files: &[Path
             LINKS => lines.push(
                 "- Open http and https links in the browser. Other links are refused.".into(),
             ),
+            COMMANDS => {
+                lines.push(
+                    "- Run these programs from PATH, with no shell, and only in a directory that is already an open project:"
+                        .into(),
+                );
+                for command in commands {
+                    lines.push(format!("  {command}"));
+                }
+            }
             _ => {}
         }
     }
@@ -408,13 +452,20 @@ fn decide(permissions: &[String], method: &str, flag: Result<bool, String>) -> R
             | "setZoom"
     );
     let links = method == "openExternal";
-    if !control_method && !read_method && !panels_read && !panels_control && !links {
+    let run = method == "run";
+    if !control_method && !read_method && !panels_read && !panels_control && !links && !run {
         return Err(format!("Unknown bridge method: {method}"));
     }
     let flag = flag?;
     if links {
         if !permissions.iter().any(|name| name == LINKS) {
             return Err("This plugin does not have links:open".into());
+        }
+        return Ok(());
+    }
+    if run {
+        if !permissions.iter().any(|name| name == COMMANDS) {
+            return Err("This plugin does not have commands:run".into());
         }
         return Ok(());
     }
@@ -579,6 +630,7 @@ mod tests {
             "Check-in report",
             &[FILES.into(), CONTROL.into()],
             &[PathBuf::from("/home/engel/projects/checkin/state")],
+            &[],
         );
         assert!(text.contains("checkin-report"));
         assert!(text.contains("/home/engel/projects/checkin/state"));
@@ -786,11 +838,12 @@ mod tests {
             "Desk",
             &[PANELS_READ.into(), PANELS_CONTROL.into()],
             &[],
+            &[],
         );
         assert!(text.contains("List the panels on this desk"));
         assert!(text.contains("does not type into a Herdr pane"));
         assert!(text.contains("Set the desktop window zoom"));
-        let typing = consent_text("report", "Report", &[CONTROL.into()], &[]);
+        let typing = consent_text("report", "Report", &[CONTROL.into()], &[], &[]);
         assert!(typing.contains("scroll one"));
     }
 
@@ -814,11 +867,42 @@ mod tests {
             bridge_allowed(&links, &quiet, "checkin-report", "report", "listPanes").unwrap_err(),
             "This plugin does not have herdr:read"
         );
-        let text = consent_text("report", "Report", &links, &[]);
+        let text = consent_text("report", "Report", &links, &[], &[]);
         assert!(text.contains("Open http and https links in the browser"));
         assert!(text.contains("Other links are refused"));
         let grants = parse_permissions(vec![LINKS.into(), LINKS.into()], Vec::new()).unwrap();
         assert_eq!(grants.permissions, vec![LINKS]);
+    }
+
+    #[test]
+    fn running_a_program_needs_commands_run_and_a_program_name() {
+        let quiet = desk(false);
+        let run = vec![COMMANDS.to_string()];
+        assert!(wants_bridge(&run));
+        assert!(bridge_allowed(&run, &quiet, "checkin-report", "report", "run").is_ok());
+        assert_eq!(
+            bridge_allowed(&run, &quiet, "checkin-report", "report", "sendText").unwrap_err(),
+            "This plugin does not have herdr:control"
+        );
+        let missing = parse_grants(vec![COMMANDS.into()], Vec::new(), Vec::new()).unwrap_err();
+        assert!(missing.to_string().contains("commands list"), "{missing}");
+        let path = parse_grants(
+            vec![COMMANDS.into()],
+            Vec::new(),
+            vec![r"C:\Windows\system32\cmd.exe".into()],
+        )
+        .unwrap_err();
+        assert!(path.to_string().contains("program name"), "{path}");
+        let grants = parse_grants(
+            vec![COMMANDS.into(), READ.into()],
+            Vec::new(),
+            vec!["ai-diff".into(), "ai-diff".into()],
+        )
+        .unwrap();
+        assert_eq!(grants.commands, vec!["ai-diff".to_string()]);
+        let text = consent_text("ai-diff", "AI diff", &run, &[], &grants.commands);
+        assert!(text.contains("no shell"));
+        assert!(text.contains("ai-diff"));
     }
 
     #[test]
