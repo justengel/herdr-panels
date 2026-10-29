@@ -1,6 +1,6 @@
 [package]
 name = "herdr-panels-desktop"
-version = "0.1.6"
+version = "0.1.7"
 edition = "2021"
 description = "Desktop experiment where each browser panel is its own webview"
 license = "MIT"

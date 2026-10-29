@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.1.7 - 2026-10-28
+
+Selecting an element and choosing Screenshot asks whether to save a PNG. The image is still copied to the clipboard when that works. Save opens a file dialog and writes nothing until a path is chosen. Don't save discards the image. Inside a browser panel, Save downloads the PNG into the Downloads folder instead. A clipboard copy that fails, or reports success without a pasteable image, can still be kept this way.
+
 A visit can give each panel a share of the screen. `--size 2,1` makes the first panel twice the second in a row or a column. A grid takes `--columns` and `--rows`, one weight per track. Running that command again resizes the visit already open and leaves what the panels are showing. Dragging a divider changes only the visit.
 
 `herdr-panels panel visit google Notes Agents Files` shows those panels together over the current desk. Two sit side by side. Three or more use a grid. `--arrange row`, `column`, or `grid` chooses the placement. One Back leaves all of them. A missing, repeated, or ambiguous name rejects the visit and names that panel. At most six panels. Repeating the command opens the same check again.

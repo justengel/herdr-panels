@@ -4,6 +4,9 @@ Recorded 2026-10-27 from the review before the first public release. Closed item
 
 ## Unreleased
 
+## Done in 0.1.7
+
+- Selecting an element and choosing Screenshot asks before saving a PNG. A cancelled save writes nothing.
 - `herdr-panels update` stops a running viewer and starts the new program on the same address. The open desk shows a plugin after `plugin install` and drops it after `plugin uninstall`.
 
 ## Done in 0.1.6
