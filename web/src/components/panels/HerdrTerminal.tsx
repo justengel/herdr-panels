@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from "react";
 import { Terminal } from "@xterm/xterm";
 import { api, wsUrl } from "../../api";
-import { desktopHost } from "../../desktopBrowser";
+import { panelZoom, subscribeZoom, terminalFontSize } from "../../displayZoom";
 import { useHost } from "../../host";
 import {
   caretSelection,
@@ -155,13 +155,22 @@ export function HerdrTerminal({ paneId, source, lines, onGone }: Props) {
       return;
     }
 
+    const zoomOwner = () => {
+      const section = shell.closest("[data-panel-id]");
+      if (section?.getAttribute("data-type") !== "herdr") return null;
+      return section.getAttribute("data-panel-id");
+    };
+    const fontFor = () => {
+      const id = zoomOwner();
+      return terminalFontSize(id ? panelZoom(id) : 1);
+    };
     const term = new Terminal({
       convertEol: false,
       disableStdin: true,
       cursorBlink: false,
       cursorStyle: "block",
       fontFamily: '"Cascadia Mono", "Cascadia Code", Consolas, ui-monospace, monospace',
-      fontSize: 14,
+      fontSize: fontFor(),
       lineHeight: 1,
       scrollback: 0,
       theme: {
@@ -204,7 +213,6 @@ export function HerdrTerminal({ paneId, source, lines, onGone }: Props) {
     let sent: { cols: number; rows: number } | null = null;
     const sizeProblem = { current: false };
     const openedAt = Date.now();
-    let zoomSettled = desktopHost() == null;
     let fontsSettled = !document.fonts || document.fonts.status === "loaded";
     let screenLive = false;
     let waitingFull = false;
@@ -274,15 +282,13 @@ export function HerdrTerminal({ paneId, source, lines, onGone }: Props) {
     };
 
     const onZoom = () => {
-      zoomSettled = true;
-      window.requestAnimationFrame(() =>
-        window.requestAnimationFrame(() => {
-          applySize();
-          scheduleLive();
-        }),
-      );
+      const size = fontFor();
+      if (term.options.fontSize === size) return;
+      term.options.fontSize = size;
+      applySize();
+      scheduleLive();
     };
-    window.addEventListener("herdr-zoom", onZoom);
+    const unsubscribeZoom = subscribeZoom(onZoom);
 
     const observer = new ResizeObserver(() => {
       applySize();
@@ -426,7 +432,7 @@ export function HerdrTerminal({ paneId, source, lines, onGone }: Props) {
       const current = termRef.current;
       const cell = current ? measureCell(current) : null;
       const ready = Boolean(host && fittedGrid(host.clientWidth, host.clientHeight, cell));
-      if ((!zoomSettled && age < 600) || (!fontsSettled && age < 600) || (!ready && age < 1500)) {
+      if ((!fontsSettled && age < 600) || (!ready && age < 1500)) {
         scheduleLive();
         return;
       }
@@ -530,7 +536,7 @@ export function HerdrTerminal({ paneId, source, lines, onGone }: Props) {
       window.clearTimeout(copyNoticeRef.current);
       window.clearInterval(edgeTimerRef.current);
       window.removeEventListener("herdr-theme", onTheme);
-      window.removeEventListener("herdr-zoom", onZoom);
+      unsubscribeZoom();
       window.clearTimeout(flushTimer.current);
       const pendingText = bufferRef.current;
       bufferRef.current = "";

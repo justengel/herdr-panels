@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { charsThatFit, displayPath, expandDisplayPath, guessHome, middleEllipsis } from "../src/displayPath";
+import {
+  addressToCopy,
+  charsThatFit,
+  displayPath,
+  expandDisplayPath,
+  focusedAddress,
+  guessHome,
+  middleEllipsis,
+} from "../src/displayPath";
 
 describe("displayPath", () => {
   it("collapses home to ~ and expands it again", () => {
@@ -42,5 +50,32 @@ describe("middleEllipsis", () => {
     expect(middleEllipsis("https://example.com/very/long/path/here", 28)).toBe(
       "https://example.com/…/here",
     );
+  });
+
+  it("does not turn a narrow path into the tail of the file name", () => {
+    const shown = middleEllipsis("~/projects/herdr-panels/examples/panels/charts.html", 8);
+    expect(shown.startsWith("…")).toBe(true);
+    expect(shown).not.toBe("rts.html");
+  });
+});
+
+describe("focused address", () => {
+  const stored = "C:/Users/jteng/projects/herdr-panels/examples/panels/charts.html";
+
+  it("uses the home shortcut when the field is focused", () => {
+    expect(focusedAddress(stored)).toBe("~/projects/herdr-panels/examples/panels/charts.html");
+  });
+
+  it("leaves a path outside home unchanged", () => {
+    expect(focusedAddress("D:/other/charts.html")).toBe("D:/other/charts.html");
+  });
+
+  it("copies the home shortcut when select-all hits an unedited fitted field", () => {
+    const shown = "~/projects/herdr-panels/examples/panels/charts.html";
+    const fitted = middleEllipsis(displayPath(stored, guessHome(stored)), 8);
+    expect(fitted).not.toBe(shown);
+    expect(addressToCopy(stored, fitted, false, true)).toBe(shown);
+    expect(addressToCopy(stored, "C:/tmp/other.html", true, true)).toBe("C:/tmp/other.html");
+    expect(addressToCopy(stored, "charts", false, false)).toBe("charts");
   });
 });

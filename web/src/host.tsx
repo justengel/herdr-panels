@@ -335,11 +335,9 @@ export function HostProvider({
       }
       const key = readFrameKey(event.data, frameToken.current);
       if (!key) return;
-      const owned =
-        event.source instanceof Window &&
-        [...document.querySelectorAll("iframe")].some(
-          (frame) => frame instanceof HTMLIFrameElement && frame.contentWindow === event.source && frameOwnsKeys(frame),
-        );
+      const owned = [...document.querySelectorAll("iframe")].some(
+        (frame) => frame instanceof HTMLIFrameElement && frame.contentWindow === event.source && frameOwnsKeys(frame),
+      );
       if (!owned && event.origin !== "null") return;
       relay(key);
     };

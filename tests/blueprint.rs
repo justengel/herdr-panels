@@ -1543,7 +1543,7 @@ async fn desk_edits_need_panels_permissions_and_cannot_grant_herdr_control() {
         .await;
     assert_eq!(status, StatusCode::OK, "{body}");
     let scale = body["scale"].as_f64().unwrap_or(0.0);
-    assert!((scale - 1.25).abs() < 0.001, "{body}");
+    assert!((scale - 1.2).abs() < 0.001, "{body}");
 
     let (status, body) = desk
         .call(

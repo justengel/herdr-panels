@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { blankTab, freshTabId } from "../layoutEdit";
+import { usePanelScaleStyle } from "../displayZoom";
 import { useKeepMenuOnScreen } from "../menuPlace";
 import { baseName } from "../paths";
 import { movedSpaceOrder, sameSpaceOrder } from "../spaceDrag";
@@ -25,6 +26,7 @@ export function TabGroup({
   const menuBox = useKeepMenuOnScreen(menuRef, menu !== null, menu ? `${menu.tabId}:${menu.x}:${menu.y}` : "");
   const skipRename = useRef(false);
   const vertical = group.edge === "left" || group.edge === "right";
+  const scaleStyle = usePanelScaleStyle();
 
   useEffect(() => {
     if (!menu) return;
@@ -171,12 +173,14 @@ export function TabGroup({
         </button>
       </div>
       <div className="tab-body">
+        <div className="panel-scale" style={scaleStyle}>
         {active
           ? renderContent(active, (panel) => {
               const title = active.title === "New tab" ? titleFor(panel) ?? active.title : active.title;
               updateTab(active.id, { panel, title });
             })
           : null}
+        </div>
       </div>
       {menu && menuTab
         ? createPortal(

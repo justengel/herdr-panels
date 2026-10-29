@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+Ctrl+wheel zooms the panel under the pointer. Ctrl+0, Ctrl++, and Ctrl+- zoom the panel with the gold bar. With no panel selected, those keys zoom the panel under the pointer while this window is in front. With the pointer somewhere else, Ctrl+0 returns every panel to 100%. Clicking the session bar clears that bar. Steps are 10% from 50% to 200%, and 25% from there down to 25% and up to 300%. A terminal changes its font size. A browser panel and a plugin zoom their own page. The same keys and wheel work in a browser tab, one panel at a time. Spaces and agents stay as they are unless the zoom is aimed at them.
+
 ## 0.1.10 - 2026-10-29
 
 Selecting an element and choosing Screenshot works in the Ubuntu desktop window. WebKit colors from `color-mix()` are written as `rgb()` before the image is drawn. A page inside a panel is painted directly when that window will not export the SVG capture.

@@ -87,8 +87,32 @@ export function middleEllipsis(path: string, maxChars: number): string {
   const shown = `${head}${sep}…${sep}${leaf}`;
   if (shown.length <= maxChars) return shown;
   const budget = maxChars - leaf.length - 2;
-  if (budget <= 1) return `…${sep}${leaf}`.slice(-maxChars);
+  if (budget <= 1) {
+    const kept = Math.max(1, maxChars - 1);
+    return `…${leaf.slice(-kept)}`;
+  }
   return `${head.slice(0, budget)}…${sep}${leaf}`;
+}
+
+/** Unshortened address for focus and copy. A home path stays `~`, the same form as the idle field. */
+export function focusedAddress(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) return trimmed;
+  return displayPath(trimmed, guessHome(trimmed)) || trimmed;
+}
+
+/**
+ * Select-all in an address field that the user has not edited copies the home shortcut, not the fitted ellipsis.
+ * A partial selection copies only that selection.
+ */
+export function addressToCopy(
+  stored: string,
+  field: string,
+  edited: boolean,
+  entireFieldSelected: boolean,
+): string {
+  if (!entireFieldSelected || edited) return field;
+  return focusedAddress(stored) || field;
 }
 
 function splitDisplay(path: string): { sep: string; parts: string[] } {

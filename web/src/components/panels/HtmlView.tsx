@@ -165,7 +165,7 @@ async function fulfill(message: BridgeMessage, control: boolean): Promise<unknow
     case "visitPanel":
       throw new Error("This panel cannot change the desk");
     case "setZoom":
-      throw new Error("This panel cannot change the window zoom");
+      throw new Error("This panel cannot set the zoom");
     case "openExternal": {
       const url = openableHttpUrl(String(params.url ?? ""));
       if (!url) throw new Error("only http and https links can be opened");

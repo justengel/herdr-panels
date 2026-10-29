@@ -4,6 +4,8 @@ import type { PanelConfig, TabEdge } from "../types";
 import type { MenuEntry } from "../viewMenu";
 import { fitFlyout, useKeepMenuOnScreen, type FlyoutBox } from "../menuPlace";
 import { useKeyedPanel } from "../deskKeyboard";
+import { desktopHost } from "../desktopBrowser";
+import { contentScaleStyle, PanelScaleProvider, usePanelZoom } from "../displayZoom";
 import { usePanelActions, usePanelDrag } from "../panelActions";
 
 interface Props {
@@ -56,6 +58,39 @@ type FlyoutKind = "layout" | "plugins" | "panes" | "views";
 const FLYOUT_OPEN_MS = 220;
 /** Grace period to cross from the trigger into the flyout without closing. */
 const FLYOUT_CLOSE_MS = 280;
+
+function PanelBody({
+  panelId,
+  panelType,
+  children,
+}: {
+  panelId?: string;
+  panelType: PanelConfig["type"];
+  children: ReactNode;
+}) {
+  const scale = usePanelZoom(panelId);
+  // A plugin or HTML page is a sandboxed frame, so it zooms its own document.
+  // A desktop browser is a separate webview. CSS zoom on this page reaches neither.
+  const ownDocument =
+    panelType === "plugin" ||
+    panelType === "html" ||
+    (desktopHost() !== null && panelType === "iframe");
+  const style = ownDocument || panelType === "herdr" ? undefined : contentScaleStyle(scale);
+  if (panelType === "tabs") {
+    return (
+      <PanelScaleProvider style={style}>
+        <div className="panel-body">{children}</div>
+      </PanelScaleProvider>
+    );
+  }
+  return (
+    <div className="panel-body">
+      <div className="panel-scale" style={style}>
+        {children}
+      </div>
+    </div>
+  );
+}
 
 export function PanelChrome({
   title,
@@ -326,7 +361,7 @@ export function PanelChrome({
 
   if (onBack || borrowed) {
     return (
-      <section className={classes} data-panel-id={panelId} data-kind={kind} tabIndex={-1}>
+      <section className={classes} data-panel-id={panelId} data-kind={kind} data-type={panelType} tabIndex={-1}>
         <header className="panel-header borrow-header">
           <div className="panel-title">
             <strong>{title}</strong>
@@ -345,7 +380,9 @@ export function PanelChrome({
             </button>
           ) : null}
         </header>
-        <div className="panel-body">{children}</div>
+        <PanelBody panelId={panelId} panelType={panelType}>
+          {children}
+        </PanelBody>
       </section>
     );
   }
@@ -354,6 +391,7 @@ export function PanelChrome({
     <section
       className={classes}
       data-panel-id={panelId}
+      data-type={panelType}
       data-kind={kind}
       tabIndex={-1}
       onClick={(event) => {
@@ -449,7 +487,9 @@ export function PanelChrome({
           </div>
         </header>
       )}
-      <div className="panel-body">{children}</div>
+      <PanelBody panelId={panelId} panelType={panelType}>
+        {children}
+      </PanelBody>
       {menu && panelId
         ? createPortal(
             <>

@@ -18,6 +18,7 @@ interface Props {
   onSelect: () => void;
   onAddPanel: () => void;
   onExitZoom: () => void;
+  onClearFocus: () => void;
   onHerdrAction: (action: HerdrStatusAction) => void;
 }
 
@@ -36,6 +37,7 @@ export function TopBar({
   onSelect,
   onAddPanel,
   onExitZoom,
+  onClearFocus,
   onHerdrAction,
 }: Props) {
   const status = herdrStatusView(runtime, herdrCtl);
@@ -55,7 +57,7 @@ export function TopBar({
     : status.label;
   return (
     <div className="topbar-slot">
-    <header className="topbar">
+    <header className="topbar" onPointerDown={onClearFocus}>
       <div className="brand">
         <img className="mark" src="/icon.svg" alt="" />
         <span>Herdr Panels</span>

@@ -197,7 +197,7 @@ pub fn consent_text(
                 lines.push("- List the panels on this desk.".into());
             }
             PANELS_CONTROL => lines.push(
-                "- Open, update, close, move, and resize panels on this desk. Fill the screen with one panel, show the whole desk again, or visit a panel from another space without changing that space. Set the desktop window zoom. This does not type into a Herdr pane.".into(),
+                "- Open, update, close, move, and resize panels on this desk. Fill the screen with one panel, show the whole desk again, or visit a panel from another space without changing that space. Set this panel's zoom. This does not type into a Herdr pane.".into(),
             ),
             LINKS => lines.push(
                 "- Open http and https links in the browser. Other links are refused.".into(),
@@ -842,7 +842,7 @@ mod tests {
         );
         assert!(text.contains("List the panels on this desk"));
         assert!(text.contains("does not type into a Herdr pane"));
-        assert!(text.contains("Set the desktop window zoom"));
+        assert!(text.contains("Set this panel's zoom"));
         let typing = consent_text("report", "Report", &[CONTROL.into()], &[], &[]);
         assert!(typing.contains("scroll one"));
     }

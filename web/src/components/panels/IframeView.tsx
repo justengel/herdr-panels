@@ -11,6 +11,7 @@ import {
   nextBrowserGeneration,
   placeBrowser,
 } from "../../desktopBrowser";
+import { panelZoom, subscribeZoom } from "../../displayZoom";
 
 interface Props {
   url: string;
@@ -60,15 +61,26 @@ function EmbeddedPage({ panelId, url, suspended }: { panelId: string; url: strin
       );
     };
     frame = requestAnimationFrame(tick);
+    const pushZoom = () => {
+      const owner = hole.current?.closest("[data-panel-id]")?.getAttribute("data-panel-id") ?? panelId;
+      void desktopHost()
+        ?.invoke("set_browser_zoom", { label, scale: panelZoom(owner) })
+        .catch((err: unknown) => {
+          console.error(err);
+        });
+    };
+    pushZoom();
+    const unsubscribe = subscribeZoom(pushZoom);
     return () => {
       stopped = true;
+      unsubscribe();
       cancelAnimationFrame(frame);
       void closeBrowser(label, generation);
     };
   }, [panelId, url]);
 
   return (
-    <div ref={hole} className="frame browser-hole">
+    <div ref={hole} className="frame browser-hole" data-browser-label={`browser-${panelId}`}>
       {note ? <div className="empty">{note}</div> : null}
     </div>
   );

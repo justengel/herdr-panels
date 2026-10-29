@@ -38,8 +38,8 @@ button, select, input { font: inherit; color: inherit; }
 }
 
 .topbar-slot {
-  flex: 0 0 calc(44px * var(--topbar-zoom, 1));
-  height: calc(44px * var(--topbar-zoom, 1));
+  flex: 0 0 44px;
+  height: 44px;
   overflow: hidden;
 }
 
@@ -52,8 +52,6 @@ button, select, input { font: inherit; color: inherit; }
   padding: 0 14px;
   background: var(--bg-elev);
   border-bottom: 1px solid var(--line);
-  /* Window zoom scales the webview. Draw the session bar back to its 100% size. */
-  zoom: var(--topbar-zoom, 1);
 }
 
 .brand {
@@ -667,6 +665,13 @@ body.panel-dragging, body.panel-dragging * { cursor: grabbing !important; user-s
   min-width: 0;
   position: relative;
   overflow: hidden;
+}
+
+.panel-scale {
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
 }
 
 .nav-list, .agent-list {

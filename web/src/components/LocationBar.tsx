@@ -1,7 +1,15 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { api } from "../api";
 import { noteAddress, visitAddress, type AddressHistory } from "../addressHistory";
-import { charsThatFit, displayPath, expandDisplayPath, guessHome, middleEllipsis } from "../displayPath";
+import {
+  addressToCopy,
+  charsThatFit,
+  displayPath,
+  expandDisplayPath,
+  focusedAddress,
+  guessHome,
+  middleEllipsis,
+} from "../displayPath";
 import type { PanelConfig } from "../types";
 
 let textContext: CanvasRenderingContext2D | null | undefined;
@@ -326,14 +334,32 @@ export function LocationBar({
     if (key === "a") {
       event.preventDefault();
       event.stopPropagation();
+      const full = addressToCopy(value, input.value, undoRef.current.length > 0, true);
+      if (full !== input.value) {
+        input.value = full;
+        replaceDraft(full, false);
+      }
       input.select();
       return;
     }
     if (key === "c") {
-      if (!selectedText(input).text) return;
+      const selected = selectedText(input);
+      if (!selected.text) return;
       event.preventDefault();
       event.stopPropagation();
-      copySelection(input);
+      const entire = selected.start === 0 && selected.end === input.value.length;
+      const text = addressToCopy(value, selected.text, undoRef.current.length > 0, entire);
+      if (text !== selected.text) {
+        input.value = text;
+        replaceDraft(text, false);
+        input.select();
+      }
+      try {
+        document.execCommand("copy");
+      } catch {
+        // writeText covers browsers that refuse the older copy command.
+      }
+      writeClipboard(text);
       return;
     }
     if (key === "x") {
@@ -426,7 +452,7 @@ export function LocationBar({
         spellCheck={false}
         autoCapitalize="off"
         autoCorrect="off"
-        onFocus={() => replaceDraft(realAddress(draft, value) || value, false)}
+        onFocus={() => replaceDraft(focusedAddress(value) || value, false)}
         onBlur={() => replaceDraft(fitted(value), false)}
         onKeyDown={onAddressKey}
         onChange={(event) => edit(event.target.value, event.target.selectionStart ?? event.target.value.length, true)}

@@ -10,6 +10,7 @@ type Internals = {
 };
 
 export function desktopHost(): Internals | null {
+  if (typeof window === "undefined") return null;
   const host = window as Window & { __TAURI_INTERNALS__?: Internals };
   return host.__TAURI_INTERNALS__ ?? null;
 }

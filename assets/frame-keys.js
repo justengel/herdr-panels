@@ -39,7 +39,13 @@ if (typeof window !== "undefined" && window.parent && window.parent !== window &
   }
   window.addEventListener("message", (event) => {
     const data = event.data;
-    if (!data || data.source !== "hwp-host" || data.type !== "prefix") return;
+    if (!data || data.source !== "hwp-host") return;
+    if (data.type === "zoom") {
+      const scale = Number(data.scale);
+      if (Number.isFinite(scale) && scale > 0) document.documentElement.style.zoom = String(scale);
+      return;
+    }
+    if (data.type !== "prefix") return;
     prefix = data.chord || null;
     token = typeof data.token === "string" ? data.token : "";
     armed = false;
@@ -52,6 +58,38 @@ if (typeof window !== "undefined" && window.parent && window.parent !== window &
     }
     ask();
   }, 300);
+  window.addEventListener(
+    "wheel",
+    (event) => {
+      if (!event.ctrlKey && !event.metaKey) return;
+      event.preventDefault();
+      event.stopPropagation();
+      window.parent.postMessage({ source: "hwp-frame", type: "zoom-wheel", deltaY: event.deltaY }, "*");
+    },
+    { capture: true, passive: false },
+  );
+  window.addEventListener(
+    "keydown",
+    (event) => {
+      if (event.altKey || (!event.ctrlKey && !event.metaKey)) return;
+      const key = event.key;
+      if (key !== "=" && key !== "+" && key !== "-" && key !== "_" && key !== "0") return;
+      event.preventDefault();
+      event.stopPropagation();
+      window.parent.postMessage(
+        {
+          source: "hwp-frame",
+          type: "zoom-key",
+          key,
+          ctrlKey: event.ctrlKey,
+          metaKey: event.metaKey,
+          altKey: event.altKey,
+        },
+        "*",
+      );
+    },
+    true,
+  );
   window.addEventListener(
     "keydown",
     (event) => {

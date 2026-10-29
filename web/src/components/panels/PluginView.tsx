@@ -146,7 +146,8 @@ export function PluginView({
                 );
                 return;
               }
-              window.dispatchEvent(new CustomEvent("herdr-zoom-set", { detail: scale }));
+              const owner = frameRef.current?.closest("[data-panel-id]")?.getAttribute("data-panel-id") ?? panelId;
+              window.dispatchEvent(new CustomEvent("herdr-zoom-set", { detail: { scale, panelId: owner } }));
             }
             if (call.method === "visitPanel") {
               const record =

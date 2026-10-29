@@ -1424,9 +1424,9 @@ fn param_strings(params: &Value, key: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// Chromium's page-zoom steps. The same list lives in `web/src/displayZoom.ts`.
-const DISPLAY_ZOOM_STEPS: [f64; 17] = [
-    0.25, 0.33, 0.5, 0.67, 0.75, 0.8, 0.9, 1.0, 1.1, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0, 4.0, 5.0,
+/// 10% from 50% through 200%. 25% outside that, from 25% to 300%. The same list lives in `web/src/displayZoom.ts`.
+const DISPLAY_ZOOM_STEPS: [f64; 21] = [
+    0.25, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9, 2.0, 2.25, 2.5, 2.75, 3.0,
 ];
 
 fn snap_display_zoom(value: f64) -> Result<f64, ApiError> {
@@ -2032,10 +2032,11 @@ mod tests {
     }
 
     #[test]
-    fn display_zoom_snaps_to_the_browser_steps() {
-        assert!((snap_display_zoom(1.2).unwrap_or(0.0) - 1.25).abs() < f64::EPSILON);
+    fn display_zoom_snaps_to_ten_percent_steps() {
+        assert!((snap_display_zoom(1.2).unwrap_or(0.0) - 1.2).abs() < 0.001);
+        assert!((snap_display_zoom(1.26).unwrap_or(0.0) - 1.3).abs() < 0.001);
         assert!((snap_display_zoom(1.0).unwrap_or(0.0) - 1.0).abs() < f64::EPSILON);
-        assert!((snap_display_zoom(9.0).unwrap_or(0.0) - 5.0).abs() < f64::EPSILON);
+        assert!((snap_display_zoom(9.0).unwrap_or(0.0) - 3.0).abs() < 0.001);
         assert!(snap_display_zoom(f64::NAN).is_err());
         assert_eq!(param_lines(&json!({"lines": 3})).unwrap_or(0), 3);
         assert!(param_lines(&json!({"lines": 0})).is_err());

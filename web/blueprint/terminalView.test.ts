@@ -18,7 +18,17 @@ import {
   openingScreen,
   frameDraw,
 } from "../src/terminalView";
-import { consumeZoomWheel, nearestZoom, stepZoom, topBarCounterZoom, zoomChord } from "../src/displayZoom";
+import {
+  consumeZoomWheel,
+  contentScaleStyle,
+  keyZoom,
+  nearestZoom,
+  parseStoredZooms,
+  stepZoom,
+  terminalFontSize,
+  wheelPanel,
+  zoomChord,
+} from "../src/displayZoom";
 
 describe("terminal view", () => {
   it("keeps the panel grid when Herdr has not reported a larger one", () => {
@@ -172,12 +182,17 @@ describe("terminal view", () => {
 });
 
 describe("display zoom", () => {
-  it("steps through the browser scale list and stops at the ends", () => {
+  it("steps by 10 percent between 50 and 200, and by 25 percent outside that", () => {
     expect(stepZoom(1, 1)).toBe(1.1);
+    expect(stepZoom(1.1, 1)).toBe(1.2);
     expect(stepZoom(1, -1)).toBe(0.9);
-    expect(stepZoom(5, 1)).toBe(5);
+    expect(stepZoom(2, 1)).toBe(2.25);
+    expect(stepZoom(0.5, -1)).toBe(0.25);
     expect(stepZoom(0.25, -1)).toBe(0.25);
-    expect(nearestZoom(1.2)).toBe(1.25);
+    expect(stepZoom(3, 1)).toBe(3);
+    expect(nearestZoom(1.24)).toBe(1.2);
+    expect(nearestZoom(1.26)).toBe(1.3);
+    expect(nearestZoom(9)).toBe(3);
   });
 
   it("recognizes the browser zoom chords", () => {
@@ -189,12 +204,36 @@ describe("display zoom", () => {
     expect(zoomChord({ key: "a", ctrlKey: true, metaKey: false, altKey: false })).toBeNull();
   });
 
-  it("keeps the session bar at its normal size while the window zooms", () => {
-    expect(topBarCounterZoom(1)).toBe(1);
-    expect(topBarCounterZoom(2)).toBe(0.5);
-    expect(topBarCounterZoom(1.25)).toBeCloseTo(0.8);
-    expect(topBarCounterZoom(0)).toBe(1);
-    expect(topBarCounterZoom(Number.NaN)).toBe(1);
+  it("aims the zoom keys at the keyed panel, or the panel under the pointer", () => {
+    expect(keyZoom("in", "notes", null)).toEqual({ type: "panel", id: "notes", direction: 1 });
+    expect(keyZoom("out", "notes", "other")).toEqual({ type: "panel", id: "notes", direction: -1 });
+    expect(keyZoom("reset", "notes", null)).toEqual({ type: "panel", id: "notes", direction: 0 });
+    expect(keyZoom("in", null, "notes")).toEqual({ type: "panel", id: "notes", direction: 1 });
+    expect(keyZoom("out", null, "notes")).toEqual({ type: "panel", id: "notes", direction: -1 });
+    expect(keyZoom("reset", null, "notes")).toEqual({ type: "panel", id: "notes", direction: 0 });
+    expect(keyZoom("in", null, null)).toEqual({ type: "ignore" });
+    expect(keyZoom("out", null, null)).toEqual({ type: "ignore" });
+    expect(keyZoom("reset", null, null)).toEqual({ type: "reset-all" });
+  });
+
+  it("zooms the panel under the wheel and leaves the session bar alone", () => {
+    expect(wheelPanel("notes", false)).toBe("notes");
+    expect(wheelPanel(null, false)).toBeNull();
+    expect(wheelPanel("notes", true)).toBeNull();
+  });
+
+  it("scales panel content in place and enlarges terminal glyphs", () => {
+    expect(contentScaleStyle(1)).toBeUndefined();
+    expect(contentScaleStyle(1.2)).toEqual({ zoom: 1.2 });
+    expect(terminalFontSize(1)).toBe(14);
+    expect(terminalFontSize(1.1)).toBe(15.4);
+    expect(terminalFontSize(2)).toBe(28);
+  });
+
+  it("remembers a zoom per panel and ignores the old window zoom", () => {
+    expect(parseStoredZooms(null)).toEqual({});
+    expect(parseStoredZooms("1.25")).toEqual({});
+    expect(parseStoredZooms('{"notes":1.24,"gone":"big"}')).toEqual({ notes: 1.2 });
   });
 
   it("collects a trackpad gesture into one zoom step per notch", () => {

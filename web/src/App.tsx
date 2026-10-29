@@ -129,7 +129,7 @@ export function App() {
   const runtimeRef = useRef<RuntimeSnapshot | null>(null);
   const sessionRef = useRef<string | null>(null);
   const deskGeneration = useRef(0);
-  useEffect(() => installDisplayZoom(), []);
+  useEffect(() => installDisplayZoom({ keyedId: () => keyIdRef.current }), []);
   const acceptDeskSaves = useRef(false);
   const deskSaveTimer = useRef(0);
   const applySpaceRef = useRef<(root: LayoutNode) => void>(() => {});
@@ -408,9 +408,9 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    if (!layout) return;
+    if (!layout || !keyId) return;
     const ids = listPanels(layout.root).map((panel) => panel.id);
-    if (keyId && ids.includes(keyId)) return;
+    if (ids.includes(keyId)) return;
     setKeyId(ids[0] ?? null);
   }, [layout, keyId]);
 
@@ -984,6 +984,7 @@ export function App() {
           onSelect={() => setSelecting((current) => !current)}
           onAddPanel={addPanel}
           onExitZoom={() => setZoomedId(null)}
+          onClearFocus={() => setKeyId(null)}
         />
         {error ? <div className="banner">{error}</div> : null}
         <main className="workspace">

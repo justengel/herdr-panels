@@ -22,7 +22,9 @@ struct Slot {
 pub struct BrowserHost {
     slots: Mutex<HashMap<String, Slot>>,
     selecting: AtomicBool,
+    /// Scale of the desk window. Panel content uses `panel_zoom` instead.
     zoom: Mutex<f64>,
+    panel_zoom: Mutex<HashMap<String, f64>>,
 }
 
 pub fn host() -> BrowserHost {
@@ -30,7 +32,26 @@ pub fn host() -> BrowserHost {
         slots: Mutex::new(HashMap::new()),
         selecting: AtomicBool::new(false),
         zoom: Mutex::new(1.0),
+        panel_zoom: Mutex::new(HashMap::new()),
     }
+}
+
+fn browser_page_zoom(scale: f64) -> String {
+    let scale = if scale.is_finite() && scale > 0.0 {
+        scale
+    } else {
+        1.0
+    };
+    format!("document.documentElement.style.zoom={scale}")
+}
+
+fn panel_content_zoom(host: &BrowserHost, label: &str) -> f64 {
+    host.panel_zoom
+        .lock()
+        .ok()
+        .and_then(|zoom| zoom.get(label).copied())
+        .filter(|scale| scale.is_finite() && *scale > 0.0)
+        .unwrap_or(1.0)
 }
 
 fn current_zoom(host: &BrowserHost) -> f64 {
@@ -119,6 +140,7 @@ async fn place_browser(
     let parsed = browser_target(&label, &url)?;
     finite_box(x, y, width, height)?;
     let zoom = current_zoom(&host);
+    let content_zoom = panel_content_zoom(&host, &label);
     let (x, y, width, height) = scale_bounds(x, y, width, height, zoom);
     let target = parsed.as_str().to_string();
     let mut guard = host.slots.lock().map_err(|_| "browser host is locked".to_string())?;
@@ -156,6 +178,10 @@ async fn place_browser(
                         return;
                     }
                     let host = webview.state::<BrowserHost>();
+                    let scale = panel_content_zoom(&host, webview.label());
+                    if let Err(err) = webview.eval(browser_page_zoom(scale)) {
+                        eprintln!("browser zoom: {err}");
+                    }
                     if !host.selecting.load(Ordering::Relaxed) {
                         return;
                     }
@@ -165,7 +191,9 @@ async fn place_browser(
             LogicalSize::new(width, height),
         )
         .map_err(|err| err.to_string())?;
-    let _ = view.set_zoom(zoom);
+    if let Err(err) = view.eval(browser_page_zoom(content_zoom)) {
+        eprintln!("browser zoom: {err}");
+    }
     #[cfg(windows)]
     {
         use windows::Win32::Foundation::HWND;
@@ -205,9 +233,24 @@ async fn set_display_zoom(app: AppHandle, host: State<'_, BrowserHost>, scale: f
         .get_webview("main")
         .ok_or_else(|| "the desktop window is not open".to_string())?;
     webview.set_zoom(scale).map_err(|err| err.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+async fn set_browser_zoom(host: State<'_, BrowserHost>, label: String, scale: f64) -> Result<(), String> {
+    if !scale.is_finite() || scale <= 0.0 {
+        return Err("zoom is invalid".into());
+    }
+    let scale = scale.clamp(0.25, 3.0);
+    {
+        let mut zoom = host.panel_zoom.lock().map_err(|_| "browser host is locked".to_string())?;
+        zoom.insert(label.clone(), scale);
+    }
     let guard = host.slots.lock().map_err(|_| "browser host is locked".to_string())?;
-    for slot in guard.values() {
-        let _ = slot.view.set_zoom(scale);
+    if let Some(slot) = guard.get(&label) {
+        slot.view
+            .eval(browser_page_zoom(scale))
+            .map_err(|err| err.to_string())?;
     }
     Ok(())
 }
@@ -389,6 +432,8 @@ pub fn run() {
             close_browser,
             set_browser_select,
             set_display_zoom,
+            set_browser_zoom,
+            cursor_place,
             set_desk_prefix,
             set_frame_focus,
             open_external
@@ -429,10 +474,55 @@ pub fn run() {
         .expect("error while running the desktop shell");
 }
 
+/// Where the pointer is, for zoom keys when no panel is selected.
+#[derive(Debug, PartialEq, serde::Serialize)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+pub enum CursorPlace {
+    Away,
+    Page,
+    Browser { label: String },
+}
+
+/// The pointer counts only while it is over this window and this window is in front.
+pub fn cursor_place_for(over_desk: bool, desk_front: bool, browser_label: Option<String>) -> CursorPlace {
+    if !over_desk || !desk_front {
+        return CursorPlace::Away;
+    }
+    match browser_label {
+        Some(label) => CursorPlace::Browser { label },
+        None => CursorPlace::Page,
+    }
+}
+
+#[tauri::command]
+fn cursor_place() -> CursorPlace {
+    #[cfg(windows)]
+    {
+        browser_wheel::cursor_place()
+    }
+    #[cfg(not(windows))]
+    {
+        CursorPlace::Page
+    }
+}
+
+/// Ctrl or Cmd with plus, minus, or 0. Alt is left for the page.
+pub fn zoom_chord_vk(vk: u16, ctrl: bool, alt: bool, meta: bool) -> Option<&'static str> {
+    if alt || !(ctrl || meta) {
+        return None;
+    }
+    match vk {
+        0xBB | 0x6B => Some("in"),
+        0xBD | 0x6D => Some("out"),
+        0x30 | 0x60 => Some("reset"),
+        _ => None,
+    }
+}
+
 /// One mouse notch is 120. Positive Win32 delta rolls the wheel away from the user and zooms in.
-/// A wheel that is not Ctrl, or is outside the desk, leaves the pending remainder untouched.
-pub fn zoom_wheel_steps(pending: i32, delta: i32, ctrl: bool, over_desk: bool) -> (i32, i32) {
-    if !ctrl || !over_desk || delta == 0 {
+/// A wheel that is not Ctrl, or is not over a browser panel, leaves the pending remainder untouched.
+pub fn zoom_wheel_steps(pending: i32, delta: i32, ctrl: bool, over_browser: bool) -> (i32, i32) {
+    if !ctrl || !over_browser || delta == 0 {
         return (pending, 0);
     }
     let delta = delta.clamp(-12_000, 12_000);
@@ -642,13 +732,14 @@ mod browser_wheel {
         GetAsyncKeyState, GetFocus, VK_CONTROL, VK_LWIN, VK_MENU, VK_RWIN, VK_SHIFT,
     };
     use windows::Win32::UI::WindowsAndMessaging::{
-        CallNextHookEx, GetAncestor, GetParent, GetWindowThreadProcessId, SetWindowsHookExW, WindowFromPoint, GA_ROOT,
-        HHOOK, MOUSEHOOKSTRUCT, MOUSEHOOKSTRUCTEX, WH_KEYBOARD, WH_MOUSE, WM_LBUTTONDOWN, WM_MOUSEWHEEL, WM_RBUTTONDOWN,
+        CallNextHookEx, GetAncestor, GetCursorPos, GetForegroundWindow, GetParent, GetWindowThreadProcessId,
+        SetWindowsHookExW, WindowFromPoint, GA_ROOT, HHOOK, MOUSEHOOKSTRUCT, MOUSEHOOKSTRUCTEX, WH_KEYBOARD, WH_MOUSE,
+        WM_LBUTTONDOWN, WM_MOUSEWHEEL, WM_RBUTTONDOWN,
     };
 
     use super::{
-        capture_prefix, css_from_client, key_from_vk, panel_id_from_browser, zoom_wheel_steps, KeyRoute, KeySnap,
-        PrefixChord,
+        capture_prefix, css_from_client, key_from_vk, panel_id_from_browser, zoom_chord_vk, zoom_wheel_steps, KeyRoute,
+        KeySnap, PrefixChord,
     };
 
     static APP: Mutex<Option<AppHandle>> = Mutex::new(None);
@@ -662,7 +753,7 @@ mod browser_wheel {
 
     enum HookWork {
         Eval(String),
-        Zoom(i32),
+        Zoom { label: String, steps: i32 },
         Click(POINT),
     }
     static PREFIX: Mutex<(bool, PrefixChord)> = Mutex::new((
@@ -697,7 +788,7 @@ mod browser_wheel {
                 while let Ok(work) = rx.recv() {
                     match work {
                         HookWork::Eval(script) => relay_eval(script),
-                        HookWork::Zoom(steps) => emit(steps),
+                        HookWork::Zoom { label, steps } => emit(&label, steps),
                         HookWork::Click(pt) => {
                             if let Some(script) = focus_script(pt) {
                                 relay_eval(script);
@@ -705,11 +796,6 @@ mod browser_wheel {
                         }
                     }
                 }
-            });
-            let claim = app.clone();
-            std::thread::spawn(move || loop {
-                mark_captured(&claim);
-                std::thread::sleep(Duration::from_secs(2));
             });
             let _ = app.run_on_main_thread(install_window_hooks);
         });
@@ -763,17 +849,24 @@ mod browser_wheel {
         }
     }
 
-    fn mark_captured(app: &AppHandle) {
-        let app = app.clone();
-        let _ = app.clone().run_on_main_thread(move || {
-            if let Some(webview) = app.get_webview("main") {
-                let _ = webview.eval("window.__herdrZoomCaptured = true");
-            }
-        });
-    }
-
     fn enqueue(work: HookWork) -> bool {
         WORK.get().is_some_and(|tx| tx.try_send(work).is_ok())
+    }
+
+    pub fn cursor_place() -> super::CursorPlace {
+        let mut point = POINT { x: 0, y: 0 };
+        if unsafe { GetCursorPos(&mut point) }.is_err() {
+            return super::CursorPlace::Away;
+        }
+        let hwnd = unsafe { WindowFromPoint(point) };
+        let over_desk = hwnd_in_desk(hwnd);
+        let desk = DESK.load(Ordering::Relaxed);
+        let front = unsafe { GetForegroundWindow() };
+        let desk_front = desk != 0
+            && !front.0.is_null()
+            && unsafe { GetAncestor(front, GA_ROOT) }.0 as isize == desk;
+        let label = if over_desk { browser_label_at(hwnd) } else { None };
+        super::cursor_place_for(over_desk, desk_front, label)
     }
 
     fn hwnd_in_desk(hwnd: HWND) -> bool {
@@ -795,16 +888,18 @@ mod browser_wheel {
                     let wheel = unsafe { &*(lparam.0 as *const MOUSEHOOKSTRUCTEX) };
                     let delta = (wheel.mouseData >> 16) as i16 as i32;
                     let ctrl = unsafe { GetAsyncKeyState(VK_CONTROL.0 as i32) } < 0;
-                    if let Ok(mut pending) = PENDING.try_lock() {
-                        let saved = *pending;
-                        let (next, steps) = zoom_wheel_steps(*pending, delta, ctrl, true);
-                        *pending = next;
-                        drop(pending);
-                        if ctrl && (steps == 0 || enqueue(HookWork::Zoom(steps))) {
-                            return LRESULT(1);
-                        }
+                    if let Some(label) = browser_label_at(info.hwnd) {
                         if let Ok(mut pending) = PENDING.try_lock() {
-                            *pending = saved;
+                            let saved = *pending;
+                            let (next, steps) = zoom_wheel_steps(*pending, delta, ctrl, true);
+                            *pending = next;
+                            drop(pending);
+                            if ctrl && (steps == 0 || enqueue(HookWork::Zoom { label, steps })) {
+                                return LRESULT(1);
+                            }
+                            if let Ok(mut pending) = PENDING.try_lock() {
+                                *pending = saved;
+                            }
                         }
                     }
                 }
@@ -813,7 +908,28 @@ mod browser_wheel {
         unsafe { CallNextHookEx(None::<HHOOK>, code, wparam, lparam) }
     }
 
-    fn emit(steps: i32) {
+    fn browser_label_at(hwnd: HWND) -> Option<String> {
+        if hwnd.0.is_null() {
+            return None;
+        }
+        let desk = DESK.load(Ordering::Relaxed);
+        let browsers = BROWSERS.lock().unwrap_or_else(|err| err.into_inner());
+        let mut current = hwnd.0 as isize;
+        for _ in 0..24 {
+            if current == 0 || current == desk {
+                return None;
+            }
+            if let Some((_, label)) = browsers.iter().find(|(known, _)| *known == current) {
+                return Some(label.clone());
+            }
+            current = unsafe { GetParent(HWND(current as *mut _)) }
+                .map(|parent| parent.0 as isize)
+                .unwrap_or(0);
+        }
+        None
+    }
+
+    fn emit(label: &str, steps: i32) {
         let Ok(guard) = APP.lock() else {
             return;
         };
@@ -821,8 +937,9 @@ mod browser_wheel {
             return;
         };
         drop(guard);
+        let label = serde_json::to_string(label).unwrap_or_else(|_| "\"\"".into());
         let script = format!(
-            "window.__herdrZoomCaptured = true; window.dispatchEvent(new CustomEvent('herdr-zoom-step',{{detail:{steps}}}))"
+            "window.dispatchEvent(new CustomEvent('herdr-zoom-step',{{detail:{{label:{label},steps:{steps}}}}}))"
         );
         let _ = app.clone().run_on_main_thread(move || {
             if let Some(webview) = app.get_webview("main") {
@@ -998,6 +1115,23 @@ mod browser_wheel {
     unsafe extern "system" fn key_hook(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
         if code == 0 && hwnd_in_desk(unsafe { GetFocus() }) {
             let up = (lparam.0 as u32) & 0x8000_0000 != 0;
+            // The main page handles its own zoom keys. A browser panel and a plugin frame do not deliver them.
+            // A plugin frame reports its own zoom keys. Only a browser window does not.
+            let child = focused_browser_panel().is_some();
+            if !up && child {
+                let ctrl = unsafe { GetAsyncKeyState(VK_CONTROL.0 as i32) } < 0;
+                let alt = unsafe { GetAsyncKeyState(VK_MENU.0 as i32) } < 0;
+                let meta = unsafe { GetAsyncKeyState(VK_LWIN.0 as i32) } < 0
+                    || unsafe { GetAsyncKeyState(VK_RWIN.0 as i32) } < 0;
+                if let Some(chord) = zoom_chord_vk(wparam.0 as u16, ctrl, alt, meta) {
+                    let detail = serde_json::to_string(chord).unwrap_or_else(|_| "\"\"".into());
+                    let script =
+                        format!("window.dispatchEvent(new CustomEvent('herdr-zoom-chord',{{detail:{detail}}}))");
+                    if enqueue(HookWork::Eval(script)) {
+                        return LRESULT(1);
+                    }
+                }
+            }
             if take_child_key(wparam.0 as u16, up) {
                 return LRESULT(1);
             }
@@ -1177,12 +1311,33 @@ mod tests {
     }
 
     #[test]
-    fn ctrl_wheel_over_a_browser_panel_steps_the_shared_zoom() {
+    fn ctrl_wheel_over_a_browser_panel_steps_that_panel() {
         assert_eq!(zoom_wheel_steps(0, 120, true, true), (0, 1));
         assert_eq!(zoom_wheel_steps(0, -240, true, true), (0, -2));
         assert_eq!(zoom_wheel_steps(40, 80, true, true), (0, 1));
         assert_eq!(zoom_wheel_steps(40, 120, false, true), (40, 0));
         assert_eq!(zoom_wheel_steps(40, 120, true, false), (40, 0));
         assert_eq!(zoom_wheel_steps(0, 0, true, true), (0, 0));
+        assert_eq!(zoom_chord_vk(0xBB, true, false, false), Some("in"));
+        assert_eq!(zoom_chord_vk(0xBD, true, false, false), Some("out"));
+        assert_eq!(zoom_chord_vk(0x30, true, false, false), Some("reset"));
+        assert_eq!(zoom_chord_vk(0x30, true, true, false), None);
+        assert_eq!(zoom_chord_vk(0x41, true, false, false), None);
+    }
+
+    #[test]
+    fn zoom_keys_use_the_pointer_only_while_this_window_is_in_front() {
+        assert_eq!(cursor_place_for(false, true, None), CursorPlace::Away);
+        assert_eq!(
+            cursor_place_for(true, false, Some("browser-notes".into())),
+            CursorPlace::Away
+        );
+        assert_eq!(cursor_place_for(true, true, None), CursorPlace::Page);
+        assert_eq!(
+            cursor_place_for(true, true, Some("browser-notes".into())),
+            CursorPlace::Browser {
+                label: "browser-notes".into()
+            }
+        );
     }
 }
