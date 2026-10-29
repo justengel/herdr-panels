@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
 import { api } from "../api";
+import { settleComputedColors } from "../cssColor";
 import { desktopHost } from "../desktopBrowser";
 import { intersects, shiftRect, toFrame, type LocalRect } from "../frameSelect";
 import {
@@ -779,12 +780,7 @@ async function rasterize(element: HTMLElement): Promise<Blob> {
   document.body.classList.add("is-capturing");
   try {
     const { default: html2canvas } = await import("html2canvas");
-    const canvas = await html2canvas(element, {
-      backgroundColor: backgroundOf(element),
-      scale: window.devicePixelRatio || 1,
-      logging: false,
-      useCORS: true,
-    });
+    const canvas = await html2canvas(element, shotOptions(backgroundOf(element)));
     paintCanvases(canvas, element, rect);
     return await blobFrom(canvas);
   } finally {
@@ -800,12 +796,7 @@ async function rasterizeRegion(elements: HTMLElement[]): Promise<Blob> {
   document.body.classList.add("is-capturing");
   try {
     const { default: html2canvas } = await import("html2canvas");
-    const full = await html2canvas(root, {
-      backgroundColor: backgroundOf(root),
-      scale: window.devicePixelRatio || 1,
-      logging: false,
-      useCORS: true,
-    });
+    const full = await html2canvas(root, shotOptions(backgroundOf(root)));
     const scale = full.width / Math.max(origin.width, 1);
     const cropped = document.createElement("canvas");
     cropped.width = Math.max(1, Math.round(bounds.width * scale));
@@ -877,24 +868,60 @@ async function shotMarkup(pieces: Piece[], css: string): Promise<Blob> {
     const root = frame.contentDocument?.body;
     if (!(root instanceof HTMLElement)) throw new Error("Could not take the screenshot");
     const { default: html2canvas } = await import("html2canvas");
-    const canvas = await html2canvas(root, {
-      backgroundColor: "#14181f",
-      scale: window.devicePixelRatio || 1,
-      logging: false,
-      useCORS: true,
-      width: bounds.width,
-      height: bounds.height,
-    });
+    const canvas = await html2canvas(
+      root,
+      shotOptions("#14181f", { width: bounds.width, height: bounds.height }),
+    );
     return await blobFrom(canvas);
   } finally {
     frame.remove();
   }
 }
 
+function shotOptions(backgroundColor: string, size?: { width: number; height: number }) {
+  return {
+    backgroundColor,
+    scale: window.devicePixelRatio || 1,
+    logging: false,
+    useCORS: true,
+    onclone: (doc: Document) => settleComputedColors(doc),
+    ...size,
+  };
+}
+
 function blobFrom(canvas: HTMLCanvasElement): Promise<Blob> {
   return new Promise((resolve, reject) => {
-    canvas.toBlob((blob) => (blob ? resolve(blob) : reject(new Error("Could not take the screenshot"))), "image/png");
+    const fail = () => reject(new Error("Could not take the screenshot"));
+    try {
+      canvas.toBlob((blob) => {
+        if (blob) resolve(blob);
+        else {
+          const fallback = pngFromDataUrl(canvas);
+          if (fallback) resolve(fallback);
+          else fail();
+        }
+      }, "image/png");
+    } catch {
+      const fallback = pngFromDataUrl(canvas);
+      if (fallback) resolve(fallback);
+      else fail();
+    }
   });
+}
+
+function pngFromDataUrl(canvas: HTMLCanvasElement): Blob | null {
+  let url = "";
+  try {
+    url = canvas.toDataURL("image/png");
+  } catch {
+    return null;
+  }
+  const comma = url.indexOf(",");
+  if (!url.startsWith("data:image/png") || comma < 0) return null;
+  const binary = atob(url.slice(comma + 1));
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+  return new Blob([bytes], { type: "image/png" });
 }
 
 function paintCanvases(canvas: HTMLCanvasElement, element: HTMLElement, origin: Box) {

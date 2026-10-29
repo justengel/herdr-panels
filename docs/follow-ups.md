@@ -4,6 +4,10 @@ Recorded 2026-10-27 from the review before the first public release. Closed item
 
 ## Unreleased
 
+## Done in 0.1.10
+
+- Selecting an element and choosing Screenshot works in the Ubuntu desktop window. WebKit `color()` values are rewritten before the image is drawn, and a panel page is painted when that window will not export the SVG capture.
+
 ## Done in 0.1.9
 
 - The Windows launch script reads the program folder from the path text, so that check passes on Linux and macOS.

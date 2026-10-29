@@ -560,6 +560,15 @@
 
     async function raster(elements) {
       if (elements.length === 0) throw new Error("That selection has no visible area");
+      try {
+        return await rasterSvg(elements);
+      } catch {
+        // WebKit taints a canvas drawn from SVG foreignObject, so the PNG comes back empty.
+        return paintElements(elements);
+      }
+    }
+
+    async function rasterSvg(elements) {
       const bounds = union(elements.map((element) => asRect(element.getBoundingClientRect())));
       const scale = window.devicePixelRatio || 1;
       const canvas = document.createElement("canvas");
@@ -580,10 +589,120 @@
       image.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
       await image.decode();
       ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
-      const blob = await new Promise((resolve, reject) => {
-        canvas.toBlob((value) => (value ? resolve(value) : reject(new Error("Could not take the screenshot"))), "image/png");
+      return pngBlob(canvas);
+    }
+
+    async function paintElements(elements) {
+      const bounds = union(elements.map((element) => asRect(element.getBoundingClientRect())));
+      if (bounds.width < 1 || bounds.height < 1) throw new Error("That selection has no visible area");
+      const scale = window.devicePixelRatio || 1;
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.max(1, Math.round(bounds.width * scale));
+      canvas.height = Math.max(1, Math.round(bounds.height * scale));
+      const ctx = canvas.getContext("2d");
+      if (!ctx) throw new Error("Could not take the screenshot");
+      ctx.setTransform(scale, 0, 0, scale, 0, 0);
+      ctx.fillStyle = usableColor(getComputedStyle(document.body).backgroundColor) || "#14181f";
+      ctx.fillRect(0, 0, bounds.width, bounds.height);
+      for (const element of elements) paintTree(ctx, element, bounds);
+      return pngBlob(canvas);
+    }
+
+    function paintTree(ctx, element, bounds) {
+      if (!(element instanceof Element) || element.closest(".hwp-select-ui")) return;
+      const style = getComputedStyle(element);
+      if (style.display === "none" || style.visibility === "hidden") return;
+      const rect = asRect(element.getBoundingClientRect());
+      const x = rect.left - bounds.left;
+      const y = rect.top - bounds.top;
+      const bg = usableColor(style.backgroundColor);
+      if (bg) {
+        ctx.fillStyle = bg;
+        ctx.fillRect(x, y, rect.width, rect.height);
+      }
+      const color = usableColor(style.color) || "#e7e4dc";
+      ctx.fillStyle = color;
+      ctx.font = style.font || `${style.fontSize} ${style.fontFamily}`;
+      ctx.textBaseline = "top";
+      const padX = Number.parseFloat(style.paddingLeft) || 0;
+      const padY = Number.parseFloat(style.paddingTop) || 0;
+      const line = Number.parseFloat(style.lineHeight) || Number.parseFloat(style.fontSize) || 16;
+      for (const child of element.childNodes) {
+        if (child.nodeType !== Node.TEXT_NODE) continue;
+        const text = String(child.textContent || "").replace(/\s+/g, " ").trim();
+        if (!text) continue;
+        const box = textBox(child);
+        const tx = box.width > 0 ? box.left - bounds.left : x + padX;
+        const ty = box.height > 0 ? box.top - bounds.top : y + padY;
+        wrapText(ctx, text, tx, ty, Math.max(1, rect.width - padX), line);
+      }
+      for (const child of element.children) paintTree(ctx, child, bounds);
+    }
+
+    function textBox(node) {
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      const rect = range.getBoundingClientRect();
+      range.detach();
+      return asRect(rect);
+    }
+
+    function wrapText(ctx, text, x, y, width, line) {
+      const words = text.split(" ");
+      let row = "";
+      let top = y;
+      for (const word of words) {
+        const next = row ? `${row} ${word}` : word;
+        if (ctx.measureText(next).width > width && row) {
+          ctx.fillText(row, x, top);
+          row = word;
+          top += line;
+        } else row = next;
+      }
+      if (row) ctx.fillText(row, x, top);
+    }
+
+    function usableColor(value) {
+      if (!value || value === "transparent" || value === "rgba(0, 0, 0, 0)") return "";
+      const ctx = usableColor.ctx || (usableColor.ctx = document.createElement("canvas").getContext("2d"));
+      if (!ctx) return value;
+      ctx.fillStyle = "#010203";
+      ctx.fillStyle = value;
+      return ctx.fillStyle === "#010203" ? "" : ctx.fillStyle;
+    }
+
+    function pngBlob(canvas) {
+      return new Promise((resolve, reject) => {
+        const fail = () => reject(new Error("Could not take the screenshot"));
+        const fromUrl = () => {
+          let url = "";
+          try {
+            url = canvas.toDataURL("image/png");
+          } catch {
+            return null;
+          }
+          const comma = url.indexOf(",");
+          if (!url.startsWith("data:image/png") || comma < 0) return null;
+          const binary = atob(url.slice(comma + 1));
+          const bytes = new Uint8Array(binary.length);
+          for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+          return new Blob([bytes], { type: "image/png" });
+        };
+        try {
+          canvas.toBlob((value) => {
+            if (value) resolve(value);
+            else {
+              const blob = fromUrl();
+              if (blob) resolve(blob);
+              else fail();
+            }
+          }, "image/png");
+        } catch {
+          const blob = fromUrl();
+          if (blob) resolve(blob);
+          else fail();
+        }
       });
-      return blob;
     }
   };
 })();

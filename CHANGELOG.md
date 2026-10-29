@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.1.10 - 2026-10-29
+
+Selecting an element and choosing Screenshot works in the Ubuntu desktop window. WebKit colors from `color-mix()` are written as `rgb()` before the image is drawn. A page inside a panel is painted directly when that window will not export the SVG capture.
+
 ## 0.1.9 - 2026-10-29
 
 The Windows Start menu script stores the viewer's folder from the path text. Downloads for the 0.1.8 menu and plugin-command changes start with this release.
