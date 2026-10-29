@@ -151,7 +151,7 @@ pub fn install_launcher(data_home: &Path, exe: &Path) -> anyhow::Result<Installe
 #[cfg(any(windows, test))]
 fn windows_launch_script(exe: &Path) -> String {
     let exe_text = plain_path(exe);
-    let dir = exe.parent().map(plain_path).unwrap_or_default();
+    let dir = windows_directory(&exe_text);
     let run_arg = format!("\"{exe_text}\"");
     format!(
         "Set shell = CreateObject(\"WScript.Shell\")\n\
@@ -165,6 +165,17 @@ fn windows_launch_script(exe: &Path) -> String {
 #[cfg(any(windows, test))]
 fn vbs_string(value: &str) -> String {
     format!("\"{}\"", value.replace('"', "\"\""))
+}
+
+/// Directory of a Windows path string. The launch script is checked on every
+/// platform, so this splits on `\` and `/` instead of the host path rules.
+#[cfg(any(windows, test))]
+fn windows_directory(path: &str) -> String {
+    let trimmed = path.trim_end_matches(['\\', '/']);
+    match trimmed.rfind(['\\', '/']) {
+        Some(index) if index > 0 => trimmed[..index].to_string(),
+        _ => String::new(),
+    }
 }
 
 #[cfg(any(windows, test))]

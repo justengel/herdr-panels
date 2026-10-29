@@ -4,6 +4,11 @@ Recorded 2026-10-27 from the review before the first public release. Closed item
 
 ## Unreleased
 
+## Done in 0.1.9
+
+- The Windows launch script reads the program folder from the path text, so that check passes on Linux and macOS.
+- A push to master runs the page tests and `cargo test` on Ubuntu, Windows, and both macOS runners. The version tag is created after that run succeeds and the release archives are built. A failed test leaves no tag.
+
 ## Done in 0.1.8
 
 - `herdr-panels install-launcher` writes a Windows Start menu shortcut and a macOS app in the home Applications folder, and still writes the Linux desktop entry. An in-place update leaves that entry pointed at the same program.

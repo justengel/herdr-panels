@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.1.9 - 2026-10-29
+
+The Windows Start menu script stores the viewer's folder from the path text. Downloads for the 0.1.8 menu and plugin-command changes start with this release.
+
 ## 0.1.8 - 2026-10-29
 
 A plugin can declare `commands:run` and a `commands` list of program names. `herdrPanels.run(name, args, cwd)` runs that program from PATH, with no shell, in a directory the desk already has open. Install asks before granting it.
