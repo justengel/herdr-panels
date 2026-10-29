@@ -9,10 +9,14 @@ import {
   scrollDragTarget,
   scrollFromThumb,
   scrollThumb,
+  pointerCell,
   viewportShift,
   scrollMetrics,
   viewBox,
   wheelScroll,
+  fittedGrid,
+  openingScreen,
+  frameDraw,
 } from "../src/terminalView";
 import { consumeZoomWheel, nearestZoom, stepZoom, topBarCounterZoom, zoomChord } from "../src/displayZoom";
 
@@ -21,6 +25,41 @@ describe("terminal view", () => {
     expect(viewBox({ cols: 80, rows: 24 }, 0, 0)).toEqual({ cols: 80, rows: 24 });
     expect(viewBox({ cols: 80, rows: 24 }, 80, 24)).toEqual({ cols: 80, rows: 24 });
     expect(viewBox({ cols: 80, rows: 24 }, 40, 12)).toEqual({ cols: 80, rows: 24 });
+  });
+
+  it("waits for a measured character cell before fitting the first grid", () => {
+    expect(fittedGrid(800, 600, null)).toBeNull();
+    expect(fittedGrid(800, 600, { w: 0, h: 17 })).toBeNull();
+    expect(fittedGrid(0, 600, { w: 8.4, h: 17 })).toBeNull();
+    expect(fittedGrid(800, 600, { w: 8.4, h: 17 })).toEqual({ cols: 95, rows: 35 });
+    expect(fittedGrid(800, 600, { w: 9.6, h: 20 })).toEqual({ cols: 83, rows: 30 });
+  });
+
+  it("starts from the latest full screen that matches the settled grid", () => {
+    const frames = [
+      { text: "old", full: true, cols: 120, rows: 40 },
+      { text: "partial", full: false, cols: 82, rows: 49 },
+      { text: "full", full: true, cols: 82, rows: 49 },
+      { text: "next", full: false, cols: 82, rows: 49 },
+    ];
+    expect(openingScreen(frames, 82, 49)).toEqual([
+      { text: "full", full: true, cols: 82, rows: 49 },
+      { text: "next", full: false, cols: 82, rows: 49 },
+    ]);
+    expect(openingScreen([{ text: "partial", full: false, cols: 82, rows: 49 }], 82, 49)).toEqual([]);
+  });
+
+  it("holds partial updates after a resize until a full screen for that grid arrives", () => {
+    const grid = { cols: 82, rows: 49 };
+    const held = frameDraw(true, { text: "diff", full: false, cols: 82, rows: 49 }, "old", grid);
+    expect(held).toEqual({ waitingForFull: true, draw: false, reset: false, drawn: "old" });
+    const wrong = frameDraw(true, { text: "other", full: true, cols: 80, rows: 24 }, "old", grid);
+    expect(wrong.draw).toBe(false);
+    expect(wrong.waitingForFull).toBe(true);
+    const ready = frameDraw(true, { text: "screen", full: true, cols: 82, rows: 49 }, "old", grid);
+    expect(ready).toEqual({ waitingForFull: false, draw: true, reset: true, drawn: "screen" });
+    const same = frameDraw(false, { text: "screen", full: false, cols: 82, rows: 49 }, "screen", grid);
+    expect(same.draw).toBe(false);
   });
 
   it("keeps the panel grid when Herdr's frame is larger, so the program wraps to the pane", () => {
@@ -113,6 +152,14 @@ describe("terminal view", () => {
     expect(pageScroll("PageDown", 24)).toEqual({ direction: "down", lines: 24, source: "page_key" });
     expect(pageScroll("ArrowUp", 24)).toBeNull();
     expect(pageScroll("PageUp", 0)).toEqual({ direction: "up", lines: 1, source: "page_key" });
+  });
+
+  it("scrolls a drag that reaches the top or bottom edge", () => {
+    expect(pointerCell(40, 200, 800, 400, 80, 24)).toMatchObject({ edge: null });
+    expect(pointerCell(40, 396, 800, 400, 80, 24)?.edge).toBe("down");
+    expect(pointerCell(40, 420, 800, 400, 80, 24)).toMatchObject({ row: 23, edge: "down" });
+    expect(pointerCell(40, 2, 800, 400, 80, 24)?.edge).toBe("up");
+    expect(pointerCell(40, -20, 800, 400, 80, 24)).toMatchObject({ row: 0, edge: "up" });
   });
 
   it("sees how many rows a scrolled screen moved", () => {

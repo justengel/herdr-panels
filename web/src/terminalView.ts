@@ -19,10 +19,117 @@ export function viewBox(
   return { cols: fitted.cols, rows: fitted.rows };
 }
 
+export interface CellSize {
+  w: number;
+  h: number;
+}
+
+/**
+ * Columns and rows for a measured character cell. Null until that measurement
+ * exists, so the first paint is not locked to a stand-in size.
+ */
+export function fittedGrid(
+  hostW: number,
+  hostH: number,
+  cell: CellSize | null,
+): { cols: number; rows: number } | null {
+  if (!cell || cell.w < 1 || cell.h < 1 || hostW < 8 || hostH < 8) return null;
+  const cols = Math.floor(hostW / cell.w);
+  const rows = Math.floor(hostH / cell.h);
+  if (!Number.isFinite(cols) || !Number.isFinite(rows)) return null;
+  return {
+    cols: Math.max(2, Math.min(500, cols)),
+    rows: Math.max(1, Math.min(200, rows)),
+  };
+}
+
+export interface StreamFrame {
+  text: string;
+  full: boolean;
+  cols?: number | null;
+  rows?: number | null;
+}
+
+function sameGrid(frame: StreamFrame, cols: number, rows: number): boolean {
+  if (frame.cols == null || frame.rows == null) return true;
+  return frame.cols === cols && frame.rows === rows;
+}
+
+/**
+ * The first screen to draw once the pane size has settled. Partials that
+ * arrived before the matching full screen, and frames for another size, are
+ * left out.
+ */
+export function openingScreen(frames: StreamFrame[], cols: number, rows: number): StreamFrame[] {
+  const usable = frames.filter((frame) => sameGrid(frame, cols, rows));
+  let lastFull = -1;
+  for (let index = 0; index < usable.length; index += 1) {
+    if (usable[index].full) lastFull = index;
+  }
+  if (lastFull < 0) return [];
+  return usable.slice(lastFull);
+}
+
+/**
+ * A partial frame cannot rebuild a screen that was reflowed by a resize.
+ * Hold those frames until a full screen for this grid arrives.
+ */
+export function frameDraw(
+  waitingForFull: boolean,
+  frame: StreamFrame,
+  drawn: string,
+  grid: { cols: number; rows: number } | null,
+): { waitingForFull: boolean; draw: boolean; reset: boolean; drawn: string } {
+  if (grid && !sameGrid(frame, grid.cols, grid.rows)) {
+    return { waitingForFull, draw: false, reset: false, drawn };
+  }
+  if (waitingForFull && !frame.full) {
+    return { waitingForFull: true, draw: false, reset: false, drawn };
+  }
+  if (!waitingForFull && frame.text === drawn) {
+    return { waitingForFull: false, draw: false, reset: false, drawn };
+  }
+  return {
+    waitingForFull: false,
+    draw: true,
+    reset: frame.full,
+    drawn: frame.text,
+  };
+}
+
 /** Uniform scale that keeps a grid inside the panel without enlarging it. */
 export function fitScale(shellW: number, shellH: number, gridW: number, gridH: number): number {
   if (shellW < 1 || shellH < 1 || gridW < 1 || gridH < 1) return 1;
   return Math.min(1, shellW / gridW, shellH / gridH);
+}
+
+export interface PointerCell {
+  column: number;
+  row: number;
+  edge: "up" | "down" | null;
+}
+
+function clampIndex(value: number, max: number): number {
+  return Math.max(0, Math.min(max, value));
+}
+
+/** The cell under the pointer. A drag in the edge band asks the pane to scroll. */
+export function pointerCell(
+  localX: number,
+  localY: number,
+  width: number,
+  height: number,
+  cols: number,
+  rows: number,
+): PointerCell | null {
+  if (width < 1 || height < 1 || cols < 1 || rows < 1) return null;
+  const column = clampIndex(Math.floor((localX / width) * cols), cols - 1);
+  const row = clampIndex(Math.floor((localY / height) * rows), rows - 1);
+  const band = Math.max(4, Math.min(10, (height / rows) * 0.45));
+  let edge: "up" | "down" | null = null;
+  if (localY >= height - band) edge = "down";
+  else if (localY <= band) edge = "up";
+  return { column, row, edge };
 }
 
 /** One mouse notch is about 100 pixels and moves three lines, matching a typical terminal. */

@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  caretSelection,
+  collectSelectionLines,
   extendSelection,
   joinTerminalSelection,
   keysToRemoveSelection,
@@ -7,6 +9,8 @@ import {
   selectionLinesUnchanged,
   shiftSelection,
   terminalSelectionHtml,
+  visibleSelection,
+  wordCells,
   type BufferSelection,
   type Caret,
 } from "../src/terminalEdit";
@@ -92,15 +96,62 @@ describe("terminal copy", () => {
 describe("terminal selection follow", () => {
   const held: BufferSelection = { start: { x: 1, y: 2 }, end: { x: 4, y: 3 } };
 
-  it("moves a highlight with the rows and drops it when it leaves the screen", () => {
-    expect(shiftSelection(held, 2, 10)).toEqual({ start: { x: 1, y: 4 }, end: { x: 4, y: 5 } });
-    expect(shiftSelection(held, -3, 10)).toBeNull();
-    expect(shiftSelection(held, 8, 10)).toBeNull();
+  it("moves a highlight with the rows and keeps the part that leaves the screen", () => {
+    expect(shiftSelection(held, 2)).toEqual({ start: { x: 1, y: 4 }, end: { x: 4, y: 5 } });
+    expect(shiftSelection(held, -3)).toEqual({ start: { x: 1, y: -1 }, end: { x: 4, y: 0 } });
+    expect(shiftSelection(held, 8)).toEqual({ start: { x: 1, y: 10 }, end: { x: 4, y: 11 } });
+  });
+
+  it("paints the on-screen part when a scrolled selection hangs off the top or bottom", () => {
+    expect(visibleSelection(shiftSelection(held, -3), 80, 10)).toEqual({
+      start: { x: 0, y: 0 },
+      end: { x: 4, y: 0 },
+    });
+    const below: BufferSelection = { start: { x: 2, y: 8 }, end: { x: 1, y: 12 } };
+    expect(visibleSelection(below, 10, 10)).toEqual({
+      start: { x: 2, y: 8 },
+      end: { x: 0, y: 10 },
+    });
+    expect(visibleSelection({ start: { x: 0, y: -4 }, end: { x: 0, y: -1 } }, 10, 10)).toBeNull();
+  });
+
+  it("copies the lines that scrolled off along with the lines still on screen", () => {
+    const selection: BufferSelection = { start: { x: 1, y: -1 }, end: { x: 4, y: 0 } };
+    const lines = collectSelectionLines(selection, 10, (row, from, to) => {
+      const text = row === -1 ? "abcdefghij" : "0123456789";
+      return { text: text.slice(from, to), wrapped: false };
+    });
+    expect(joinTerminalSelection(lines)).toBe("bcdefghij\n0123");
+  });
+
+  it("selects every cell from the anchor through the cell under the pointer", () => {
+    expect(caretSelection({ column: 2, row: 1 }, { column: 5, row: 1 }, 10)).toEqual({
+      start: { x: 2, y: 1 },
+      end: { x: 6, y: 1 },
+    });
+    expect(caretSelection({ column: 5, row: 4 }, { column: 1, row: 2 }, 10)).toEqual({
+      start: { x: 1, y: 2 },
+      end: { x: 6, y: 4 },
+    });
+    expect(caretSelection({ column: 3, row: -2 }, { column: 4, row: 1 }, 80)).toEqual({
+      start: { x: 3, y: -2 },
+      end: { x: 5, y: 1 },
+    });
+  });
+
+  it("selects the word under a double click", () => {
+    expect(wordCells("echo hello-world next", 8, 3, 80)).toEqual({
+      anchor: { column: 5, row: 3 },
+      head: { column: 15, row: 3 },
+    });
   });
 
   it("keeps a highlight when the selected rows are the same text", () => {
     const lines = ["prompt", "name    size", "foo     12", "next"];
     expect(selectionLinesUnchanged(lines, ["other", "name    size", "foo     12", "next"], held)).toBe(true);
     expect(selectionLinesUnchanged(lines, ["prompt", "name    size", "foo     99", "next"], held)).toBe(false);
+    const hanging: BufferSelection = { start: { x: 1, y: -2 }, end: { x: 4, y: 1 } };
+    expect(selectionLinesUnchanged(lines, lines, hanging)).toBe(true);
+    expect(selectionLinesUnchanged(lines, ["prompt", "changed", "foo     12", "next"], hanging)).toBe(false);
   });
 });

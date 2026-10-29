@@ -8,12 +8,14 @@ const SYMBOL: Record<string, string> = {
 
 export function StatusMark({ status, symbols }: { status: string; symbols: boolean }) {
   const name = SYMBOL[status] ? status : "unknown";
-  if (!symbols) return <span className={`mark mark-dot status-${name}`} aria-hidden="true" />;
-  return (
+  const mark = symbols ? (
     <span className={`mark mark-symbol status-${name}`} aria-hidden="true">
       {SYMBOL[name]}
     </span>
+  ) : (
+    <span className={`mark mark-dot status-${name}`} aria-hidden="true" />
   );
+  return <span className="mark-line">{mark}</span>;
 }
 
 export function IndicatorSample({ symbols }: { symbols: boolean }) {

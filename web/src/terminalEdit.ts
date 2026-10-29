@@ -173,22 +173,117 @@ export async function writeTerminalClipboard(text: string, windows: boolean): Pr
   await navigator.clipboard.writeText(plain);
 }
 
-/** Move a viewport highlight by whole rows. Null when either end would leave the screen. */
-export function shiftSelection(selection: BufferSelection, rows: number, rowCount: number): BufferSelection | null {
-  const startY = selection.start.y + rows;
-  const endY = selection.end.y + rows;
-  const last = rowCount - 1;
-  if (startY < 0 || endY < 0 || startY > last || endY > last) return null;
-  return { start: { x: selection.start.x, y: startY }, end: { x: selection.end.x, y: endY } };
+/** Cells of a mouse selection. `column` is 0-based and may sit on a row outside the viewport. */
+export interface GridCell {
+  column: number;
+  row: number;
 }
 
-/** True when every viewport row the highlight covers still has the same text. */
+function caretAt(index: number, cols: number): Caret {
+  const y = Math.floor(index / cols);
+  return { x: index - y * cols, y };
+}
+
+function selectionIndex(selection: BufferSelection, cols: number): { from: number; to: number } {
+  const width = columnCount(cols);
+  const start = selection.start.y * width + selection.start.x;
+  const end = selection.end.y * width + selection.end.x;
+  return { from: Math.min(start, end), to: Math.max(start, end) };
+}
+
+/** Inclusive cells from the pointer, in buffer order. The same cell is a one-cell selection. */
+export function caretSelection(anchor: GridCell, head: GridCell, cols: number): BufferSelection {
+  const width = columnCount(cols);
+  const start = anchor.row * width + anchor.column;
+  const end = head.row * width + head.column;
+  const from = Math.min(start, end);
+  const to = Math.max(start, end) + 1;
+  return { start: caretAt(from, width), end: caretAt(to, width) };
+}
+
+/**
+ * The on-screen part of a selection. A start above the screen begins at the
+ * first cell, and an end below it runs through the last cell. Null when the
+ * whole highlight is off screen.
+ */
+export function visibleSelection(selection: BufferSelection, cols: number, rowCount: number): BufferSelection | null {
+  const width = columnCount(cols);
+  const rows = Math.max(1, Math.floor(rowCount) || 1);
+  const { from, to } = selectionIndex(selection, width);
+  const viewEnd = rows * width;
+  if (to <= 0 || from >= viewEnd) return null;
+  const start = Math.max(from, 0);
+  const end = Math.min(to, viewEnd);
+  if (end <= start) return null;
+  return { start: caretAt(start, width), end: caretAt(end, width) };
+}
+
+/** Rows of a selection, including rows the viewport no longer shows. */
+export function collectSelectionLines(
+  selection: BufferSelection,
+  cols: number,
+  rowAt: (row: number, fromCol: number, toCol: number) => { text: string; wrapped: boolean } | null,
+): SelectionLine[] {
+  const width = columnCount(cols);
+  const { from, to } = selectionIndex(selection, width);
+  if (to <= from) return [];
+  const y0 = Math.floor(from / width);
+  const y1 = Math.floor((to - 1) / width);
+  const rows: SelectionLine[] = [];
+  for (let y = y0; y <= y1; y += 1) {
+    const fromCol = y === y0 ? from - y * width : 0;
+    const toCol = y === y1 ? to - y * width : width;
+    const line = rowAt(y, fromCol, toCol);
+    rows.push({
+      text: line?.text ?? "",
+      wrapped: y !== y0 && Boolean(line?.wrapped),
+      trimEnd: toCol >= width,
+    });
+  }
+  return rows;
+}
+
+const WORD = /[\w./:@%+=~-]/;
+
+/** The word under a double-click, inclusive of both ends. */
+export function wordCells(line: string, column: number, row: number, cols: number): { anchor: GridCell; head: GridCell } {
+  const width = columnCount(cols);
+  const chars = Array.from(line);
+  const at = chars.length === 0 ? -1 : Math.max(0, Math.min(column, chars.length - 1));
+  if (at < 0 || !WORD.test(chars[at] ?? "")) {
+    const only = Math.max(0, Math.min(width - 1, column));
+    return { anchor: { column: only, row }, head: { column: only, row } };
+  }
+  let start = at;
+  let end = at;
+  while (start > 0 && WORD.test(chars[start - 1] ?? "")) start -= 1;
+  while (end + 1 < chars.length && WORD.test(chars[end + 1] ?? "")) end += 1;
+  return {
+    anchor: { column: start, row },
+    head: { column: Math.min(width - 1, end), row },
+  };
+}
+
+/** Move a highlight by whole rows. Ends may sit outside the viewport. */
+export function shiftSelection(selection: BufferSelection, rows: number): BufferSelection {
+  return {
+    start: { x: selection.start.x, y: selection.start.y + rows },
+    end: { x: selection.end.x, y: selection.end.y + rows },
+  };
+}
+
+/**
+ * True when the visible rows a highlight covers still have the same text.
+ * Rows that have scrolled off screen are not a reason to drop the highlight.
+ */
 export function selectionLinesUnchanged(before: string[], after: string[], selection: BufferSelection): boolean {
   const y0 = Math.min(selection.start.y, selection.end.y);
-  const y1 = Math.max(selection.start.y, selection.end.y);
-  if (y0 < 0) return false;
+  let y1 = Math.max(selection.start.y, selection.end.y);
+  const end = selection.start.y > selection.end.y ? selection.start : selection.end;
+  if (end.x === 0) y1 -= 1;
+  if (y1 < y0) return true;
   for (let y = y0; y <= y1; y += 1) {
-    if (y >= before.length || y >= after.length) return false;
+    if (y < 0 || y >= before.length || y >= after.length) continue;
     if (before[y] !== after[y]) return false;
   }
   return true;

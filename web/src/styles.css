@@ -1231,6 +1231,16 @@ body.panel-dragging, body.panel-dragging * { cursor: grabbing !important; user-s
 .mark-symbol.status-idle { color: var(--idle); }
 .mark-symbol.status-unknown { color: var(--unknown); }
 .space-copy { display: flex; flex-direction: column; min-width: 0; }
+.space-name, .agent-name { line-height: 18px; }
+.space-row .mark-line, .agent-row .mark-line {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  align-self: flex-start;
+  flex: 0 0 14px;
+  width: 14px;
+  height: 18px;
+}
 .space-name, .space-branch { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .space-state, .space-branch { color: var(--muted); font-size: 12px; }
 .herdr-settings input, .herdr-settings select {

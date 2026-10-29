@@ -1,26 +1,35 @@
-import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from "react";
 import { Terminal } from "@xterm/xterm";
 import { api, wsUrl } from "../../api";
+import { desktopHost } from "../../desktopBrowser";
 import { useHost } from "../../host";
 import {
+  caretSelection,
+  collectSelectionLines,
   joinTerminalSelection,
   keysToRemoveSelection,
   selectionLinesUnchanged,
-  shiftSelection,
   spanBetween,
+  visibleSelection,
+  wordCells,
   writeTerminalClipboard,
   type BufferSelection,
   type Caret,
+  type GridCell,
   type SelectionLine,
 } from "../../terminalEdit";
 import {
   applyScroll,
   inputScroll,
   pageScroll,
+  pointerCell,
   previewScroll,
   scrollDragTarget,
   scrollThumb,
   type ScrollPlace,
+  fittedGrid,
+  frameDraw,
+  openingScreen,
   screenMoved,
   viewBox,
   viewportShift,
@@ -114,6 +123,17 @@ export function HerdrTerminal({ paneId, source, lines, onGone }: Props) {
   const seenRef = useRef(false);
   const anchorRef = useRef<Caret | null>(null);
   const headRef = useRef<Caret | null>(null);
+  const heldRef = useRef<BufferSelection | null>(null);
+  const anchorCellRef = useRef<GridCell | null>(null);
+  const headCellRef = useRef<GridCell | null>(null);
+  const draggingRef = useRef(false);
+  const pointerRef = useRef<{ x: number; y: number } | null>(null);
+  const lineCacheRef = useRef(new Map<number, { text: string; wrapped: boolean }>());
+  const restoringRef = useRef(false);
+  const gestureRef = useRef(0);
+  const edgeDirRef = useRef<"up" | "down" | null>(null);
+  const edgeTimerRef = useRef(0);
+  const copyNoticeRef = useRef(0);
   const fromKeyboard = useRef(false);
   const pasteStamp = useRef(0);
   const goneRef = useRef(false);
@@ -155,26 +175,22 @@ export function HerdrTerminal({ paneId, source, lines, onGone }: Props) {
     term.open(stage);
     paintTheme(term);
     termRef.current = term;
-    let selectionEpoch = 0;
     let layoutEpoch = 0;
-    let restoring = false;
     let copyNotice = 0;
     const onSelection = term.onSelectionChange(() => {
-      if (!restoring) {
-        const copied = publishCopy(term);
-        window.clearTimeout(copyNotice);
-        if (copied) copyNotice = window.setTimeout(() => notifyRef.current("Copied to clipboard"), 400);
-      }
-      if (fromKeyboard.current || restoring) return;
-      selectionEpoch += 1;
+      if (restoringRef.current || fromKeyboard.current || draggingRef.current) return;
       const position = term.getSelectionPosition();
-      if (!position) {
-        anchorRef.current = null;
-        headRef.current = null;
-        return;
-      }
+      if (!position || !term.hasSelection()) return;
+      const base = term.buffer.active.baseY;
+      heldRef.current = {
+        start: { x: position.start.x, y: position.start.y - base },
+        end: { x: position.end.x, y: position.end.y - base },
+      };
       anchorRef.current = { x: position.start.x, y: position.start.y };
       headRef.current = { x: position.end.x, y: position.end.y };
+      const copied = publishCopy(term);
+      window.clearTimeout(copyNotice);
+      if (copied) copyNotice = window.setTimeout(() => notifyRef.current("Copied to clipboard"), 400);
     });
     const onTheme = () => {
       if (termRef.current) paintTheme(termRef.current);
@@ -182,9 +198,23 @@ export function HerdrTerminal({ paneId, source, lines, onGone }: Props) {
     window.addEventListener("herdr-theme", onTheme);
 
     let sizeTimer = 0;
+    let liveTimer = 0;
     let wanted: { cols: number; rows: number } | null = null;
+    let fittedCell: { w: number; h: number } | null = null;
     let sent: { cols: number; rows: number } | null = null;
     const sizeProblem = { current: false };
+    const openedAt = Date.now();
+    let zoomSettled = desktopHost() == null;
+    let fontsSettled = !document.fonts || document.fonts.status === "loaded";
+    let screenLive = false;
+    let waitingFull = false;
+    let stopped = false;
+    const queued: ScreenMessage[] = [];
+    let drawn = "";
+    let shown: string | null = null;
+    let paint = 0;
+    let painting = false;
+    let goLive = () => {};
 
     const flushSize = () => {
       const next = wanted;
@@ -195,43 +225,82 @@ export function HerdrTerminal({ paneId, source, lines, onGone }: Props) {
       socket.send(JSON.stringify({ type: "resize", cols: next.cols, rows: next.rows }));
     };
 
-    const applySize = () => {
+    const scheduleLive = () => {
+      if (screenLive) return;
+      window.clearTimeout(liveTimer);
+      liveTimer = window.setTimeout(() => goLive(), 120);
+    };
+
+    const applySize = (force = false) => {
       const current = termRef.current;
       const host = stageRef.current;
       if (!current || !host) return;
-      const cell = readCell(current);
-      const next = fitCells(host.clientWidth, host.clientHeight, cell.w, cell.h);
-      if (!next) return;
-      const shown = viewBox(next, 0, 0) ?? next;
-      const sameGrid = current.cols === shown.cols && current.rows === shown.rows;
-      const sameRequest = wanted !== null && wanted.cols === shown.cols && wanted.rows === shown.rows;
+      let cell = measureCell(current);
+      if (!cell && force) cell = { w: 8.4, h: 17 };
+      const next = fittedGrid(host.clientWidth, host.clientHeight, cell);
+      if (!next || !cell) return;
+      const shownGrid = viewBox(next, 0, 0) ?? next;
+      const sameGrid = current.cols === shownGrid.cols && current.rows === shownGrid.rows;
+      const sameRequest = wanted !== null && wanted.cols === shownGrid.cols && wanted.rows === shownGrid.rows;
+      const cellChanged =
+        fittedCell !== null &&
+        (Math.abs(fittedCell.w - cell.w) > 0.05 || Math.abs(fittedCell.h - cell.h) > 0.05);
       if (!sameGrid) {
         layoutEpoch += 1;
         current.clearSelection();
         anchorRef.current = null;
         headRef.current = null;
-        current.resize(shown.cols, shown.rows);
+        heldRef.current = null;
+        anchorCellRef.current = null;
+        headCellRef.current = null;
+        lineCacheRef.current.clear();
+        if (screenLive) {
+          waitingFull = true;
+          drawn = "";
+          fromKeyboard.current = true;
+          current.reset();
+          fromKeyboard.current = false;
+        }
+        current.resize(shownGrid.cols, shownGrid.rows);
+      } else if (cellChanged && screenLive) {
+        current.refresh(0, current.rows - 1);
       }
-      wanted = shown;
-      rowsRef.current = shown.rows;
+      fittedCell = cell;
+      wanted = shownGrid;
+      rowsRef.current = shownGrid.rows;
       if (sameRequest) return;
       window.clearTimeout(sizeTimer);
       sizeTimer = window.setTimeout(flushSize, 80);
     };
 
     const onZoom = () => {
-      window.requestAnimationFrame(() => window.requestAnimationFrame(() => applySize()));
+      zoomSettled = true;
+      window.requestAnimationFrame(() =>
+        window.requestAnimationFrame(() => {
+          applySize();
+          scheduleLive();
+        }),
+      );
     };
     window.addEventListener("herdr-zoom", onZoom);
 
-    const observer = new ResizeObserver(() => applySize());
-    observer.observe(shell);
-    void document.fonts?.ready.then(() => {
-      if (termRef.current) applySize();
+    const observer = new ResizeObserver(() => {
+      applySize();
+      scheduleLive();
     });
+    observer.observe(shell);
+    const fontsReady = () => {
+      fontsSettled = true;
+      if (!termRef.current) return;
+      applySize();
+      scheduleLive();
+    };
+    void document.fonts?.ready.then(fontsReady);
+    document.fonts?.addEventListener("loadingdone", fontsReady);
+    void document.fonts?.load('14px "Cascadia Mono"').then(fontsReady).catch(() => undefined);
     applySize();
+    scheduleLive();
 
-    let stopped = false;
     let gotFrame = false;
     let retry = 0;
     let seedTimer = 0;
@@ -240,10 +309,6 @@ export function HerdrTerminal({ paneId, source, lines, onGone }: Props) {
     if (source) params.set("source", source);
     if (lines) params.set("lines", String(lines));
 
-    let drawn = "";
-    let shown: string | null = null;
-    let paint = 0;
-    let painting = false;
     const readLines = () => {
       const buffer = term.buffer.active;
       const rows: string[] = [];
@@ -254,52 +319,141 @@ export function HerdrTerminal({ paneId, source, lines, onGone }: Props) {
       return rows;
     };
     const readScreen = () => readLines().join("\n");
-    const viewportSelection = (): BufferSelection | null => {
-      const position = term.getSelectionPosition();
-      if (!position || !term.hasSelection()) return null;
-      const base = term.buffer.active.baseY;
-      return {
-        start: { x: position.start.x, y: position.start.y - base },
-        end: { x: position.end.x, y: position.end.y - base },
-      };
-    };
-    const showSelection = (viewport: BufferSelection | null) => {
-      const base = term.buffer.active.baseY;
-      restoring = true;
-      fromKeyboard.current = true;
-      if (!viewport) {
-        term.clearSelection();
-        anchorRef.current = null;
-        headRef.current = null;
-      } else {
-        const absolute: BufferSelection = {
-          start: { x: viewport.start.x, y: viewport.start.y + base },
-          end: { x: viewport.end.x, y: viewport.end.y + base },
-        };
-        const span = spanBetween(absolute.start, absolute.end, term.cols);
-        if (span) {
-          term.select(span.column, span.row, span.length);
-          anchorRef.current = absolute.start;
-          headRef.current = absolute.end;
-        } else {
-          term.clearSelection();
-          anchorRef.current = null;
-          headRef.current = null;
-        }
+    const cacheViewport = () => {
+      const buffer = term.buffer.active;
+      const base = buffer.baseY;
+      for (let row = 0; row < term.rows; row += 1) {
+        const line = buffer.getLine(base + row);
+        lineCacheRef.current.set(row, {
+          text: line ? line.translateToString(false) : "",
+          wrapped: Boolean(line?.isWrapped),
+        });
       }
-      fromKeyboard.current = false;
-      restoring = false;
     };
-    const restoreSelection = (held: BufferSelection | null, before: string[], replaced: boolean) => {
-      if (!held) return;
+    const shiftCache = (rows: number) => {
+      if (!rows) return;
+      const next = new Map<number, { text: string; wrapped: boolean }>();
+      for (const [y, value] of lineCacheRef.current) next.set(y + rows, value);
+      lineCacheRef.current = next;
+    };
+    const restoreSelection = (before: string[], requested: number | null) => {
+      const anchor = anchorCellRef.current;
+      const head = headCellRef.current;
+      const held = heldRef.current;
+      if (!anchor || !head || !held) return;
       const after = readLines();
-      const shift = viewportShift(before, after);
+      let shift = viewportShift(before, after);
+      if (shift === null && requested && screenMoved(before.join("\n"), after.join("\n"))) shift = requested;
       if (shift === null) {
-        if (!replaced && selectionLinesUnchanged(before, after, held)) return;
-        showSelection(selectionLinesUnchanged(before, after, held) ? held : null);
+        if (selectionLinesUnchanged(before, after, held)) {
+          cacheViewport();
+          return;
+        }
+        anchorCellRef.current = null;
+        headCellRef.current = null;
+        lineCacheRef.current.clear();
+        paintSelection(term, null);
         return;
       }
-      showSelection(shiftSelection(held, shift, term.rows));
+      const nextAnchor = { column: anchor.column, row: anchor.row + shift };
+      let nextHead = { column: head.column, row: head.row + shift };
+      if (draggingRef.current && pointerRef.current) {
+        const live = pointerOnTerm(term, pointerRef.current.x, pointerRef.current.y);
+        if (live) nextHead = { column: live.column, row: live.row };
+      }
+      shiftCache(shift);
+      anchorCellRef.current = nextAnchor;
+      headCellRef.current = nextHead;
+      const selection = caretSelection(nextAnchor, nextHead, term.cols);
+      cacheViewport();
+      pruneCache(selection, term.rows);
+      paintSelection(term, selection);
+      copyHeld(term, false);
+    };
+    const finish = (token: number) => {
+      if (stopped || token !== paint) return;
+      painting = false;
+      const next = readScreen();
+      const previous = shown;
+      shown = next;
+      if (previous === null) return;
+      settleScroll(screenMoved(previous, next));
+    };
+    const applyFrame = (frame: ScreenMessage) => {
+      const decision = frameDraw(
+        waitingFull,
+        { text: frame.text ?? "", full: Boolean(frame.full), cols: frame.cols, rows: frame.rows },
+        drawn,
+        wanted,
+      );
+      waitingFull = decision.waitingForFull;
+      if (!decision.draw) {
+        const matches =
+          wanted === null ||
+          frame.cols == null ||
+          frame.rows == null ||
+          (frame.cols === wanted.cols && frame.rows === wanted.rows);
+        if (matches && !waitingFull && !painting) finish(paint);
+        return;
+      }
+      drawn = decision.drawn;
+      const text = frame.text ?? "";
+      const token = ++paint;
+      painting = true;
+      cacheViewport();
+      const before = readLines();
+      const gesture = gestureRef.current;
+      const layout = layoutEpoch;
+      const pending = pendingRef.current;
+      const requested = pending ? (pending.direction === "up" ? pending.lines : -pending.lines) : null;
+      fromKeyboard.current = true;
+      if (decision.reset) term.reset();
+      fromKeyboard.current = false;
+      const done = () => {
+        if (stopped || token !== paint) return;
+        term.scrollToBottom();
+        finish(token);
+        if (gestureRef.current !== gesture || layoutEpoch !== layout) return;
+        restoreSelection(before, requested);
+      };
+      if (text) term.write(text, () => done());
+      else done();
+    };
+    goLive = () => {
+      if (screenLive || stopped) return;
+      const age = Date.now() - openedAt;
+      const host = stageRef.current;
+      const current = termRef.current;
+      const cell = current ? measureCell(current) : null;
+      const ready = Boolean(host && fittedGrid(host.clientWidth, host.clientHeight, cell));
+      if ((!zoomSettled && age < 600) || (!fontsSettled && age < 600) || (!ready && age < 1500)) {
+        scheduleLive();
+        return;
+      }
+      applySize(age >= 1500);
+      if (!wanted) {
+        if (age < 5000) scheduleLive();
+        return;
+      }
+      const grid = wanted;
+      screenLive = true;
+      const batch = grid
+        ? openingScreen(
+            queued.map((frame) => ({
+              text: frame.text ?? "",
+              full: Boolean(frame.full),
+              cols: frame.cols,
+              rows: frame.rows,
+            })),
+            grid.cols,
+            grid.rows,
+          )
+        : [];
+      queued.length = 0;
+      if (batch.length === 0) waitingFull = true;
+      for (const frame of batch) {
+        applyFrame({ type: "frame", text: frame.text, full: frame.full, cols: frame.cols, rows: frame.rows });
+      }
     };
     const connect = () => {
       if (stopped) return;
@@ -329,41 +483,12 @@ export function HerdrTerminal({ paneId, source, lines, onGone }: Props) {
           const frame = message as ScreenMessage;
           seenRef.current = true;
           gotFrame = true;
-          const text = frame.text ?? "";
-          const finish = (token: number) => {
-            if (stopped || token !== paint) return;
-            painting = false;
-            const next = readScreen();
-            const previous = shown;
-            shown = next;
-            if (previous === null) return;
-            settleScroll(screenMoved(previous, next));
-          };
-          if (text !== drawn) {
-            drawn = text;
-            const token = ++paint;
-            painting = true;
-            const held = viewportSelection();
-            const before = readLines();
-            const epoch = selectionEpoch;
-            const layout = layoutEpoch;
-            const replaced = Boolean(frame.full);
-            fromKeyboard.current = true;
-            if (frame.full) term.reset();
-            fromKeyboard.current = false;
-            const done = () => {
-              if (stopped || token !== paint) return;
-              term.scrollToBottom();
-              finish(token);
-              if (selectionEpoch !== epoch || layoutEpoch !== layout) return;
-              restoreSelection(held, before, replaced);
-            };
-            if (text) term.write(text, () => done());
-            else done();
-          } else if (!painting) {
-            finish(paint);
-          }
           if (!sizeProblem.current) setStatus("");
+          if (!screenLive) {
+            queued.push(frame);
+            return;
+          }
+          applyFrame(frame);
         } else if (message.type === "error") {
           const text = (message as ErrorMessage).message;
           setStatus(text ? text : "");
@@ -399,7 +524,11 @@ export function HerdrTerminal({ paneId, source, lines, onGone }: Props) {
       window.clearTimeout(retry);
       window.clearTimeout(seedTimer);
       window.clearTimeout(sizeTimer);
+      window.clearTimeout(liveTimer);
+      document.fonts?.removeEventListener("loadingdone", fontsReady);
       window.clearTimeout(copyNotice);
+      window.clearTimeout(copyNoticeRef.current);
+      window.clearInterval(edgeTimerRef.current);
       window.removeEventListener("herdr-theme", onTheme);
       window.removeEventListener("herdr-zoom", onZoom);
       window.clearTimeout(flushTimer.current);
@@ -451,13 +580,185 @@ export function HerdrTerminal({ paneId, source, lines, onGone }: Props) {
     flushTimer.current = window.setTimeout(flushText, 16);
   }
 
+  function pruneCache(selection: BufferSelection, rows: number) {
+    const y0 = Math.min(selection.start.y, selection.end.y);
+    const y1 = Math.max(selection.start.y, selection.end.y);
+    const next = new Map<number, { text: string; wrapped: boolean }>();
+    for (const [y, value] of lineCacheRef.current) {
+      if ((y >= y0 && y <= y1) || (y >= 0 && y < rows)) next.set(y, value);
+    }
+    lineCacheRef.current = next;
+  }
+
+  function paintSelection(term: Terminal, selection: BufferSelection | null) {
+    heldRef.current = selection;
+    const visible = selection ? visibleSelection(selection, term.cols, term.rows) : null;
+    const base = term.buffer.active.baseY;
+    restoringRef.current = true;
+    fromKeyboard.current = true;
+    if (!visible) {
+      term.clearSelection();
+      anchorRef.current = null;
+      headRef.current = null;
+    } else {
+      const span = spanBetween(
+        { x: visible.start.x, y: visible.start.y + base },
+        { x: visible.end.x, y: visible.end.y + base },
+        term.cols,
+      );
+      if (span) {
+        term.select(span.column, span.row, span.length);
+        anchorRef.current = { x: visible.start.x, y: visible.start.y + base };
+        headRef.current = { x: visible.end.x, y: visible.end.y + base };
+      } else {
+        term.clearSelection();
+        anchorRef.current = null;
+        headRef.current = null;
+      }
+    }
+    fromKeyboard.current = false;
+    restoringRef.current = false;
+  }
+
+  function pointerOnTerm(term: Terminal, clientX: number, clientY: number) {
+    const screen = term.element?.querySelector(".xterm-screen");
+    if (!(screen instanceof HTMLElement)) return null;
+    const rect = screen.getBoundingClientRect();
+    return pointerCell(clientX - rect.left, clientY - rect.top, rect.width, rect.height, term.cols, term.rows);
+  }
+
+  function linesOfHeld(term: Terminal): SelectionLine[] {
+    const held = heldRef.current;
+    if (!held) return [];
+    const buffer = term.buffer.active;
+    const base = buffer.baseY;
+    return collectSelectionLines(held, term.cols, (row, from, to) => {
+      if (row >= 0 && row < term.rows) {
+        const line = buffer.getLine(base + row);
+        if (!line) return null;
+        return { text: line.translateToString(false, from, to), wrapped: Boolean(line.isWrapped) };
+      }
+      const cached = lineCacheRef.current.get(row);
+      if (!cached) return null;
+      const start = Math.max(0, from);
+      return {
+        text: Array.from(cached.text).slice(start, Math.max(start, to)).join(""),
+        wrapped: cached.wrapped,
+      };
+    });
+  }
+
+  function copyHeld(term: Terminal, announce: boolean): boolean {
+    const rows = heldRef.current ? linesOfHeld(term) : linesOfSelection(term);
+    const text = joinTerminalSelection(rows);
+    if (!text) return false;
+    void writeTerminalClipboard(text, windowsClipboard()).catch(() => undefined);
+    if (announce) {
+      window.clearTimeout(copyNoticeRef.current);
+      copyNoticeRef.current = window.setTimeout(() => notifyRef.current("Copied to clipboard"), 400);
+    }
+    return true;
+  }
+
+  function stopEdge() {
+    window.clearInterval(edgeTimerRef.current);
+    edgeTimerRef.current = 0;
+    edgeDirRef.current = null;
+  }
+
+  function startEdge(direction: "up" | "down") {
+    if (edgeDirRef.current === direction && edgeTimerRef.current) return;
+    stopEdge();
+    edgeDirRef.current = direction;
+    const tick = () => {
+      if (!draggingRef.current || edgeDirRef.current !== direction) return;
+      queueScroll(direction, 1, "wheel");
+    };
+    tick();
+    edgeTimerRef.current = window.setInterval(tick, 60);
+  }
+
+  function dropHeld(term: Terminal) {
+    anchorCellRef.current = null;
+    headCellRef.current = null;
+    lineCacheRef.current.clear();
+    draggingRef.current = false;
+    stopEdge();
+    paintSelection(term, null);
+  }
+
+  function applyCells(term: Terminal, anchor: GridCell, head: GridCell) {
+    anchorCellRef.current = anchor;
+    headCellRef.current = head;
+    paintSelection(term, caretSelection(anchor, head, term.cols));
+  }
+
+  function extendDrag(clientX: number, clientY: number) {
+    const term = termRef.current;
+    const anchor = anchorCellRef.current;
+    if (!term || !anchor || !draggingRef.current) return;
+    const live = pointerOnTerm(term, clientX, clientY);
+    if (!live) return;
+    const head = { column: live.column, row: live.row };
+    if (head.column === anchor.column && head.row === anchor.row) {
+      stopEdge();
+      return;
+    }
+    applyCells(term, anchor, head);
+    copyHeld(term, true);
+    if (live.edge) startEdge(live.edge);
+    else stopEdge();
+  }
+
+  function beginMouseSelect(event: ReactMouseEvent<HTMLDivElement>) {
+    if (event.button !== 0) return;
+    if (event.target instanceof Element && event.target.closest(".term-scroll, .term-status")) return;
+    const term = termRef.current;
+    if (!term) return;
+    event.stopPropagation();
+    event.preventDefault();
+    term.focus();
+    pointerRef.current = { x: event.clientX, y: event.clientY };
+    const live = pointerOnTerm(term, event.clientX, event.clientY);
+    if (!live) return;
+    gestureRef.current += 1;
+    stopEdge();
+    const cell = { column: live.column, row: live.row };
+    if (event.detail >= 3) {
+      draggingRef.current = false;
+      applyCells(term, { column: 0, row: cell.row }, { column: Math.max(0, term.cols - 1), row: cell.row });
+      copyHeld(term, true);
+      return;
+    }
+    if (event.detail === 2) {
+      draggingRef.current = false;
+      const buffer = term.buffer.active;
+      const line = buffer.getLine(buffer.baseY + cell.row);
+      const word = wordCells(line ? line.translateToString(true) : "", cell.column, cell.row, term.cols);
+      applyCells(term, word.anchor, word.head);
+      copyHeld(term, true);
+      return;
+    }
+    draggingRef.current = true;
+    if (event.shiftKey && anchorCellRef.current && heldRef.current) {
+      applyCells(term, anchorCellRef.current, cell);
+      copyHeld(term, true);
+      return;
+    }
+    anchorCellRef.current = cell;
+    headCellRef.current = cell;
+    heldRef.current = null;
+    lineCacheRef.current.clear();
+    paintSelection(term, null);
+  }
+
   function cursorCaret(term: Terminal): Caret {
     const buffer = term.buffer.active;
     return { x: buffer.cursorX, y: buffer.baseY + buffer.cursorY };
   }
 
   function copySelection(term: Terminal) {
-    if (publishCopy(term)) host.notify("Copied to clipboard");
+    if (copyHeld(term, false)) host.notify("Copied to clipboard");
   }
 
   function selectionOf(term: Terminal): BufferSelection | null {
@@ -472,12 +773,18 @@ export function HerdrTerminal({ paneId, source, lines, onGone }: Props) {
 
   function removeHighlight(term: Terminal, selection: BufferSelection | null): boolean {
     if (!selection) return false;
-    const keys = keysToRemoveSelection(cursorCaret(term), selection);
+    const buffer = term.buffer.active;
+    const cursor = selection === heldRef.current ? { x: buffer.cursorX, y: buffer.cursorY } : cursorCaret(term);
+    const keys = keysToRemoveSelection(cursor, selection);
     flushText();
     if (keys) sendKeys(keys);
     term.clearSelection();
     anchorRef.current = null;
     headRef.current = null;
+    heldRef.current = null;
+    anchorCellRef.current = null;
+    headCellRef.current = null;
+    lineCacheRef.current.clear();
     return keys !== null;
   }
 
@@ -585,7 +892,7 @@ export function HerdrTerminal({ paneId, source, lines, onGone }: Props) {
       top: box.top,
       height: box.height,
       track: rect.height,
-      cell: termRef.current ? readCell(termRef.current).h : 17,
+      cell: termRef.current ? (measureCell(termRef.current)?.h ?? 17) : 17,
       lastTarget: placeRef.current.fromEnd,
     };
     try {
@@ -628,13 +935,23 @@ export function HerdrTerminal({ paneId, source, lines, onGone }: Props) {
     <div
       className="term-shell"
       ref={shellRef}
+      onMouseDownCapture={beginMouseSelect}
       onPointerDown={(event) => {
         const button = pointerButton(event.button);
         if (!button) return;
         heldButton.current = button;
+        if (button === "left") {
+          try {
+            event.currentTarget.setPointerCapture(event.pointerId);
+          } catch {
+            // The pointer ended before capture.
+          }
+        }
         reportMouse("down", event, button);
       }}
       onPointerMove={(event) => {
+        pointerRef.current = { x: event.clientX, y: event.clientY };
+        if (draggingRef.current && (event.buttons & 1) !== 0) extendDrag(event.clientX, event.clientY);
         const button = heldButton.current;
         if (button && event.buttons !== 0) {
           reportMouse("drag", event, button);
@@ -643,11 +960,19 @@ export function HerdrTerminal({ paneId, source, lines, onGone }: Props) {
         reportMouse("move", event, "left");
       }}
       onPointerUp={(event) => {
+        if (draggingRef.current) {
+          draggingRef.current = false;
+          stopEdge();
+          const term = termRef.current;
+          if (term && heldRef.current) copyHeld(term, true);
+        }
         const button = pointerButton(event.button) ?? heldButton.current;
         heldButton.current = null;
         if (button) reportMouse("up", event, button);
       }}
       onPointerCancel={() => {
+        draggingRef.current = false;
+        stopEdge();
         heldButton.current = null;
       }}
       onContextMenu={(event) => event.preventDefault()}
@@ -673,7 +998,7 @@ export function HerdrTerminal({ paneId, source, lines, onGone }: Props) {
           event.preventDefault();
           event.stopPropagation();
           pasteStamp.current = Date.now();
-          const highlighted = selectionOf(term);
+          const highlighted = heldRef.current ?? selectionOf(term);
           void navigator.clipboard?.readText().then((text) => {
             const current = termRef.current;
             if (!current) return;
@@ -685,8 +1010,8 @@ export function HerdrTerminal({ paneId, source, lines, onGone }: Props) {
           }).catch(() => undefined);
           return;
         }
-        if (term && term.hasSelection() && !event.altKey && !event.metaKey && (event.key === "Backspace" || event.key === "Delete" || printable)) {
-          const highlighted = selectionOf(term);
+        if (term && (term.hasSelection() || heldRef.current) && !event.altKey && !event.metaKey && (event.key === "Backspace" || event.key === "Delete" || printable)) {
+          const highlighted = heldRef.current ?? selectionOf(term);
           const removed = highlighted ? keysToRemoveSelection(cursorCaret(term), highlighted) : null;
           if (event.key === "Backspace" || event.key === "Delete") {
             event.preventDefault();
@@ -701,7 +1026,7 @@ export function HerdrTerminal({ paneId, source, lines, onGone }: Props) {
             queueText(event.key);
             return;
           }
-          term.clearSelection();
+          dropHeld(term);
         }
         if (host.consume(event.nativeEvent)) {
           event.preventDefault();
@@ -743,7 +1068,7 @@ export function HerdrTerminal({ paneId, source, lines, onGone }: Props) {
         event.preventDefault();
         const term = termRef.current;
         if (term) {
-          const highlighted = selectionOf(term);
+          const highlighted = heldRef.current ?? selectionOf(term);
           if (highlighted) removeHighlight(term, highlighted);
         }
         flushText();
@@ -804,14 +1129,7 @@ export function fitCells(
   cellW: number,
   cellH: number,
 ): { cols: number; rows: number } | null {
-  if (hostW < 8 || hostH < 8 || cellW < 1 || cellH < 1) return null;
-  const cols = Math.floor(hostW / cellW);
-  const rows = Math.floor(hostH / cellH);
-  if (!Number.isFinite(cols) || !Number.isFinite(rows)) return null;
-  return {
-    cols: Math.max(2, Math.min(500, cols)),
-    rows: Math.max(1, Math.min(200, rows)),
-  };
+  return fittedGrid(hostW, hostH, { w: cellW, h: cellH });
 }
 
 function paintTheme(term: Terminal) {
@@ -826,11 +1144,29 @@ function paintTheme(term: Terminal) {
   };
 }
 
-function readCell(term: Terminal): { w: number; h: number } {
+function measureCell(term: Terminal): { w: number; h: number } | null {
   const core = (term as unknown as {
-    _core?: { _renderService?: { dimensions?: { css?: { cell?: { width: number; height: number } } } } };
+    _core?: {
+      _charSizeService?: { measure?: () => void };
+      _renderService?: {
+        dimensions?: { css?: { cell?: { width: number; height: number } } };
+        _isPaused?: boolean;
+        _pausedResizeTask?: { flush?: () => void };
+        refreshRows?: (start: number, end: number) => void;
+        _rowCount?: number;
+      };
+    };
   })._core;
-  const cell = core?._renderService?.dimensions?.css?.cell;
-  if (cell && cell.width > 0 && cell.height > 0) return { w: cell.width, h: cell.height };
-  return { w: 8.4, h: 17 };
+  const render = core?._renderService;
+  const host = term.element?.parentElement;
+  if (render?._isPaused && host && host.clientWidth >= 8 && host.clientHeight >= 8) {
+    render._pausedResizeTask?.flush?.();
+    render._isPaused = false;
+    const rows = render._rowCount ?? term.rows;
+    if (rows > 0) render.refreshRows?.(0, rows - 1);
+  }
+  core?._charSizeService?.measure?.();
+  const cell = render?.dimensions?.css?.cell;
+  if (!cell || cell.width < 1 || cell.height < 1) return null;
+  return { w: cell.width, h: cell.height };
 }
