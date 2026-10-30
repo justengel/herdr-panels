@@ -2,7 +2,17 @@
 
 ## Unreleased
 
+## 0.1.11 - 2026-10-30
+
+A space stays on the Herdr tab you left. Both tab bars can be renamed, reordered, and closed.
+
+A Herdr panel is either Panes, which shows every tab in the space, or a Terminal, which shows one shell and has no tab strip. Several Terminal panels can be open at once. Closing Panes leaves the shells open. A panel has no saved name until someone types one, and the title bar shows the file, folder, site, or the panel type. The first start of this version clears names that were filled in automatically, such as Panes, Terminal, Files, Spaces, and Agents. A name someone typed stays, including a tab's own label.
+
+Panel commands take `--space` to edit that workspace and leave the focused space as it is. A new space keeps a bound terminal. Closing a space removes it from the desk. The terminal stays live for every open window, and the window you type in owns the pane size.
+
 Ctrl+wheel zooms the panel under the pointer. Ctrl+0, Ctrl++, and Ctrl+- zoom the panel with the gold bar. With no panel selected, those keys zoom the panel under the pointer while this window is in front. With the pointer somewhere else, Ctrl+0 returns every panel to 100%. Clicking the session bar clears that bar. Steps are 10% from 50% to 200%, and 25% from there down to 25% and up to 300%. A terminal changes its font size. A browser panel and a plugin zoom their own page. The same keys and wheel work in a browser tab, one panel at a time. Spaces and agents stay as they are unless the zoom is aimed at them.
+
+Selecting the whole address bar copies the home shortcut, such as a path that starts with `~`, instead of the shortened path shown on the bar.
 
 ## 0.1.10 - 2026-10-29
 

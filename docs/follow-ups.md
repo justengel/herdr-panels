@@ -4,6 +4,13 @@ Recorded 2026-10-27 from the review before the first public release. Closed item
 
 ## Unreleased
 
+## Done in 0.1.11
+
+- A space stays on the Herdr tab you left, and both tab bars can be renamed, reordered, and closed.
+- A Terminal panel shows one shell. Panes still shows every tab in the space. A panel stays unnamed until someone types a name, and this version clears the old automatic labels.
+- Panel commands can name a workspace. A new space keeps a bound terminal, a closed space leaves the desk, and the window you type in owns the pane size.
+- Each panel zooms on its own. Selecting the whole address bar copies the home shortcut.
+
 ## Done in 0.1.10
 
 - Selecting an element and choosing Screenshot works in the Ubuntu desktop window. WebKit `color()` values are rewritten before the image is drawn, and a panel page is painted when that window will not export the SVG capture.
