@@ -241,6 +241,27 @@ describe("which panel shows a pane", () => {
     expect(revealPaneOnDesk(root, "wC:p1", null)).toEqual({ root, panelId: "term" });
   });
 
+  it("does not retarget a side shell when another pane should be shown", () => {
+    const root: LayoutNode = {
+      type: "split",
+      direction: "row",
+      ratio: 0.5,
+      first: { type: "panel", id: "space", title: "Terminal", panel: { type: "herdr", paneId: "w1:p1" } },
+      second: {
+        type: "panel",
+        id: "side",
+        title: "Shell",
+        panel: { type: "herdr", paneId: "w1:p9", scope: "pane" },
+      },
+    };
+    const revealed = revealPaneOnDesk(root, "w2:p4", "side");
+    expect(revealed.panelId).toBe("space");
+    expect(revealed.root).toMatchObject({
+      first: { panel: { type: "herdr", paneId: "w2:p4" } },
+      second: { panel: { type: "herdr", paneId: "w1:p9", scope: "pane" } },
+    });
+  });
+
   it("rebinds the focused terminal and leaves the other pane alone", () => {
     const root: LayoutNode = {
       type: "split",
@@ -270,8 +291,49 @@ describe("which panel shows a pane", () => {
       type: "split",
       direction: "row",
       first: { id: "report" },
-      second: { id: revealed.panelId, panel: { type: "herdr", paneId: "wC:p1" } },
+      second: { id: revealed.panelId, title: null, panel: { type: "herdr", paneId: "wC:p1" } },
     });
+  });
+
+  it("opens Panes beside two terminal panels when the shell is not already shown", () => {
+    const root: LayoutNode = {
+      type: "split",
+      direction: "row",
+      ratio: 0.5,
+      first: {
+        type: "panel",
+        id: "left",
+        title: "Terminal",
+        panel: { type: "herdr", paneId: "w1:p1", scope: "pane" },
+      },
+      second: {
+        type: "panel",
+        id: "right",
+        title: "Terminal",
+        panel: { type: "herdr", paneId: "w1:p2", scope: "pane" },
+      },
+    };
+    const shown = revealPaneOnDesk(root, "w1:p2", null);
+    expect(shown.panelId).toBe("right");
+    expect(shown.root).toMatchObject({
+      first: { panel: { scope: "pane", paneId: "w1:p1" } },
+      second: { panel: { scope: "pane", paneId: "w1:p2" } },
+    });
+    const revealed = revealPaneOnDesk(root, "w1:p3", null);
+    expect(revealed.root).toMatchObject({
+      first: { id: "left", panel: { scope: "pane", paneId: "w1:p1" } },
+      second: {
+        first: { id: "right", panel: { scope: "pane", paneId: "w1:p2" } },
+        second: { title: null, panel: { type: "herdr", paneId: "w1:p3" } },
+      },
+    });
+    const created =
+      revealed.root.type === "split" &&
+      revealed.root.second.type === "split" &&
+      revealed.root.second.second.type === "panel"
+        ? revealed.root.second.second.panel
+        : null;
+    expect(created?.type === "herdr" ? created.scope : "pane").toBeUndefined();
   });
 
   it("activates a background tab that already shows the pane", () => {

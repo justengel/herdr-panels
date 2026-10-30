@@ -1,4 +1,4 @@
-import { titleFromPanel } from "./openTitle";
+import { isDefaultPanelTitle, titleFromPanel } from "./openTitle";
 import type { GridCell, LayoutNode, PanelConfig, PanelNode, PanelTab, TabEdge } from "./types";
 
 function clamp(value: number, min: number, max: number): number {
@@ -29,14 +29,9 @@ export function normalizeLayout(node: LayoutNode): LayoutNode {
     if (panel.type === "tabs" && panel.tabs.length === 1) {
       const only = panel.tabs[0];
       panel = only.panel;
-      if (only.title && only.title !== "New tab") title = only.title;
+      if (only.title && !isDefaultPanelTitle(only.title)) title = only.title;
     }
-    if (panel.type === "files" && (!title || title === "Directories" || title === "spaces" || title === "Panel")) {
-      title = "Spaces";
-    }
-    if (panel.type === "agents" && (!title || title === "agents" || title === "Panel")) {
-      title = "Agents";
-    }
+    if (isDefaultPanelTitle(title)) title = null;
     return { type: "panel", id: node.id, title: title ?? null, panel };
   }
   return {
@@ -128,7 +123,7 @@ export function setPanel(node: LayoutNode, id: string, panel: PanelConfig): Layo
 export function contentLabel(panel: PanelConfig): string {
   switch (panel.type) {
     case "herdr":
-      return "Terminal";
+      return panel.scope === "pane" ? "Terminal" : "Panes";
     case "iframe": {
       const host = titleFromPanel(panel);
       return host || "Browser";
@@ -527,7 +522,7 @@ export function defaultPanel(type: PanelConfig["type"]): PanelConfig {
 export function panelKind(panel: PanelConfig): string {
   switch (panel.type) {
     case "herdr":
-      return "Terminal";
+      return panel.scope === "pane" ? "Terminal" : "Panes";
     case "iframe":
       return "Browser";
     case "markdown":
@@ -585,7 +580,7 @@ export function panelSummary(panel: PanelNode): string {
   }
 }
 
-function builtinPanel(id: string, title: string, panel: PanelConfig): PanelNode {
+function builtinPanel(id: string, title: string | null, panel: PanelConfig): PanelNode {
   return { type: "panel", id, title, panel };
 }
 
@@ -601,11 +596,11 @@ export function ensureSidebar(root: LayoutNode): LayoutNode {
   const agents = panels.find((panel) => panel.panel.type === "agents");
   let next = root;
   if (files && !agents) {
-    next = splitPanel(next, files.id, "column", builtinPanel(unusedId(next, "agents"), "Agents", { type: "agents" }));
+    next = splitPanel(next, files.id, "column", builtinPanel(unusedId(next, "agents"), null, { type: "agents" }));
   } else if (!files && agents) {
     const id = unusedId(next, "spaces");
     next = swapPanels(
-      splitPanel(next, agents.id, "column", builtinPanel(id, "Spaces", { type: "files" })),
+      splitPanel(next, agents.id, "column", builtinPanel(id, null, { type: "files" })),
       agents.id,
       id,
     );
@@ -616,8 +611,8 @@ export function ensureSidebar(root: LayoutNode): LayoutNode {
       type: "split",
       direction: "column",
       ratio: 0.62,
-      first: builtinPanel(filesId, "Spaces", { type: "files" }),
-      second: builtinPanel(agentsId, "Agents", { type: "agents" }),
+      first: builtinPanel(filesId, null, { type: "files" }),
+      second: builtinPanel(agentsId, null, { type: "agents" }),
     };
     next = { type: "split", direction: "row", ratio: 0.22, first: sidebar, second: next };
   }

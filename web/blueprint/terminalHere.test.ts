@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { addedPane, terminalPlacement } from "../src/openTerminal";
 import { cdCommand, terminalHereCwd } from "../src/terminalHere";
 import type { PanelConfig } from "../src/types";
 
@@ -26,6 +27,30 @@ describe("terminal here", () => {
     expect(terminalHereCwd({ type: "iframe", url: "https://example.com", proxy: false })).toBeNull();
     expect(terminalHereCwd({ type: "blank" })).toBeNull();
     expect(terminalHereCwd({ type: "herdr", paneId: "w1:p1" })).toBeNull();
+  });
+
+  it("gives Add panel → Terminal its own shell instead of splitting the space", () => {
+    const blank: PanelConfig = { type: "blank" };
+    const space: PanelConfig = { type: "herdr", paneId: "w1:p1" };
+    const side: PanelConfig = { type: "herdr", paneId: "w1:p9", scope: "pane" };
+    expect(terminalPlacement("terminal", blank)).toBe("shell");
+    expect(terminalPlacement("terminal", space)).toBe("shell");
+    expect(terminalPlacement("pane:new", space)).toBe("shell");
+    expect(terminalPlacement("pane:new", side)).toBe("shell");
+  });
+
+  it("picks the pane a new tab added in this space", () => {
+    expect(
+      addedPane(
+        ["w1:p1"],
+        [
+          { paneId: "w1:p1", workspaceId: "w1" },
+          { paneId: "w2:p1", workspaceId: "w2" },
+          { paneId: "w1:p2", workspaceId: "w1" },
+        ],
+        "w1",
+      ),
+    ).toBe("w1:p2");
   });
 
   it("builds a quoted cd command for Windows and Unix paths", () => {

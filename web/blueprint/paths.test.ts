@@ -17,4 +17,16 @@ describe("paths follow the operating system they belong to", () => {
     expect(samePath("C:\\Users\\me\\Projects", "c:/users/me")).toBe(true);
     expect(samePath("/home/me/Projects", "c:/users/me")).toBe(false);
   });
+
+  it("keeps a backslash inside a linux file name", () => {
+    expect(baseName("/home/me/foo\\bar", false)).toBe("foo\\bar");
+    expect(parentPath("/home/me/foo\\bar", false)).toBe("/home/me");
+    expect(baseName("work/pkg/", false)).toBe("pkg");
+  });
+
+  it("splits a relative windows path on the windows host only", () => {
+    expect(baseName("work\\pkg", true)).toBe("pkg");
+    expect(parentPath("work\\pkg", true)).toBe("work");
+    expect(baseName("work\\pkg", false)).toBe("work\\pkg");
+  });
 });

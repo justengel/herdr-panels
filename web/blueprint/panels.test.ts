@@ -55,7 +55,7 @@ describe("a panel becomes a tab group only while it has more than one tab", () =
     const grouped = assignContent(addPanelTab(note, "notes"), "notes", { type: "herdr", paneId: null }, true);
     const single = closePanelTab(grouped, "notes", "tab-1");
     expect(findPanel(single, "notes")).toMatchObject({
-      title: "Terminal",
+      title: "Panes",
       panel: { type: "herdr", paneId: null },
     });
   });
@@ -88,8 +88,20 @@ describe("a panel becomes a tab group only while it has more than one tab", () =
     expect(loaded).toMatchObject({
       type: "panel",
       id: "notes",
-      title: "Terminal",
+      title: "Notes",
       panel: { type: "herdr", paneId: null },
     });
+    const named = normalizeLayout({
+      type: "panel",
+      id: "notes",
+      title: "Panel",
+      panel: {
+        type: "tabs",
+        edge: "top",
+        active: "tab-1",
+        tabs: [{ id: "tab-1", title: "Welcome", panel: { type: "herdr", paneId: null } }],
+      },
+    });
+    expect(named).toMatchObject({ title: "Welcome", panel: { type: "herdr", paneId: null } });
   });
 });

@@ -75,6 +75,8 @@ export interface HerdrPanel {
   paneId?: string | null;
   source?: "visible" | "recent" | null;
   lines?: number | null;
+  /** `pane` shows that one shell. Absent mirrors the space's tabs and panes. */
+  scope?: "space" | "pane";
 }
 
 export interface MarkdownPanel {

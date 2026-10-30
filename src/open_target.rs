@@ -44,7 +44,7 @@ pub fn classify_target(
             path: target.to_string(),
         }),
         Some(FsKind::File) => Ok(file_kind(target)),
-        None if Path::new(target).is_absolute() => Err(format!("file was not found: {target}")),
+        None if is_absolute_target(target) => Err(format!("file was not found: {target}")),
         None => Ok(file_kind(target)),
     }
 }
@@ -179,6 +179,15 @@ fn web_address(target: &str) -> Option<String> {
     let url = format!("{scheme}://{host}{port}{path}{query}");
     url::Url::parse(&url).ok()?;
     Some(url)
+}
+
+fn is_absolute_target(target: &str) -> bool {
+    Path::new(target).is_absolute() || is_posix_absolute(target)
+}
+
+/// `/tmp/file` is absolute on Linux. On Windows `Path::is_absolute` is false for it.
+fn is_posix_absolute(target: &str) -> bool {
+    target.starts_with('/') && !target.starts_with("//")
 }
 
 fn is_windows_drive(target: &str) -> bool {
@@ -328,11 +337,12 @@ fn is_drive_path(scheme: &str, rest: &str) -> bool {
 }
 
 fn file_label(path: &str) -> String {
-    path.split(|ch| ch == '/' || (cfg!(windows) && ch == '\\'))
-        .filter(|part| !part.is_empty())
-        .next_back()
-        .unwrap_or("File")
-        .to_string()
+    let leaf = crate::paths::path_leaf(path);
+    if leaf.is_empty() {
+        "File".into()
+    } else {
+        leaf
+    }
 }
 
 fn has_parent(target: &str) -> bool {
@@ -490,6 +500,17 @@ mod tests {
             }),
             "pkg"
         );
+    }
+
+    #[test]
+    fn a_posix_absolute_path_is_a_missing_file_not_a_page() {
+        let target = "/tmp/claude-1000/-home-engel-projects-checkin/4486d599-0fa7-42c3-ba03-329780445b47/scratchpad/add_permissions.py";
+        let err = classify_target(target, no_file).unwrap_err();
+        assert!(err.contains("was not found"), "{err}");
+        assert!(!matches!(
+            classify_target("google.com/search", no_file).unwrap(),
+            OpenKind::Text { .. } | OpenKind::Markdown { .. } | OpenKind::Html { .. }
+        ));
     }
 
     #[test]

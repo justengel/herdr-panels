@@ -32,6 +32,9 @@ pub struct DeskPin {
 pub struct DeskDocument {
     #[serde(default)]
     pub revision: u64,
+    /// Desk file format. Missing on older files, which read as 0.
+    #[serde(default)]
+    pub version: u32,
     #[serde(default)]
     pub pins: Vec<DeskPin>,
     #[serde(default)]
@@ -42,6 +45,7 @@ impl Default for DeskDocument {
     fn default() -> Self {
         Self {
             revision: 0,
+            version: 0,
             pins: Vec::new(),
             spaces: BTreeMap::new(),
         }
@@ -60,7 +64,14 @@ pub fn load_desk(config_dir: &Path, session: &str) -> anyhow::Result<DeskDocumen
         return Ok(DeskDocument::default());
     }
     let text = fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
-    serde_json::from_str(&text).with_context(|| format!("parsing {}", path.display()))
+    let mut desk: DeskDocument =
+        serde_json::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
+    if prepare_desk(&mut desk) {
+        let bytes = serde_json::to_vec_pretty(&desk).context("encoding desk")?;
+        store::write_atomic(&path, &with_newline(bytes))
+            .with_context(|| format!("writing {}", path.display()))?;
+    }
+    Ok(desk)
 }
 
 pub fn save_desk(
@@ -75,11 +86,13 @@ pub fn save_desk(
     if !adopt && incoming.revision != current.revision {
         return Ok(DeskSave::Conflict(current));
     }
-    let stored = DeskDocument {
+    let mut stored = DeskDocument {
         revision: current.revision.saturating_add(1),
+        version: crate::migrate::SCHEMA,
         pins: incoming.pins.clone(),
         spaces: incoming.spaces.clone(),
     };
+    prepare_desk(&mut stored);
     let path = desk_path(config_dir, session);
     let bytes = serde_json::to_vec_pretty(&stored).context("encoding desk")?;
     store::write_atomic(&path, &with_newline(bytes))
@@ -106,6 +119,27 @@ pub fn rename_desk(config_dir: &Path, from: &str, to: &str) -> anyhow::Result<()
         fs::remove_file(&source)?;
     }
     Ok(())
+}
+
+/// Bring a desk up to the current file format. Returns whether it changed.
+pub fn prepare_desk(desk: &mut DeskDocument) -> bool {
+    let mut changed = false;
+    if desk.version < crate::migrate::SCHEMA {
+        changed = true;
+        desk.version = crate::migrate::SCHEMA;
+    }
+    for pin in &mut desk.pins {
+        if layout_ops::is_generated_title(&pin.title) {
+            pin.title.clear();
+            changed = true;
+        }
+    }
+    for root in desk.spaces.values_mut() {
+        if layout_ops::blank_generated_panel_titles(root) {
+            changed = true;
+        }
+    }
+    changed
 }
 
 fn validate_desk(desk: &DeskDocument) -> anyhow::Result<()> {
@@ -193,9 +227,14 @@ fn is_native(panel: &PanelConfig) -> bool {
 }
 
 fn named_panel(id: &str, title: &str, panel: PanelConfig) -> LayoutNode {
+    let title = title.trim();
     LayoutNode::Panel {
         id: id.into(),
-        title: Some(title.into()),
+        title: if title.is_empty() {
+            None
+        } else {
+            Some(title.into())
+        },
         panel,
         collapsed: false,
     }
@@ -209,8 +248,8 @@ fn seed_space_bound(pane_id: Option<String>) -> LayoutNode {
     let sidebar = LayoutNode::Split {
         direction: Direction::Column,
         ratio: 0.62,
-        first: Box::new(named_panel("spaces", "Spaces", PanelConfig::Files)),
-        second: Box::new(named_panel("agents", "Agents", PanelConfig::Agents)),
+        first: Box::new(named_panel("spaces", "", PanelConfig::Files)),
+        second: Box::new(named_panel("agents", "", PanelConfig::Agents)),
     };
     LayoutNode::Split {
         direction: Direction::Row,
@@ -218,11 +257,12 @@ fn seed_space_bound(pane_id: Option<String>) -> LayoutNode {
         first: Box::new(sidebar),
         second: Box::new(named_panel(
             "terminal",
-            "Terminal",
+            "",
             PanelConfig::Herdr {
                 pane_id,
                 source: None,
                 lines: None,
+                scope: None,
             },
         )),
     }
@@ -233,7 +273,7 @@ pub struct LiveWorkspace {
     pub root_pane: Option<String>,
 }
 
-/// Add a layout for each workspace that does not have one yet, with Terminal
+/// Add a layout for each workspace that does not have one yet, with Panes
 /// bound to that workspace's root pane, and drop layouts for workspaces that
 /// are gone. An empty list leaves the desk alone.
 pub fn reconcile_spaces(desk: &DeskDocument, workspaces: &[LiveWorkspace]) -> DeskDocument {
@@ -267,7 +307,7 @@ pub fn reconcile_spaces(desk: &DeskDocument, workspaces: &[LiveWorkspace]) -> De
     next
 }
 
-/// The seed Terminal starts unbound. Once the workspace's root pane is known, bind that panel and leave every other pane choice alone.
+/// The seed Panes panel starts unbound. Once the workspace's root pane is known, bind that panel and leave every other pane choice alone.
 fn bind_seed_terminal(root: LayoutNode, pane_id: &str) -> Option<LayoutNode> {
     let terminal = layout_ops::list_panels(&root)
         .into_iter()
@@ -276,6 +316,7 @@ fn bind_seed_terminal(root: LayoutNode, pane_id: &str) -> Option<LayoutNode> {
         pane_id: None,
         source,
         lines,
+        scope,
     } = terminal.panel
     else {
         return None;
@@ -288,6 +329,7 @@ fn bind_seed_terminal(root: LayoutNode, pane_id: &str) -> Option<LayoutNode> {
             pane_id: Some(pane_id.to_string()),
             source,
             lines,
+            scope,
         }),
     )
     .ok()
@@ -459,6 +501,14 @@ pub struct VisitTarget {
 
 /// Find a panel on any space. The same id on several spaces prefers one that is not current.
 pub fn find_visit(spaces: &[VisitSpace<'_>], query: &str) -> Result<VisitTarget, &'static str> {
+    find_visit_with(spaces, query, &|_| String::new())
+}
+
+pub fn find_visit_with(
+    spaces: &[VisitSpace<'_>],
+    query: &str,
+    plugin_label: &impl Fn(&str) -> String,
+) -> Result<VisitTarget, &'static str> {
     let needle = query.trim();
     if needle.is_empty() {
         return Err("panel was not found");
@@ -466,12 +516,21 @@ pub fn find_visit(spaces: &[VisitSpace<'_>], query: &str) -> Result<VisitTarget,
     let mut hits: Vec<(usize, String, String)> = Vec::new();
     for (index, space) in spaces.iter().enumerate() {
         for panel in layout_ops::list_panels(space.root) {
-            let title = panel.title.unwrap_or_default();
-            let titled = title.trim();
+            let label = match &panel.panel {
+                PanelConfig::Plugin { plugin, .. } => plugin_label(plugin),
+                _ => String::new(),
+            };
+            let display = layout_ops::panel_display(panel.title.as_deref(), &panel.panel, &label);
+            let kind = layout_ops::panel_kind(&panel.panel, &label);
+            let named = layout_ops::stored_name(panel.title.as_deref());
             let id_match = panel.id == needle;
-            let title_match = !titled.is_empty() && titled.eq_ignore_ascii_case(needle);
-            if id_match || title_match {
-                hits.push((index, panel.id, titled.to_string()));
+            let label_match = named
+                .as_deref()
+                .is_some_and(|name| name.eq_ignore_ascii_case(needle))
+                || (!display.is_empty() && display.eq_ignore_ascii_case(needle))
+                || (!kind.is_empty() && kind.eq_ignore_ascii_case(needle));
+            if id_match || label_match {
+                hits.push((index, panel.id, display));
             }
         }
     }
@@ -481,9 +540,7 @@ pub fn find_visit(spaces: &[VisitSpace<'_>], query: &str) -> Result<VisitTarget,
     } else {
         let mut ids = std::collections::BTreeSet::new();
         for hit in &hits {
-            if hit.2.eq_ignore_ascii_case(needle) {
-                ids.insert(hit.1.clone());
-            }
+            ids.insert(hit.1.clone());
         }
         if ids.len() > 1 {
             return Err("more than one panel has that name");
@@ -519,13 +576,21 @@ pub fn find_visits(
     spaces: &[VisitSpace<'_>],
     queries: &[&str],
 ) -> Result<Vec<VisitTarget>, String> {
+    find_visits_with(spaces, queries, &|_| String::new())
+}
+
+pub fn find_visits_with(
+    spaces: &[VisitSpace<'_>],
+    queries: &[&str],
+    plugin_label: &impl Fn(&str) -> String,
+) -> Result<Vec<VisitTarget>, String> {
     if queries.is_empty() {
         return Err("panelId is required".into());
     }
     let mut found = Vec::new();
     let mut seen = std::collections::BTreeSet::new();
     for query in queries {
-        let visit = find_visit(spaces, query).map_err(|err| {
+        let visit = find_visit_with(spaces, query, plugin_label).map_err(|err| {
             if queries.len() == 1 {
                 err.to_string()
             } else if err == "panel was not found" {
@@ -544,7 +609,7 @@ pub fn find_visits(
     Ok(found)
 }
 
-/// The tree for one workspace: the saved space, or the Spaces, Agents, and Terminal seed, plus pins that belong there.
+/// The tree for one workspace: the saved space, or the Spaces, Agents, and Panes seed, plus pins that belong there.
 pub fn open_space(desk: &DeskDocument, workspace_id: &str) -> LayoutNode {
     let stored = desk
         .spaces
@@ -658,6 +723,7 @@ mod tests {
                 pane_id: None,
                 source: None,
                 lines: None,
+                scope: None,
             },
             collapsed: false,
         }
@@ -670,6 +736,7 @@ mod tests {
         spaces.insert("wg".into(), terminal());
         let desk = DeskDocument {
             revision: 0,
+            version: 0,
             pins: vec![DeskPin {
                 id: "notes".into(),
                 title: "Notes".into(),
@@ -832,6 +899,34 @@ mod tests {
     }
 
     #[test]
+    fn a_visit_uses_the_name_the_window_shows() {
+        let files = LayoutNode::Panel {
+            id: "files".into(),
+            title: Some("Panes".into()),
+            panel: PanelConfig::Explorer {
+                path: r"C:\work\pkg".into(),
+                focus: None,
+                address_bar: None,
+            },
+            collapsed: false,
+        };
+        let spaces = [VisitSpace {
+            id: "w1",
+            label: "desk",
+            root: &files,
+            current: true,
+        }];
+        let found = find_visit(&spaces, "pkg").unwrap();
+        assert_eq!(found.panel_id, "files");
+        assert_eq!(found.title, "pkg");
+        assert_eq!(find_visit(&spaces, "Files").unwrap().panel_id, "files");
+        assert_eq!(
+            find_visit(&spaces, "Panes").unwrap_err(),
+            "panel was not found"
+        );
+    }
+
+    #[test]
     fn a_visit_of_several_panels_names_the_one_that_failed() {
         let notes = LayoutNode::Panel {
             id: "notes".into(),
@@ -918,15 +1013,17 @@ mod tests {
     }
 
     fn terminal_pane(node: &LayoutNode) -> Option<String> {
-        crate::layout_ops::list_panels(node).into_iter().find_map(|panel| {
-            if panel.id != "terminal" {
-                return None;
-            }
-            match panel.panel {
-                PanelConfig::Herdr { pane_id, .. } => pane_id,
-                _ => None,
-            }
-        })
+        crate::layout_ops::list_panels(node)
+            .into_iter()
+            .find_map(|panel| {
+                if panel.id != "terminal" {
+                    return None;
+                }
+                match panel.panel {
+                    PanelConfig::Herdr { pane_id, .. } => pane_id,
+                    _ => None,
+                }
+            })
     }
 
     #[test]
@@ -937,6 +1034,7 @@ mod tests {
                 pane_id: Some("w1:p9".into()),
                 source: None,
                 lines: None,
+                scope: None,
             };
         }
         let mut spaces = BTreeMap::new();

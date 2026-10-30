@@ -689,6 +689,7 @@ interface TerminalSlot {
   tabId: string | null;
   paneId: string | null;
   active: boolean;
+  scope: "space" | "pane";
 }
 
 function terminalSlots(root: LayoutNode): TerminalSlot[] {
@@ -702,6 +703,7 @@ function terminalSlots(root: LayoutNode): TerminalSlot[] {
           tabId: tab.id,
           paneId: tab.panel.paneId ?? null,
           active: tab.id === panel.panel.active,
+          scope: tab.panel.scope === "pane" ? "pane" : "space",
         });
       }
       continue;
@@ -712,6 +714,7 @@ function terminalSlots(root: LayoutNode): TerminalSlot[] {
       tabId: null,
       paneId: panel.panel.paneId ?? null,
       active: true,
+      scope: panel.panel.scope === "pane" ? "pane" : "space",
     });
   }
   return slots;
@@ -749,7 +752,7 @@ function preferredSlot(slots: TerminalSlot[], preferId: string | null): Terminal
   return slots[0];
 }
 
-/** Show `paneId` in this layout. Rebind a terminal, or open one when the space has none. */
+/** Show `paneId` in this layout. Rebind Panes, or open that panel when the space has none. A Terminal panel (`scope: "pane"`) is left as it is. */
 export function revealPaneOnDesk(
   root: LayoutNode,
   paneId: string,
@@ -758,12 +761,15 @@ export function revealPaneOnDesk(
   const slots = terminalSlots(root);
   const showing = slots.find((slot) => slot.paneId === paneId);
   if (showing) return { root: withSlotPane(root, showing, paneId), panelId: showing.panelId };
-  const target = preferredSlot(slots, preferId);
+  const target = preferredSlot(
+    slots.filter((slot) => slot.scope !== "pane"),
+    preferId,
+  );
   if (target) return { root: withSlotPane(root, target, paneId), panelId: target.panelId };
   const created: PanelNode = {
     type: "panel",
     id: freshPanelId(root),
-    title: "Terminal",
+    title: null,
     panel: { type: "herdr", paneId },
   };
   const host = listPanels(root).at(-1);

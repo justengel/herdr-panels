@@ -11,6 +11,7 @@ const actions: PanelActions = {
   use: () => undefined,
   edge: () => undefined,
   place: () => undefined,
+  spawn: () => undefined,
   rename: () => undefined,
   fill: () => undefined,
   filledId: null,
@@ -42,5 +43,30 @@ describe("a borrowed panel", () => {
     expect(html).toContain("https://google.com");
     expect(html).not.toContain("Fill the screen");
     expect(html).not.toContain("Close google");
+  });
+
+  it("puts the panel type on the right, even when it matches the name", () => {
+    const html = renderToStaticMarkup(
+      createElement(
+        PanelActionsProvider,
+        { actions },
+        createElement(
+          PanelChrome,
+          {
+            title: "Panes",
+            kind: "Panes",
+            panelType: "herdr",
+            viewer: "Panes",
+          },
+          createElement("p", null, "tabs"),
+        ),
+      ),
+    );
+    const title = html.slice(html.indexOf("panel-title"), html.indexOf("panel-actions"));
+    const actionsHtml = html.slice(html.indexOf("panel-actions"));
+    expect(title).not.toContain("panel-type");
+    expect(actionsHtml).toContain("panel-type");
+    expect(actionsHtml.indexOf("panel-type")).toBeLessThan(actionsHtml.indexOf("Panel settings"));
+    expect(html).toContain(">Panes</span>");
   });
 });

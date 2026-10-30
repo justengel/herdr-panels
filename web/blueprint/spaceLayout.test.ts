@@ -58,10 +58,10 @@ describe("space layouts", () => {
       first: {
         type: "split",
         direction: "column",
-        first: { title: "Spaces", panel: { type: "files" } },
-        second: { title: "Agents", panel: { type: "agents" } },
+        first: { title: null, panel: { type: "files" } },
+        second: { title: null, panel: { type: "agents" } },
       },
-      second: { title: "Terminal", panel: { type: "herdr", paneId: null } },
+      second: { title: null, panel: { type: "herdr", paneId: null } },
     });
   });
 
@@ -432,6 +432,52 @@ describe("space layouts", () => {
       ["w1:p1", false],
       ["w2:p1", true],
     ]);
+  });
+
+  it("leaves a side shell in place when binding the space terminal", () => {
+    const root: LayoutNode = {
+      type: "split",
+      direction: "row",
+      ratio: 0.5,
+      first: {
+        type: "panel",
+        id: "side",
+        title: "Shell",
+        panel: { type: "herdr", paneId: "w1:p9", scope: "pane" },
+      },
+      second: {
+        type: "panel",
+        id: "space",
+        title: "Terminal",
+        panel: { type: "herdr", paneId: "w1:p1" },
+      },
+    };
+    const next = bindTerminalPane(root, "w1:p2");
+    expect(next).toMatchObject({
+      first: { panel: { type: "herdr", paneId: "w1:p9", scope: "pane" } },
+      second: { panel: { type: "herdr", paneId: "w1:p2" } },
+    });
+  });
+
+  it("leaves a desk of only terminal panels without adding Panes", () => {
+    const root: LayoutNode = {
+      type: "split",
+      direction: "row",
+      ratio: 0.5,
+      first: {
+        type: "panel",
+        id: "left",
+        title: "Terminal",
+        panel: { type: "herdr", paneId: "w1:p1", scope: "pane" },
+      },
+      second: {
+        type: "panel",
+        id: "right",
+        title: "Terminal",
+        panel: { type: "herdr", paneId: "w1:p2", scope: "pane" },
+      },
+    };
+    expect(bindTerminalPane(root, "w1:p3")).toBe(root);
   });
 
   it("binds the terminal panel to a pane id", () => {

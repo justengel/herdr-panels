@@ -364,6 +364,51 @@ pub fn find_dist_dir() -> Option<PathBuf> {
         .find(|path| path.join("index.html").is_file())
 }
 
+/// File or folder name at the end of a path.
+/// A drive or UNC path uses Windows separators. A `/...` path uses `/` only.
+/// A relative path uses the host's separator.
+pub fn path_leaf(path: &str) -> String {
+    path_leaf_on(path, cfg!(windows))
+}
+
+pub fn path_leaf_on(path: &str, host_windows: bool) -> String {
+    let plain = path.trim().strip_prefix(r"\\?\").unwrap_or(path.trim());
+    if plain.is_empty() {
+        return String::new();
+    }
+    let windows = windows_path(plain) || (host_windows && !posix_absolute(plain));
+    let trimmed = if windows {
+        plain.trim_end_matches(['/', '\\'])
+    } else {
+        plain.trim_end_matches('/')
+    };
+    if trimmed.is_empty() {
+        return if windows { String::new() } else { "/".into() };
+    }
+    let leaf = if windows {
+        trimmed.rsplit(['/', '\\']).next()
+    } else {
+        trimmed.rsplit('/').next()
+    };
+    leaf.unwrap_or("").trim().to_string()
+}
+
+fn windows_path(path: &str) -> bool {
+    let bytes = path.as_bytes();
+    if bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && (bytes[2] == b'\\' || bytes[2] == b'/')
+    {
+        return true;
+    }
+    path.starts_with('\\') || path.starts_with("//")
+}
+
+fn posix_absolute(path: &str) -> bool {
+    path.starts_with('/') && !path.starts_with("//")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -407,6 +452,17 @@ mod tests {
         assert_eq!(session_name_from_socket(&default_socket), None);
         assert_eq!(session_label(&named), "webpanels-probe");
         assert_eq!(session_label(&default_socket), "default");
+    }
+
+    #[test]
+    fn a_leaf_follows_the_path_s_own_separators() {
+        assert_eq!(path_leaf_on(r"C:\work\pkg\", true), "pkg");
+        assert_eq!(path_leaf_on("C:/work/pkg", false), "pkg");
+        assert_eq!(path_leaf_on("/home/me/Projects", false), "Projects");
+        assert_eq!(path_leaf_on("/home/me/foo\\bar", true), "foo\\bar");
+        assert_eq!(path_leaf_on("work\\pkg", true), "pkg");
+        assert_eq!(path_leaf_on("work\\pkg", false), "work\\pkg");
+        assert_eq!(path_leaf_on("work/pkg/", false), "pkg");
     }
 
     #[test]

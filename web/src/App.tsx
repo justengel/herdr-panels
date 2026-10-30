@@ -798,8 +798,8 @@ export function App() {
     const created = {
       type: "panel" as const,
       id: panelId,
-      title: paneId ? "Terminal" : "Panel",
-      panel: paneId ? { type: "herdr" as const, paneId } : defaultPanel("herdr"),
+      title: null,
+      panel: paneId ? { type: "herdr" as const, paneId, scope: "pane" as const } : defaultPanel("herdr"),
     };
     edit(splitPanel(layout!.root, id, direction, created));
     setSelectedId(panelId);
@@ -913,9 +913,15 @@ export function App() {
             }
             edit(addPanelTab(layout.root, id));
           },
-          use: (id, type, pluginId) => edit(assignContent(layout.root, id, panelChoice(type, pluginId), true)),
+          use: (id, type, pluginId) => edit(assignContent(layout.root, id, panelChoice(type, pluginId))),
           edge: (id, edge) => edit(setTabEdge(layout.root, id, edge)),
           place: (sourceId, targetId, place) => edit(movePanel(layout.root, sourceId, targetId, place)),
+          spawn: (id, direction, panel, title) => {
+            const doc = layoutRef.current;
+            if (!doc) return;
+            const panelId = freshPanelId(doc.root);
+            edit(splitPanel(doc.root, id, direction, { type: "panel", id: panelId, title: title || null, panel }));
+          },
           rename: (id, title) => edit(mapPanel(layout.root, id, (panel) => ({ ...panel, title: title || null }))),
           fill: (id) => setZoomedId((current) => (current === id ? null : id)),
           filledId: zoomedId,

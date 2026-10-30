@@ -995,6 +995,7 @@ mod tests {
         );
         DeskDocument {
             revision: 1,
+            version: 0,
             pins: Vec::new(),
             spaces,
         }

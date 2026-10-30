@@ -1,5 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { api, baseName } from "../../api";
+import { fileBrowserLabel, terminalDirectory } from "../../explorerMenu";
 import {
   cachedEntries,
   explorerMemory,
@@ -23,6 +25,9 @@ export function ExplorerView({
   roots,
   onEnter,
   onOpenFile,
+  onOpenInTerminal,
+  onOpenExternal,
+  onReveal,
   showAddress = true,
 }: {
   panelId: string;
@@ -33,6 +38,9 @@ export function ExplorerView({
   roots: Root[];
   onEnter: (path: string) => void;
   onOpenFile: (path: string) => void | Promise<unknown>;
+  onOpenInTerminal: (directory: string) => void;
+  onOpenExternal: (directory: string) => void;
+  onReveal: (path: string) => void;
   showAddress?: boolean;
 }) {
   const memory = explorerMemory(panelId);
@@ -40,6 +48,7 @@ export function ExplorerView({
   const restored = useRef(false);
   const [draft, setDraft] = useState(path);
   const [error, setError] = useState<string | null>(null);
+  const [rowMenu, setRowMenu] = useState<RowMenu | null>(null);
 
   useLayoutEffect(() => {
     restored.current = false;
@@ -75,6 +84,15 @@ export function ExplorerView({
   useEffect(() => setDraft(plainPath(path)), [path]);
   useEffect(() => setError(null), [path]);
 
+  useEffect(() => {
+    if (!rowMenu) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setRowMenu(null);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [rowMenu]);
+
   const selected = highlight || focus || "";
   const scrolled = useRef("");
 
@@ -109,7 +127,19 @@ export function ExplorerView({
       {error ? (
         <div className="empty">{error}</div>
       ) : (
-        <div className="explorer-tree" ref={treeRef}>
+        <div
+          className="explorer-tree"
+          ref={treeRef}
+          onContextMenu={(event) => {
+            const row = event.target instanceof Element ? event.target.closest("[data-path]") : null;
+            if (!row) return;
+            event.preventDefault();
+            event.stopPropagation();
+            const rowPath = row.getAttribute("data-path") || "";
+            const kind = row.getAttribute("data-kind") === "file" ? "file" : "dir";
+            setRowMenu({ path: rowPath, kind, x: event.clientX, y: event.clientY });
+          }}
+        >
           {path ? (
             <TreeBranch
               panelId={panelId}
@@ -140,8 +170,65 @@ export function ExplorerView({
           )}
         </div>
       )}
+      {rowMenu
+        ? createPortal(
+            <>
+              <div className="menu-dismiss" onClick={() => setRowMenu(null)} onContextMenu={(event) => { event.preventDefault(); setRowMenu(null); }} />
+              <div
+                className="panel-menu"
+                role="menu"
+                style={{
+                  left: Math.max(8, Math.min(rowMenu.x, window.innerWidth - 228)),
+                  top: Math.max(8, Math.min(rowMenu.y, window.innerHeight - 132)),
+                }}
+              >
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    const directory = terminalDirectory(rowMenu.path, rowMenu.kind);
+                    setRowMenu(null);
+                    onOpenInTerminal(directory);
+                  }}
+                >
+                  Open in terminal
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    const directory = terminalDirectory(rowMenu.path, rowMenu.kind);
+                    setRowMenu(null);
+                    onOpenExternal(directory);
+                  }}
+                >
+                  Open in external terminal
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    const target = rowMenu.path;
+                    setRowMenu(null);
+                    onReveal(target);
+                  }}
+                >
+                  {fileBrowserLabel(typeof navigator === "undefined" ? "" : navigator.platform)}
+                </button>
+              </div>
+            </>,
+            document.body,
+          )
+        : null}
     </div>
   );
+}
+
+interface RowMenu {
+  path: string;
+  kind: "file" | "dir";
+  x: number;
+  y: number;
 }
 
 function TreeBranch({
@@ -220,6 +307,7 @@ function TreeBranch({
         type="button"
         className={`tree-row${selected ? " is-selected" : ""}`}
         data-path={path}
+        data-kind="dir"
         data-selected={selected ? "true" : undefined}
         style={{ paddingLeft: 8 + depth * 14 }}
         aria-expanded={open}
@@ -251,6 +339,7 @@ function TreeBranch({
                 type="button"
                 className={`tree-row${highlight && pathKey(entry.path) === pathKey(highlight) ? " is-selected" : ""}`}
                 data-path={entry.path}
+                data-kind="file"
                 data-selected={highlight && pathKey(entry.path) === pathKey(highlight) ? "true" : undefined}
                 style={{ paddingLeft: 8 + (depth + 1) * 14 }}
                 onClick={() => {

@@ -15,7 +15,7 @@ use tokio::sync::{broadcast, oneshot, Mutex};
 use crate::chats::{self, ChatMessage};
 use crate::desk;
 use crate::keys::ClientInput;
-use crate::layout::{is_pane_id, Direction, LayoutDocument, LayoutNode, PanelConfig};
+use crate::layout::{is_pane_id, Direction, HerdrScope, LayoutDocument, LayoutNode, PanelConfig};
 use crate::layout_ops::{self, list_panels};
 use crate::paths::{is_loopback_url, resolve_content};
 use crate::server::AppState;
@@ -193,7 +193,7 @@ async fn split(
         _ => return Err(AgentError::bad("direction must be right or down")),
     };
     let (source, mut doc) = begin(&state, named_space(body.space.as_deref())).await?;
-    let source_id = resolve_key(&doc.root, &body.panel_id)?;
+    let source_id = resolve_key(&state, &doc.root, &body.panel_id)?;
     let split_from = list_panels(&doc.root)
         .into_iter()
         .find(|panel| panel.id == source_id)
@@ -208,12 +208,14 @@ async fn split(
             pane_id: None,
             source: None,
             lines: None,
+            scope: Some(HerdrScope::Pane),
         }
     } else {
         body.panel.unwrap_or(PanelConfig::Herdr {
             pane_id: None,
             source: None,
             lines: None,
+            scope: None,
         })
     };
     let created_panel = finish_plugin_control(&state, created_panel, body.control, true)?;
@@ -221,8 +223,7 @@ async fn split(
     let title = body
         .title
         .map(|title| title.chars().take(80).collect::<String>())
-        .filter(|title| !title.trim().is_empty())
-        .or_else(|| Some(default_title(&created_panel).into()));
+        .filter(|title| !title.trim().is_empty());
     let created = LayoutNode::Panel {
         id: created_id.clone(),
         title,
@@ -247,6 +248,7 @@ async fn split(
                 pane_id: Some(new_pane),
                 source: None,
                 lines: None,
+                scope: Some(HerdrScope::Pane),
             }),
         )
         .map_err(AgentError::bad)?;
@@ -281,7 +283,7 @@ pub(crate) async fn close_desk(
     space: Option<&str>,
 ) -> Result<Value, AgentError> {
     let (source, mut doc) = begin(state, space).await?;
-    let panel_id = resolve_key(&doc.root, panel_id)?;
+    let panel_id = resolve_key(state, &doc.root, panel_id)?;
     doc.root = layout_ops::close_panel(doc.root, &panel_id).map_err(AgentError::bad)?;
     let doc = commit(state, &source, doc).await?;
     Ok(workspace_json(state, &doc))
@@ -317,7 +319,7 @@ pub(crate) async fn resize_desk(
     space: Option<&str>,
 ) -> Result<Value, AgentError> {
     let (source, mut doc) = begin(state, space).await?;
-    let panel_id = resolve_key(&doc.root, panel_id)?;
+    let panel_id = resolve_key(state, &doc.root, panel_id)?;
     doc.root = layout_ops::resize_panel(doc.root, &panel_id, ratio).map_err(AgentError::bad)?;
     let doc = commit(state, &source, doc).await?;
     Ok(workspace_json(state, &doc))
@@ -406,26 +408,24 @@ pub(crate) async fn open_desk(state: &AppState, body: DeskOpen) -> Result<Value,
     let kind = crate::open_target::classify_target(&located, |path| file_kind(path))
         .map_err(AgentError::bad)?;
     let panel = finish_plugin_control(state, kind_to_panel(&kind), body.control, true)?;
-    let title = body
-        .title
-        .filter(|title| !title.trim().is_empty())
-        .unwrap_or_else(|| crate::open_target::open_title(&kind));
+    let title = body.title.filter(|title| !title.trim().is_empty());
     let (source, mut doc) = begin(state, named_space(body.space.as_deref())).await?;
     let (root, panel_id, created) = if let Some(panel_id) = body.panel_id.as_deref() {
-        let panel_id = resolve_key(&doc.root, panel_id)?;
-        let root = layout_ops::update_panel(doc.root, &panel_id, Some(Some(title)), Some(panel))
-            .map_err(AgentError::bad)?;
+        let panel_id = resolve_key(state, &doc.root, panel_id)?;
+        let root =
+            layout_ops::update_panel(doc.root, &panel_id, title.clone().map(Some), Some(panel))
+                .map_err(AgentError::bad)?;
         (root, panel_id, false)
     } else {
         let anchor = match body.from.as_deref() {
-            Some(from) => resolve_key(&doc.root, from)?,
+            Some(from) => resolve_key(state, &doc.root, from)?,
             None => {
                 default_anchor(&doc.root).ok_or_else(|| AgentError::bad("layout has no panels"))?
             }
         };
         let before = list_panels(&doc.root).len();
         let (root, panel_id) =
-            layout_ops::open_panel(doc.root, &anchor, direction, panel, Some(title), body.reuse)
+            layout_ops::open_panel(doc.root, &anchor, direction, panel, title, body.reuse)
                 .map_err(AgentError::bad)?;
         let created = list_panels(&root).len() > before;
         (root, panel_id, created)
@@ -581,7 +581,7 @@ pub(crate) async fn update_desk(
     control: Option<bool>,
 ) -> Result<Value, AgentError> {
     let (source, mut doc) = begin(state, space).await?;
-    let panel_id = resolve_key(&doc.root, panel_id)?;
+    let panel_id = resolve_key(state, &doc.root, panel_id)?;
     let panel = match (panel, control) {
         (Some(panel), requested) => Some(finish_plugin_control(state, panel, requested, true)?),
         (None, Some(requested)) => {
@@ -642,8 +642,8 @@ pub(crate) async fn move_desk(
     space: Option<&str>,
 ) -> Result<Value, AgentError> {
     let (held, mut doc) = begin(state, space).await?;
-    let source = resolve_key(&doc.root, panel_id)?;
-    let target = resolve_key(&doc.root, target)?;
+    let source = resolve_key(state, &doc.root, panel_id)?;
+    let target = resolve_key(state, &doc.root, target)?;
     doc.root = layout_ops::move_panel(doc.root, &source, &target, place).map_err(|err| {
         if err == "panel was not found" {
             AgentError::missing(err)
@@ -657,7 +657,7 @@ pub(crate) async fn move_desk(
 
 pub(crate) async fn list_desk(state: &AppState, space: Option<&str>) -> Result<Value, AgentError> {
     let (_, doc) = begin(state, space).await?;
-    Ok(json!({ "panels": panel_rows(&doc.root) }))
+    Ok(json!({ "panels": panel_rows(state, &doc.root) }))
 }
 
 #[derive(Deserialize)]
@@ -673,9 +673,13 @@ async fn zoom(
     State(state): State<AppState>,
     Json(body): Json<ZoomBody>,
 ) -> Result<Json<Value>, AgentError> {
-    zoom_desk(&state, body.panel_id.as_deref(), named_space(body.space.as_deref()))
-        .await
-        .map(Json)
+    zoom_desk(
+        &state,
+        body.panel_id.as_deref(),
+        named_space(body.space.as_deref()),
+    )
+    .await
+    .map(Json)
 }
 
 /// Fill the screen with one panel, or pass `None` to show the whole desk again.
@@ -686,7 +690,7 @@ pub(crate) async fn zoom_desk(
 ) -> Result<Value, AgentError> {
     let (source, doc) = begin(state, space).await?;
     let panel_id = match panel_id {
-        Some(panel_id) => Some(resolve_key(&doc.root, panel_id)?),
+        Some(panel_id) => Some(resolve_key(state, &doc.root, panel_id)?),
         None => None,
     };
     let space_id = match &source {
@@ -834,13 +838,14 @@ pub(crate) async fn visit_desk(
         })
         .collect();
     let needles: Vec<&str> = queries.iter().map(String::as_str).collect();
-    let found = desk::find_visits(&views, &needles).map_err(|err| {
-        if err.starts_with("panel was not found") {
-            AgentError::missing(err)
-        } else {
-            AgentError::bad(err)
-        }
-    })?;
+    let found = desk::find_visits_with(&views, &needles, &|id| plugin_manifest_title(state, id))
+        .map_err(|err| {
+            if err.starts_with("panel was not found") {
+                AgentError::missing(err)
+            } else {
+                AgentError::bad(err)
+            }
+        })?;
     let panels: Vec<Value> = found
         .iter()
         .map(|visit| {
@@ -906,7 +911,7 @@ pub(crate) async fn list_spaces(state: &AppState) -> Result<Value, AgentError> {
                 "id": space.id,
                 "label": space.label,
                 "current": space.current,
-                "panels": panel_rows(&space.root),
+                "panels": panel_rows(state, &space.root),
             })
         })
         .collect();
@@ -936,7 +941,7 @@ async fn say(
     let target = if body.to == "*" {
         None
     } else {
-        Some(resolve_key(&doc.root, &body.to)?)
+        Some(resolve_key(&state, &doc.root, &body.to)?)
     };
     let chats: Vec<_> = list_panels(&doc.root)
         .into_iter()
@@ -1022,7 +1027,7 @@ async fn read_panel(
     axum::extract::Query(query): axum::extract::Query<ReadQuery>,
 ) -> Result<Json<Value>, AgentError> {
     let doc = load_active(&state).await?;
-    let id = resolve_key(&doc.root, &id)?;
+    let id = resolve_key(&state, &doc.root, &id)?;
     let panel = list_panels(&doc.root)
         .into_iter()
         .find(|panel| panel.id == id)
@@ -1033,11 +1038,16 @@ async fn read_panel(
         .agent
         .inspect(&panel.id, query.selector.as_deref(), query.text.as_deref())
         .await;
+    let label = plugin_manifest_title(&state, plugin_id_of(&panel.panel));
     Ok(Json(json!({
         "id": panel.id,
         "title": panel.title,
+        "name": layout_ops::stored_name(panel.title.as_deref()).unwrap_or_default(),
+        "display": layout_ops::panel_display(panel.title.as_deref(), &panel.panel, &label),
+        "kind": layout_ops::panel_kind(&panel.panel, &label),
         "type": panel_type(&panel.panel),
         "summary": panel_summary(&panel.panel),
+        "role": herdr_role(&panel.panel),
         "text": text,
         "blocks": blocks,
         "matches": matched,
@@ -1060,7 +1070,7 @@ async fn write_panel(
     Json(body): Json<WriteBody>,
 ) -> Result<Json<Value>, AgentError> {
     let doc = load_active(&state).await?;
-    let id = resolve_key(&doc.root, &id)?;
+    let id = resolve_key(&state, &doc.root, &id)?;
     let panel = list_panels(&doc.root)
         .into_iter()
         .find(|panel| panel.id == id)
@@ -1099,7 +1109,7 @@ async fn select_panel(
     Json(body): Json<SelectBody>,
 ) -> Result<Json<Value>, AgentError> {
     let doc = load_active(&state).await?;
-    let id = resolve_key(&doc.root, &id)?;
+    let id = resolve_key(&state, &doc.root, &id)?;
     if !layout_ops::contains(&doc.root, &id) {
         return Err(AgentError::missing("panel was not found"));
     }
@@ -1159,14 +1169,16 @@ async fn drive(mut socket: WebSocket, hub: AgentHub) {
     hub.viewers.fetch_sub(1, Ordering::Relaxed);
 }
 
-fn resolve_key(root: &LayoutNode, key: &str) -> Result<String, AgentError> {
-    layout_ops::resolve_panel_id(root, key).map_err(|err| {
-        if err == "panel was not found" {
-            AgentError::missing(err)
-        } else {
-            AgentError::bad(err)
-        }
-    })
+fn resolve_key(state: &AppState, root: &LayoutNode, key: &str) -> Result<String, AgentError> {
+    layout_ops::resolve_panel_id_with(root, key, |id| plugin_manifest_title(state, id)).map_err(
+        |err| {
+            if err == "panel was not found" {
+                AgentError::missing(err)
+            } else {
+                AgentError::bad(err)
+            }
+        },
+    )
 }
 
 enum ActiveSource {
@@ -1210,7 +1222,10 @@ fn workspace_id_for_key(desk: &desk::DeskDocument, key: &str) -> String {
     key.to_string()
 }
 
-async fn active_source(state: &AppState, requested: Option<&str>) -> Result<ActiveSource, AgentError> {
+async fn active_source(
+    state: &AppState,
+    requested: Option<&str>,
+) -> Result<ActiveSource, AgentError> {
     let snapshot = state.runtime.snapshot().await;
     let session = session_name(&snapshot);
     if let Some(requested) = requested {
@@ -1225,7 +1240,9 @@ async fn active_source(state: &AppState, requested: Option<&str>) -> Result<Acti
                     workspace_id: requested.to_string(),
                 });
             }
-            return Err(AgentError::missing(format!("space {requested} was not found")));
+            return Err(AgentError::missing(format!(
+                "space {requested} was not found"
+            )));
         }
         let stored = desk::load_desk(&state.config_dir, &session).map_err(AgentError::bad)?;
         if stored.spaces.contains_key(&desk::space_key(requested)) {
@@ -1282,11 +1299,10 @@ pub(crate) async fn sync_live_desk(state: &AppState) -> Result<bool, AgentError>
     if next.spaces == current.spaces && next.pins == current.pins {
         return Ok(false);
     }
-    let stored = match desk::save_desk(&state.config_dir, &session, &next, true)
-        .map_err(AgentError::bad)?
-    {
-        desk::DeskSave::Stored(saved) | desk::DeskSave::Conflict(saved) => saved,
-    };
+    let stored =
+        match desk::save_desk(&state.config_dir, &session, &next, true).map_err(AgentError::bad)? {
+            desk::DeskSave::Stored(saved) | desk::DeskSave::Conflict(saved) => saved,
+        };
     state
         .agent
         .publish(&json!({"type": "desk", "desk": stored}));
@@ -1417,20 +1433,46 @@ fn workspace_json(state: &AppState, doc: &LayoutDocument) -> Value {
         "layoutId": doc.id,
         "title": doc.title,
         "viewer": state.agent.viewers() > 0,
-        "panels": panel_rows(&doc.root),
+        "panels": panel_rows(state, &doc.root),
     })
 }
 
-fn panel_rows(root: &LayoutNode) -> Vec<Value> {
+fn plugin_id_of(panel: &PanelConfig) -> &str {
+    match panel {
+        PanelConfig::Plugin { plugin, .. } => plugin,
+        _ => "",
+    }
+}
+
+fn plugin_manifest_title(state: &AppState, id: &str) -> String {
+    if id.is_empty() {
+        return String::new();
+    }
+    crate::plugins::load_installed(&state.config_dir, id)
+        .ok()
+        .map(|manifest| manifest.title)
+        .filter(|title| !title.trim().is_empty())
+        .unwrap_or_default()
+}
+
+fn panel_rows(state: &AppState, root: &LayoutNode) -> Vec<Value> {
     list_panels(root)
         .into_iter()
         .map(|panel| {
-            json!({
+            let label = plugin_manifest_title(state, plugin_id_of(&panel.panel));
+            let mut row = json!({
                 "id": panel.id,
                 "title": panel.title,
+                "name": layout_ops::stored_name(panel.title.as_deref()).unwrap_or_default(),
+                "display": layout_ops::panel_display(panel.title.as_deref(), &panel.panel, &label),
+                "kind": layout_ops::panel_kind(&panel.panel, &label),
                 "type": panel_type(&panel.panel),
                 "summary": panel_summary(&panel.panel),
-            })
+            });
+            if let Some(role) = herdr_role(&panel.panel) {
+                row["role"] = json!(role);
+            }
+            row
         })
         .collect()
 }
@@ -1457,6 +1499,7 @@ pub(crate) fn panel_from_kind(
             pane_id: pane,
             source: None,
             lines: None,
+            scope: None,
         },
         "markdown" => PanelConfig::Markdown {
             path: path.unwrap_or_else(|| "notes/welcome.md".into()),
@@ -1651,6 +1694,17 @@ fn herdr_direction(direction: Direction) -> &'static str {
     }
 }
 
+fn herdr_role(panel: &PanelConfig) -> Option<&'static str> {
+    match panel {
+        PanelConfig::Herdr {
+            scope: Some(HerdrScope::Pane),
+            ..
+        } => Some("terminal"),
+        PanelConfig::Herdr { .. } => Some("panes"),
+        _ => None,
+    }
+}
+
 fn panel_type(panel: &PanelConfig) -> &'static str {
     match panel {
         PanelConfig::Herdr { .. } => "herdr",
@@ -1693,23 +1747,6 @@ fn panel_summary(panel: &PanelConfig) -> String {
             .unwrap_or_else(|| "tabs".into()),
         PanelConfig::Chat { pane_id } => pane_id.clone().unwrap_or_else(|| "local".into()),
         PanelConfig::Blank => "blank".into(),
-    }
-}
-
-fn default_title(panel: &PanelConfig) -> &'static str {
-    match panel {
-        PanelConfig::Herdr { .. } => "Terminal",
-        PanelConfig::Markdown { .. } => "Notes",
-        PanelConfig::Iframe { .. } => "Browser",
-        PanelConfig::Html { .. } => "HTML",
-        PanelConfig::Plugin { .. } => "Plugin",
-        PanelConfig::Files => "spaces",
-        PanelConfig::Agents => "agents",
-        PanelConfig::Explorer { .. } => "Files",
-        PanelConfig::File { .. } => "File",
-        PanelConfig::Tabs { .. } => "Tabs",
-        PanelConfig::Chat { .. } => "Chat",
-        PanelConfig::Blank => "",
     }
 }
 

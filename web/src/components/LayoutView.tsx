@@ -2,17 +2,18 @@ import { useRef, useState } from "react";
 import type { AgentView, Attachment, GridNode, LayoutNode, PaneView, PanelConfig, WorkspaceView } from "../types";
 import { api } from "../api";
 import { baseName, samePath } from "../paths";
-import { openFileBeside } from "../fileOpen";
-import { isDefaultPanelTitle } from "../openTitle";
+import { openFileBeside, panelWhenUnresolved } from "../fileOpen";
+import { displayTitle, isDefaultPanelTitle } from "../openTitle";
 import { pluginAddressBar } from "../pluginAddress";
 import { carryAddressBar, hostAddressBarVisible, setAddressBar, supportsAddressBar } from "../addressBar";
 import { carryRaw, showsRawText } from "../rawText";
-import { adoptPluginAddress, menuFor, pluginOpenMessage, showViewer, viewerName } from "../viewMenu";
+import { adoptPluginAddress, menuFor, PANES_HINT, pluginOpenMessage, showViewer, TERMINAL_HINT, viewerName } from "../viewMenu";
 import { climbExplorer, explorerRootFor, resolveWorkspacePath, workspaceDirectory } from "../explorerRoot";
 import { canPinPanel, findPin, pinApplies, upsertPin } from "../pins";
 import { unpinEverywhere, unpinHere } from "../spaceLayout";
-import { openTerminalPane } from "../openTerminal";
-import { terminalHereCwd } from "../terminalHere";
+import { openTerminalPane, shellPanel, terminalPlacement } from "../openTerminal";
+import { cdCommand, terminalHereCwd } from "../terminalHere";
+import { useHost } from "../host";
 import { cellNode, listPanels } from "../layoutEdit";
 import { useDesign } from "../design";
 import { useDesk } from "../desk";
@@ -23,6 +24,7 @@ import { OpenAddressDialog } from "./OpenAddressDialog";
 import { PinDialog, type PinDialogResult } from "./PinDialog";
 import { TabGroup } from "./TabGroup";
 import { SpaceMirror } from "./panels/SpaceMirror";
+import { HerdrTerminal } from "./panels/HerdrTerminal";
 import { MarkdownView } from "./panels/MarkdownView";
 import { IframeView } from "./panels/IframeView";
 import { HtmlView } from "./panels/HtmlView";
@@ -267,6 +269,7 @@ function PanelView(props: {
   const { id, title, panel, panes, workspaces, onPanel, onCloseTab, openMenuId, openMenuToken, root, onBack, fromSpace, borrowed } =
     props;
   const design = useDesign();
+  const host = useHost();
   const desk = useDesk();
   const panelActions = usePanelActions();
   const [opening, setOpening] = useState(false);
@@ -329,18 +332,41 @@ function PanelView(props: {
         setOpening(true);
         return;
       }
+      if (choice === "space-panes") {
+        onPanel(id, { type: "herdr", paneId: null }, true);
+        return;
+      }
       if (choice === "terminal" || choice === "pane:new") {
         const current = content.type === "herdr" ? content.paneId : null;
         const focused = panes.find((item) => item.focused) ?? panes[0];
         const source = current || focused?.paneId;
-        if (!source) {
-          onPanel(id, { type: "herdr", paneId: null });
-          return;
-        }
         const here = choice === "terminal" ? terminalHereCwd(content) : null;
         const cwd =
           here ||
           (choice === "terminal" ? activeSpace?.root || focused?.cwd || null : null);
+        if (terminalPlacement(choice, content) === "shell") {
+          void host
+            .openShell(activeSpace?.workspaceId)
+            .then(async (paneId) => {
+              if (paneId && cwd) {
+                const text = cdCommand(cwd);
+                if (text) {
+                  try {
+                    await api.sendInput({ paneId, text, keys: ["enter"] });
+                  } catch {
+                    // The panel still shows the new shell when cd fails.
+                  }
+                }
+              }
+              onPanel(id, shellPanel(paneId));
+            })
+            .catch(() => onPanel(id, shellPanel(null)));
+          return;
+        }
+        if (!source) {
+          onPanel(id, { type: "herdr", paneId: null });
+          return;
+        }
         void openTerminalPane(source, cwd).then(
           (paneId) => onPanel(id, { type: "herdr", paneId }),
           () => onPanel(id, { type: "herdr", paneId: null }),
@@ -350,8 +376,7 @@ function PanelView(props: {
       const next = showViewer(panel, choice, desk.plugins, {
         workspaceRoot: workspaceDirectory(activeSpace, panes),
       });
-      const retitle = choice === "spaces" || choice === "agents";
-      onPanel(id, next, retitle);
+      onPanel(id, next);
     },
   };
   function applyPin(result: PinDialogResult) {
@@ -374,7 +399,7 @@ function PanelView(props: {
     }
     const pin = {
       id,
-      title: title || heading(content),
+      title: displayTitle(title, panel, plugin?.title ?? "") || id,
       panel: content,
       mode: result.mode,
       spaces: result.spaces,
@@ -385,10 +410,18 @@ function PanelView(props: {
     }
     setPinTick((tick) => tick + 1);
   }
+  const panelTitle = displayTitle(title, panel, plugin?.title ?? "");
+  const givenName = isDefaultPanelTitle(title) ? "" : (title ?? "").trim();
   if (panel.type === "tabs") {
     return (
       <>
-        <PanelChrome {...chrome} title={title || "Tabs"} kind="Tabs" viewer={viewerName(content, plugin?.title)}>
+        <PanelChrome
+          {...chrome}
+          title={panelTitle}
+          name={givenName}
+          kind="Tabs"
+          viewer={viewerName(content, plugin?.title)}
+        >
           <TabGroup
             group={panel}
             onChange={(next) => onPanel(id, next)}
@@ -400,7 +433,7 @@ function PanelView(props: {
         </PanelChrome>
         <PinDialog
           open={pinning}
-          panelTitle={title || "Tabs"}
+          panelTitle={panelTitle}
           current={pinned}
           spaces={workspaces.map((space) => ({ id: space.workspaceId, name: space.label }))}
           activeSpaceId={activeSpace?.workspaceId ?? null}
@@ -411,20 +444,17 @@ function PanelView(props: {
       </>
     );
   }
-  const panelTitle =
-    (panel.type === "files" || panel.type === "agents") && (!title || title === "Panel")
-      ? heading(panel)
-      : title || heading(panel);
   return (
     <>
       <PanelChrome
         {...chrome}
         title={panelTitle}
+        name={givenName}
         kind={kindOf(panel)}
+        hint={panel.type === "herdr" ? (panel.scope === "pane" ? TERMINAL_HINT : PANES_HINT) : undefined}
         viewer={viewerName(content, plugin?.title)}
-        subtitle={panel.type === "herdr" ? herdrSubtitle(props) : undefined}
-        badge={panel.type === "herdr" ? badgeText(herdrPane(props)) : undefined}
-        badgeClass={panel.type === "herdr" ? badgeClass(herdrPane(props)) : undefined}
+        badge={herdrBadge(panel, herdrPane(props))}
+        badgeClass={herdrBadgeClass(panel, herdrPane(props))}
       >
         <Surface {...props} />
       </PanelChrome>
@@ -433,11 +463,9 @@ function PanelView(props: {
           onCancel={() => setOpening(false)}
           onOpen={(address) => {
             setOpening(false);
-            const retitle = isDefaultPanelTitle(title);
             void api.resolve(address).then(
-              (resolved) =>
-                onPanel(id, carryRaw(panel, carryAddressBar(panel, resolved)), retitle),
-              () => onPanel(id, { type: "iframe", url: address, proxy: false }, retitle),
+              (resolved) => onPanel(id, carryRaw(panel, carryAddressBar(panel, resolved))),
+              () => onPanel(id, carryRaw(panel, carryAddressBar(panel, panelWhenUnresolved(address)))),
             );
           }}
         />
@@ -490,7 +518,11 @@ function Surface({
   if (panel.type === "herdr") {
     return (
       <div className="fill">
-        <SpaceMirror panes={panes} workspaces={workspaces} onFocusPane={onFocusPane} />
+        {panel.scope === "pane" ? (
+          <HerdrTerminal paneId={panel.paneId ?? null} />
+        ) : (
+          <SpaceMirror panes={panes} workspaces={workspaces} onFocusPane={onFocusPane} />
+        )}
         {design.enabled ? <button type="button" className="design-shield" onClick={() => design.selectPanel(id)} /> : null}
       </div>
     );
@@ -561,6 +593,8 @@ function DocumentSurface({
   onPanel: (id: string, panel: PanelConfig, retitle?: boolean) => void;
 }) {
   const design = useDesign();
+  const host = useHost();
+  const panelActions = usePanelActions();
   const plugins = useDesk().plugins;
   const pluginId = panel.type === "plugin" ? panel.plugin : "";
   const bar = pluginAddressBar(plugins.find((item) => item.id === pluginId));
@@ -667,6 +701,34 @@ function DocumentSurface({
           showAddress={false}
           onEnter={enter}
           onOpenFile={(target) => api.open(openFileBeside(id, target))}
+          onOpenInTerminal={(directory) => {
+            const workspaceId = workspaces.find((item) => item.focused)?.workspaceId;
+            void host.openShell(workspaceId).then(async (paneId) => {
+              if (!paneId) {
+                host.notify("Could not open a terminal");
+                return;
+              }
+              const text = cdCommand(directory);
+              if (text) {
+                try {
+                  await api.sendInput({ paneId, text, keys: ["enter"] });
+                } catch {
+                  // The new panel still shows the terminal when cd fails.
+                }
+              }
+              panelActions.spawn(id, "row", shellPanel(paneId), "");
+            });
+          }}
+          onOpenExternal={(directory) => {
+            void api.localOpen({ path: directory, action: "terminal" }).catch((err: unknown) => {
+              host.notify(err instanceof Error ? err.message : "Could not open a terminal");
+            });
+          }}
+          onReveal={(target) => {
+            void api.localOpen({ path: target, action: "browser" }).catch((err: unknown) => {
+              host.notify(err instanceof Error ? err.message : "Could not open that folder");
+            });
+          }}
         />
       ) : null}
       {panel.type === "plugin" ? (
@@ -712,7 +774,7 @@ function activeContent(panel: PanelConfig): PanelConfig {
 function heading(panel: PanelConfig): string {
   switch (panel.type) {
     case "herdr":
-      return "Terminal";
+      return panel.scope === "pane" ? "Terminal" : "Panes";
     case "markdown":
       return "Notes";
     case "iframe":
@@ -785,11 +847,6 @@ function herdrPane(props: { panel: PanelConfig; panes: PaneView[]; workspaces: W
   );
 }
 
-function herdrSubtitle(props: { panel: PanelConfig; panes: PaneView[]; workspaces: WorkspaceView[] }): string | undefined {
-  const space = props.workspaces.find((item) => item.focused) ?? props.workspaces[0];
-  return space?.label;
-}
-
 function folderRoots(workspaces: WorkspaceView[], panes: PaneView[]) {
   const roots: { path: string; label: string }[] = [];
   for (const workspace of workspaces) {
@@ -807,17 +864,18 @@ function sameFolder(path: string, root: string) {
   return samePath(path, root);
 }
 
-function badgeText(pane: PaneView | undefined): string {
-  if (!pane) return "unbound";
+/** Agent status sits left of the panel type. The type itself stays Terminal. */
+function herdrBadge(panel: PanelConfig, pane: PaneView | undefined): string | undefined {
+  if (panel.type !== "herdr" || panel.scope !== "pane" || !pane) return undefined;
   const name = pane.agentName || pane.agent;
-  if (!name && pane.agentStatus === "unknown") return "shell";
+  if (!name && pane.agentStatus === "unknown") return undefined;
   if (name) return `${name} · ${pane.agentStatus}`;
   return pane.agentStatus;
 }
 
-function badgeClass(pane: PaneView | undefined): string {
-  if (!pane) return "badge-unknown";
-  if (!pane.agent && !pane.agentName && pane.agentStatus === "unknown") return "badge-shell";
+function herdrBadgeClass(panel: PanelConfig, pane: PaneView | undefined): string | undefined {
+  if (panel.type !== "herdr" || panel.scope !== "pane") return undefined;
+  if (!pane || (!pane.agent && !pane.agentName && pane.agentStatus === "unknown")) return "badge-terminal";
   return `badge-${pane.agentStatus}`;
 }
 

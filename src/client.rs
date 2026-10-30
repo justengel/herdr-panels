@@ -207,12 +207,14 @@ pub async fn execute() -> anyhow::Result<()> {
         ClientCommand::Plugin { command } => match command {
             PluginCommand::List => {
                 for plugin in plugins::list_plugins(&config_dir)? {
-                    let mut summary =
-                        crate::plugin_grant::permission_summary(&plugin.permissions);
+                    let mut summary = crate::plugin_grant::permission_summary(&plugin.permissions);
                     if !plugin.commands.is_empty() {
                         summary.push_str(&format!(" ({})", plugin.commands.join(", ")));
                     }
-                    println!("{}\t{}\t{}\t{}", plugin.id, plugin.title, plugin.entry, summary);
+                    println!(
+                        "{}\t{}\t{}\t{}",
+                        plugin.id, plugin.title, plugin.entry, summary
+                    );
                 }
                 Ok(())
             }
@@ -324,6 +326,27 @@ async fn status(config_dir: &std::path::Path, url: Option<String>) -> anyhow::Re
     }
 }
 
+fn panel_field(panel: &Value, key: &str) -> String {
+    panel
+        .get(key)
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string()
+}
+
+fn panel_line(panel: &Value) -> String {
+    format!(
+        "{}\t{}\t{}\t{}\t{}\t{}\t{}",
+        panel_field(panel, "id"),
+        panel_field(panel, "name"),
+        panel_field(panel, "display"),
+        panel_field(panel, "kind"),
+        panel_field(panel, "type"),
+        panel_field(panel, "summary"),
+        panel_field(panel, "role")
+    )
+}
+
 async fn panel_command(
     base: &str,
     token: &str,
@@ -341,13 +364,7 @@ async fn panel_command(
                 .into_iter()
                 .flatten()
             {
-                println!(
-                    "{}\t{}\t{}\t{}",
-                    panel.get("id").and_then(Value::as_str).unwrap_or(""),
-                    panel.get("title").and_then(Value::as_str).unwrap_or(""),
-                    panel.get("type").and_then(Value::as_str).unwrap_or(""),
-                    panel.get("summary").and_then(Value::as_str).unwrap_or("")
-                );
+                println!("{}", panel_line(panel));
             }
             Ok(())
         }
@@ -398,7 +415,10 @@ async fn panel_command(
                 token,
                 "POST",
                 "/api/agent/resize",
-                Some(with_space(json!({ "panelId": panel, "ratio": ratio }), space)),
+                Some(with_space(
+                    json!({ "panelId": panel, "ratio": ratio }),
+                    space,
+                )),
             )
             .await?;
             println!("{response}");
@@ -462,10 +482,7 @@ async fn panel_command(
             columns,
             rows,
         } => {
-            if space
-                .as_ref()
-                .is_some_and(|value| !value.trim().is_empty())
-            {
+            if space.as_ref().is_some_and(|value| !value.trim().is_empty()) {
                 anyhow::bail!("visit already searches every space");
             }
             if panels.is_empty() {
@@ -493,13 +510,7 @@ async fn panel_command(
                         .into_iter()
                         .flatten()
                     {
-                        println!(
-                            "{mark}\t{space_id}\t{label}\t{}\t{}\t{}\t{}",
-                            panel.get("id").and_then(Value::as_str).unwrap_or(""),
-                            panel.get("title").and_then(Value::as_str).unwrap_or(""),
-                            panel.get("type").and_then(Value::as_str).unwrap_or(""),
-                            panel.get("summary").and_then(Value::as_str).unwrap_or("")
-                        );
+                        println!("{mark}\t{space_id}\t{label}\t{}", panel_line(panel));
                     }
                 }
                 return Ok(());
@@ -609,7 +620,10 @@ fn with_space(mut body: Value, space: Option<String>) -> Value {
 }
 
 fn attach_space(body: &mut Value, space: Option<String>) {
-    if let Some(space) = space.map(|value| value.trim().to_string()).filter(|value| !value.is_empty()) {
+    if let Some(space) = space
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+    {
         body["space"] = json!(space);
     }
 }
@@ -621,7 +635,10 @@ fn attach_control(body: &mut Value, control: bool) {
 }
 
 fn space_query(space: Option<String>) -> String {
-    let Some(space) = space.map(|value| value.trim().to_string()).filter(|value| !value.is_empty()) else {
+    let Some(space) = space
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+    else {
         return String::new();
     };
     let mut encoded = String::new();
@@ -647,7 +664,9 @@ pub(crate) fn cli_open_target(cwd: &std::path::Path, target: &str) -> String {
         return crate::files::plain_path(path);
     }
     let joined = cwd.join(path);
-    let absolute = joined.canonicalize().unwrap_or_else(|_| normalize_dots(&joined));
+    let absolute = joined
+        .canonicalize()
+        .unwrap_or_else(|_| normalize_dots(&joined));
     crate::files::plain_path(&absolute)
 }
 
@@ -772,7 +791,10 @@ mod tests {
             cli_open_target(&dir, "plugin:checkin-report"),
             "plugin:checkin-report"
         );
-        assert_eq!(cli_open_target(&dir, "https://example.com/a"), "https://example.com/a");
+        assert_eq!(
+            cli_open_target(&dir, "https://example.com/a"),
+            "https://example.com/a"
+        );
         assert_eq!(cli_open_target(&dir, "example.com"), "example.com");
         let _ = std::fs::remove_dir_all(&dir);
     }

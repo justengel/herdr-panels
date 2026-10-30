@@ -1,7 +1,8 @@
 import { isWindowsPath, plainPath } from "./paths";
 
 function normalizeSlashes(path: string): string {
-  return plainPath(path).replace(/\\/g, "/");
+  const plain = plainPath(path);
+  return isWindowsPath(plain) ? plain.replace(/\\/g, "/") : plain;
 }
 
 /** Infer a home prefix from a path when the host does not publish one. */

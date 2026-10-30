@@ -60,7 +60,7 @@ export function seedSpaceLayout(): LayoutNode {
   return ensureSidebar({
     type: "panel",
     id: "terminal",
-    title: "Terminal",
+    title: null,
     panel: { type: "herdr", paneId: null },
   });
 }
@@ -350,7 +350,9 @@ export function preferPendingPane(runtime: RuntimeSnapshot, pendingPaneId: strin
 /** Bind the first Terminal panel to a pane without waiting on Herdr. */
 export function bindTerminalPane(root: LayoutNode, paneId: string | null): LayoutNode {
   if (!paneId) return root;
-  const terminal = listPanels(root).find((panel) => panel.panel.type === "herdr");
+  const terminal = listPanels(root).find(
+    (panel) => panel.panel.type === "herdr" && panel.panel.scope !== "pane",
+  );
   if (!terminal || terminal.panel.type !== "herdr" || terminal.panel.paneId === paneId) return root;
   return setPanel(root, terminal.id, { ...terminal.panel, paneId });
 }

@@ -243,7 +243,7 @@ export function TabGroup({
 }
 
 function titleFor(panel: PanelConfig): string | null {
-  if (panel.type === "herdr") return "Terminal";
+  if (panel.type === "herdr") return panel.scope === "pane" ? "Terminal" : "Panes";
   if (panel.type === "files") return "Spaces";
   if (panel.type === "agents") return "Agents";
   if (panel.type === "iframe" || panel.type === "html") {

@@ -26,6 +26,8 @@ pub mod launch;
 pub mod launcher;
 pub mod layout;
 pub mod layout_ops;
+pub mod local_open;
+pub mod migrate;
 pub mod open_target;
 pub mod paths;
 pub mod plugin_command;

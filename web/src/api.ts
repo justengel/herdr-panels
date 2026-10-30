@@ -144,6 +144,11 @@ export const api = {
     request<{ path: string; entries: { name: string; path: string; kind: "dir" | "file" }[] }>(
       `/api/tree?path=${encodeURIComponent(path)}`,
     ),
+  localOpen: (body: { path: string; action: "browser" | "terminal" }) =>
+    request<{ ok: boolean }>("/api/local-open", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
   focus: (body: { paneId?: string; workspaceId?: string; tabId?: string }) =>
     request<void>("/api/session/focus", {
       method: "POST",
@@ -200,6 +205,7 @@ export const api = {
     direction?: string;
     beforeWorkspaceId?: string;
     insertIndex?: number;
+    focus?: boolean;
   }) =>
     request<{ ok: boolean }>("/api/herdr/action", {
       method: "POST",

@@ -10,14 +10,18 @@ import { usePanelActions, usePanelDrag } from "../panelActions";
 
 interface Props {
   title: string;
+  /** Saved name. Empty until someone names the panel. The title bar uses `title`. */
+  name?: string;
   kind: string;
   panelType: PanelConfig["type"];
   pluginId?: string;
   badge?: string;
   badgeClass?: string;
   subtitle?: string;
-  /** Viewer name shown beside the title when it is not already the title. */
+  /** Panel type, aligned to the right of the title bar. */
   viewer?: string;
+  /** Tooltip for the title, used to explain Panes and Terminal. */
+  hint?: string;
   config?: ReactNode;
   contents?: ReactNode;
   actions?: ReactNode;
@@ -94,12 +98,14 @@ function PanelBody({
 
 export function PanelChrome({
   title,
+  name,
   kind,
   panelType,
   badge,
   badgeClass,
   subtitle,
   viewer,
+  hint,
   config,
   contents,
   actions,
@@ -255,6 +261,7 @@ export function PanelChrome({
   const deskEntries = entries.filter((entry) => entry.section === "desk");
   const pluginEntries = entries.filter((entry) => entry.section === "plugins");
   const paneEntries = entries.filter((entry) => entry.section === "panes");
+  const paneMenuLabel = deskEntries.find((entry) => entry.id === "terminals")?.label || "Terminals";
   const moreViewEntries = entries.filter((entry) => entry.section === "views");
   const showAddress = Boolean(onAddressBar) && panelType !== "herdr" && panelType !== "files" && panelType !== "agents";
 
@@ -364,7 +371,7 @@ export function PanelChrome({
       <section className={classes} data-panel-id={panelId} data-kind={kind} data-type={panelType} tabIndex={-1}>
         <header className="panel-header borrow-header">
           <div className="panel-title">
-            <strong>{title}</strong>
+            <strong title={hint}>{title}</strong>
             {fromSpace ? <span className="subtitle">from {fromSpace}</span> : null}
           </div>
           {onBack ? (
@@ -448,15 +455,13 @@ export function PanelChrome({
             title="Drag the title bar onto a side to place this panel, or the middle to swap"
           />
           <div className="panel-title">
-            <strong>{title}</strong>
-            {viewer && viewer.trim().toLowerCase() !== title.trim().toLowerCase() ? (
-              <span className="viewer-pill">{viewer}</span>
-            ) : null}
+            <strong title={hint}>{title}</strong>
             {subtitle ? <span className="subtitle">{subtitle}</span> : null}
           </div>
           {config}
           <div className="panel-actions">
             {badge ? <span className={`badge ${badgeClass ?? ""}`}>{badge}</span> : null}
+            {viewer ? <span className="panel-type">{viewer}</span> : null}
             {actions}
             <button
               ref={gearRef}
@@ -507,7 +512,7 @@ export function PanelChrome({
                 ref={menuRef}
                 style={menuStyle}
               >
-                <NameField panelId={panelId} title={title} />
+                <NameField panelId={panelId} name={name ?? title} placeholder={name !== undefined && name !== title ? title : undefined} />
                 {contents}
                 <div className="menu-rule" />
                 <div className="menu-label">Panel</div>
@@ -596,10 +601,11 @@ export function PanelChrome({
                           aria-haspopup="menu"
                           aria-expanded={flyout === "panes"}
                           aria-checked={entry.checked}
+                          title={entry.hint}
                           {...flyoutTrigger("panes")}
                         >
                           <span className="menu-check">{entry.checked ? "✓" : ""}</span>
-                          <span className="menu-flyout-label">{entry.label}</span>
+                          <MenuText label={entry.label} />
                           <span className="menu-chevron">›</span>
                         </button>
                       ) : (
@@ -722,12 +728,12 @@ export function PanelChrome({
                     ref={flyoutRef}
                     className="panel-menu-flyout"
                     role="menu"
-                    aria-label="Panes"
+                    aria-label={paneMenuLabel}
                     style={flyoutStyle(flyoutBox)}
                     onMouseEnter={cancelCloseFlyout}
                     onMouseLeave={scheduleCloseFlyout}
                   >
-                    <div className="menu-label">Panes</div>
+                    <div className="menu-label">{paneMenuLabel}</div>
                     {paneEntries.map((entry) => (
                       <MenuRow key={entry.id} entry={entry} onView={onView} run={run} />
                     ))}
@@ -769,6 +775,14 @@ function flyoutStyle(box: FlyoutBox | null): CSSProperties | undefined {
   };
 }
 
+function MenuText({ label }: { label: string }) {
+  return (
+    <span className="menu-copy">
+      <span className="menu-name">{label}</span>
+    </span>
+  );
+}
+
 function MenuRow({
   entry,
   onView,
@@ -786,11 +800,12 @@ function MenuRow({
       role="menuitemradio"
       className="menu-radio"
       aria-checked={entry.checked}
+      title={entry.hint}
       onMouseEnter={onHover}
       onClick={() => run(() => onView?.(entry.id))}
     >
       <span className="menu-check">{entry.checked ? "✓" : ""}</span>
-      {entry.label}
+      <MenuText label={entry.label} />
     </button>
   );
 }
@@ -859,10 +874,18 @@ function CloseIcon() {
   );
 }
 
-function NameField({ panelId, title }: { panelId: string; title: string }) {
+function NameField({
+  panelId,
+  name,
+  placeholder,
+}: {
+  panelId: string;
+  name: string;
+  placeholder?: string;
+}) {
   const panelActions = usePanelActions();
-  const [value, setValue] = useState(title);
-  useEffect(() => setValue(title), [title]);
+  const [value, setValue] = useState(name);
+  useEffect(() => setValue(name), [name]);
   const save = () => panelActions?.rename(panelId, value.trim());
   return (
     <label className="menu-name">
@@ -870,6 +893,7 @@ function NameField({ panelId, title }: { panelId: string; title: string }) {
       <input
         aria-label="Panel name"
         value={value}
+        placeholder={placeholder || undefined}
         onChange={(event) => setValue(event.target.value)}
         onBlur={save}
         onKeyDown={(event) => {

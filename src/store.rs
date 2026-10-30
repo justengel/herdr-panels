@@ -5,6 +5,7 @@ use anyhow::{bail, Context};
 use serde::{Deserialize, Serialize};
 
 use crate::layout::{is_layout_id, LayoutDocument};
+use crate::layout_ops;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -12,6 +13,9 @@ pub struct Settings {
     pub active_layout: String,
     #[serde(default)]
     pub content_roots: Vec<PathBuf>,
+    /// Config file format. Migrations in `migrate` advance this.
+    #[serde(default)]
+    pub schema: u32,
 }
 
 impl Default for Settings {
@@ -19,6 +23,7 @@ impl Default for Settings {
         Self {
             active_layout: "side-by-side".into(),
             content_roots: Vec::new(),
+            schema: 0,
         }
     }
 }
@@ -98,17 +103,22 @@ pub fn load_layout(config_dir: &Path, id: &str) -> anyhow::Result<LayoutDocument
     }
     let path = layouts_dir(config_dir).join(format!("{id}.json"));
     let text = fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
-    let doc = LayoutDocument::parse(&text)?;
+    let mut doc = LayoutDocument::parse(&text)?;
     if doc.id != id {
         bail!("layout file {id}.json declares id {}", doc.id);
+    }
+    if layout_ops::blank_generated_panel_titles(&mut doc.root) {
+        save_layout(config_dir, &doc)?;
     }
     Ok(doc)
 }
 
 pub fn save_layout(config_dir: &Path, doc: &LayoutDocument) -> anyhow::Result<()> {
+    let mut doc = doc.clone();
+    layout_ops::blank_generated_panel_titles(&mut doc.root);
     doc.validate()?;
     let path = layouts_dir(config_dir).join(format!("{}.json", doc.id));
-    let bytes = serde_json::to_vec_pretty(doc).context("encoding layout")?;
+    let bytes = serde_json::to_vec_pretty(&doc).context("encoding layout")?;
     write_atomic(&path, &with_newline(bytes)).with_context(|| format!("writing {}", path.display()))
 }
 

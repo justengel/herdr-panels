@@ -1,4 +1,4 @@
-use crate::layout::{Direction, GridCell, LayoutNode, PanelConfig};
+use crate::layout::{Direction, GridCell, HerdrScope, LayoutNode, PanelConfig};
 
 pub struct PanelInfo {
     pub id: String,
@@ -274,6 +274,7 @@ fn cell_node(cell: &GridCell) -> LayoutNode {
             pane_id: None,
             source: None,
             lines: None,
+            scope: None,
         }),
         collapsed: false,
     }
@@ -743,7 +744,188 @@ fn resize_rec(node: LayoutNode, id: &str, share: f64) -> (LayoutNode, bool) {
     }
 }
 
+/// A saved name. Automatic labels such as Panes or Files count as unnamed.
+/// Clear names the desk wrote by itself. A name someone typed stays.
+pub fn blank_generated_panel_titles(node: &mut LayoutNode) -> bool {
+    match node {
+        LayoutNode::Split { first, second, .. } => {
+            let left = blank_generated_panel_titles(first);
+            blank_generated_panel_titles(second) || left
+        }
+        LayoutNode::Grid { cells, .. } => {
+            let mut changed = false;
+            for cell in cells.iter_mut() {
+                if let Some(child) = cell.node.as_mut() {
+                    changed = blank_generated_panel_titles(child) || changed;
+                }
+            }
+            changed
+        }
+        LayoutNode::Panel { title, .. } => {
+            if title.as_deref().is_some_and(is_generated_title) {
+                *title = None;
+                true
+            } else {
+                false
+            }
+        }
+    }
+}
+
+pub fn stored_name(title: Option<&str>) -> Option<String> {
+    let value = title?.trim();
+    if value.is_empty() || is_generated_title(value) {
+        None
+    } else {
+        Some(value.to_string())
+    }
+}
+
+pub fn is_generated_title(title: &str) -> bool {
+    matches!(
+        title.trim().to_ascii_lowercase().as_str(),
+        "panel"
+            | "new panel"
+            | "new tab"
+            | "panes"
+            | "terminal"
+            | "files"
+            | "spaces"
+            | "agents"
+            | "browser"
+            | "html"
+            | "plugin"
+            | "file"
+            | "tabs"
+            | "chat"
+            | "directories"
+    )
+}
+
+/// The type chip. A plugin uses its manifest title when that title is known.
+pub fn panel_kind(panel: &PanelConfig, plugin_label: &str) -> String {
+    match panel {
+        PanelConfig::Herdr {
+            scope: Some(HerdrScope::Pane),
+            ..
+        } => "Terminal".into(),
+        PanelConfig::Herdr { .. } => "Panes".into(),
+        PanelConfig::Markdown { raw: true, .. } => "Text".into(),
+        PanelConfig::Markdown { .. } => "Markdown".into(),
+        PanelConfig::Html { raw: true, .. } => "Text".into(),
+        PanelConfig::Html { .. } | PanelConfig::Iframe { .. } => "Browser".into(),
+        PanelConfig::File { .. } => "Text".into(),
+        PanelConfig::Explorer { .. } => "Files".into(),
+        PanelConfig::Plugin { plugin, view, .. } => {
+            let label = plugin_label.trim();
+            if !label.is_empty() {
+                label.to_string()
+            } else if let Some(view) = view
+                .as_deref()
+                .map(str::trim)
+                .filter(|view| !view.is_empty())
+            {
+                view.to_string()
+            } else {
+                plugin.clone()
+            }
+        }
+        PanelConfig::Files => "Spaces".into(),
+        PanelConfig::Agents => "Agents".into(),
+        PanelConfig::Chat { .. } => "Chat".into(),
+        PanelConfig::Blank => "Panel".into(),
+        PanelConfig::Tabs { tabs, active, .. } => tabs
+            .iter()
+            .find(|tab| tab.id == *active)
+            .or_else(|| tabs.first())
+            .map(|tab| panel_kind(&tab.panel, plugin_label))
+            .unwrap_or_else(|| "Tabs".into()),
+    }
+}
+
+/// The title bar. A saved name wins. Otherwise the file, folder, or site, then the type.
+pub fn panel_display(title: Option<&str>, panel: &PanelConfig, plugin_label: &str) -> String {
+    if let Some(name) = stored_name(title) {
+        return name;
+    }
+    if matches!(panel, PanelConfig::Tabs { .. }) {
+        return "Tabs".into();
+    }
+    let address = address_label(panel);
+    if !address.is_empty() {
+        return address;
+    }
+    panel_kind(panel, plugin_label)
+}
+
+fn address_label(panel: &PanelConfig) -> String {
+    match panel {
+        PanelConfig::Iframe { url, .. } => host_of(url),
+        PanelConfig::Html { path, .. } => path.as_deref().map(base_name).unwrap_or_default(),
+        PanelConfig::Markdown { path, .. }
+        | PanelConfig::File { path, .. }
+        | PanelConfig::Explorer { path, .. } => base_name(path),
+        PanelConfig::Plugin { path, url, .. } => {
+            let file = path.as_deref().map(base_name).unwrap_or_default();
+            if !file.is_empty() {
+                file
+            } else {
+                url.as_deref().map(host_of).unwrap_or_default()
+            }
+        }
+        _ => String::new(),
+    }
+}
+
+fn base_name(path: &str) -> String {
+    crate::paths::path_leaf(path)
+}
+
+fn host_of(url: &str) -> String {
+    let trimmed = url.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    let with_scheme = if trimmed.contains("://") {
+        trimmed.to_string()
+    } else {
+        format!("https://{trimmed}")
+    };
+    url::Url::parse(&with_scheme)
+        .ok()
+        .and_then(|parsed| parsed.host_str().map(str::to_string))
+        .unwrap_or_default()
+}
+
+fn panel_aliases(panel: &PanelInfo, plugin_label: &impl Fn(&str) -> String) -> Vec<String> {
+    let label = match &panel.panel {
+        PanelConfig::Plugin { plugin, .. } => plugin_label(plugin),
+        _ => String::new(),
+    };
+    let mut names = Vec::new();
+    if let Some(name) = stored_name(panel.title.as_deref()) {
+        names.push(name);
+    }
+    let display = panel_display(panel.title.as_deref(), &panel.panel, &label);
+    let kind = panel_kind(&panel.panel, &label);
+    if !display.is_empty() && !names.iter().any(|name| name.eq_ignore_ascii_case(&display)) {
+        names.push(display);
+    }
+    if !kind.is_empty() && !names.iter().any(|name| name.eq_ignore_ascii_case(&kind)) {
+        names.push(kind);
+    }
+    names
+}
+
 pub fn resolve_panel_id(node: &LayoutNode, key: &str) -> Result<String, &'static str> {
+    resolve_panel_id_with(node, key, |_| String::new())
+}
+
+pub fn resolve_panel_id_with(
+    node: &LayoutNode,
+    key: &str,
+    plugin_label: impl Fn(&str) -> String,
+) -> Result<String, &'static str> {
     let panels = list_panels(node);
     if panels.iter().any(|panel| panel.id == key) {
         return Ok(key.to_string());
@@ -755,10 +937,9 @@ pub fn resolve_panel_id(node: &LayoutNode, key: &str) -> Result<String, &'static
     let matches: Vec<&PanelInfo> = panels
         .iter()
         .filter(|panel| {
-            panel
-                .title
-                .as_deref()
-                .is_some_and(|title| title.eq_ignore_ascii_case(needle))
+            panel_aliases(panel, &plugin_label)
+                .iter()
+                .any(|alias| alias.eq_ignore_ascii_case(needle))
         })
         .collect();
     match matches.as_slice() {
@@ -1031,5 +1212,110 @@ mod tests {
         assert_eq!(blocks[3].0, "li");
         assert_eq!(blocks[3].2, "First item");
         assert_eq!(blocks[4].2, "Second item");
+    }
+
+    #[test]
+    fn blanking_a_generated_name_leaves_the_tab_label() {
+        let mut root = LayoutDocument::parse(
+            r#"{
+              "id": "desk",
+              "title": "Desk",
+              "root": {
+                "type": "panel",
+                "id": "group",
+                "title": "Panes",
+                "panel": {
+                  "type": "tabs",
+                  "active": "t1",
+                  "tabs": [{"id": "t1", "title": "Terminal", "panel": {"type": "herdr"}}]
+                }
+              }
+            }"#,
+        )
+        .unwrap()
+        .root;
+        assert!(blank_generated_panel_titles(&mut root));
+        match &root {
+            LayoutNode::Panel { title, panel, .. } => {
+                assert_eq!(*title, None);
+                match panel {
+                    PanelConfig::Tabs { tabs, .. } => assert_eq!(tabs[0].title, "Terminal"),
+                    other => panic!("expected tabs, got {other:?}"),
+                }
+            }
+            other => panic!("expected a panel, got {other:?}"),
+        }
+        assert!(!blank_generated_panel_titles(&mut root));
+    }
+
+    #[test]
+    fn an_unnamed_panel_is_addressed_by_what_the_window_shows() {
+        let files = LayoutNode::Panel {
+            id: "files".into(),
+            title: Some("Panes".into()),
+            panel: PanelConfig::Explorer {
+                path: r"C:\work\pkg".into(),
+                focus: None,
+                address_bar: None,
+            },
+            collapsed: false,
+        };
+        assert_eq!(stored_name(Some("Panes")), None);
+        assert_eq!(stored_name(Some("Notes")).as_deref(), Some("Notes"));
+        assert_eq!(
+            panel_display(Some("Panes"), &files_panel(&files), ""),
+            "pkg"
+        );
+        assert_eq!(resolve_panel_id(&files, "pkg").unwrap(), "files");
+        assert_eq!(resolve_panel_id(&files, "Files").unwrap(), "files");
+        assert!(resolve_panel_id(&files, "Panes").is_err());
+
+        let panes = LayoutNode::Panel {
+            id: "terminal".into(),
+            title: None,
+            panel: PanelConfig::Herdr {
+                pane_id: None,
+                source: None,
+                lines: None,
+                scope: None,
+            },
+            collapsed: false,
+        };
+        let root = LayoutNode::Split {
+            direction: Direction::Row,
+            ratio: 0.5,
+            first: Box::new(files),
+            second: Box::new(panes),
+        };
+        assert_eq!(resolve_panel_id(&root, "Panes").unwrap(), "terminal");
+        assert_eq!(resolve_panel_id(&root, "Files").unwrap(), "files");
+        let other = LayoutNode::Panel {
+            id: "other".into(),
+            title: None,
+            panel: PanelConfig::Explorer {
+                path: r"C:\work\other".into(),
+                focus: None,
+                address_bar: None,
+            },
+            collapsed: false,
+        };
+        let crowded = LayoutNode::Split {
+            direction: Direction::Row,
+            ratio: 0.5,
+            first: Box::new(root),
+            second: Box::new(other),
+        };
+        assert_eq!(
+            resolve_panel_id(&crowded, "Files").unwrap_err(),
+            "more than one panel has that name"
+        );
+        assert_eq!(resolve_panel_id(&crowded, "pkg").unwrap(), "files");
+    }
+
+    fn files_panel(node: &LayoutNode) -> PanelConfig {
+        match node {
+            LayoutNode::Panel { panel, .. } => panel.clone(),
+            _ => panic!("expected a panel"),
+        }
     }
 }

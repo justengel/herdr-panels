@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { adoptPluginAddress, applyPluginSubjects, menuFor, pluginOpenMessage, showViewer } from "../src/viewMenu";
+import { adoptPluginAddress, applyPluginSubjects, menuFor, pluginOpenMessage, showViewer, viewerName } from "../src/viewMenu";
 import type { LayoutNode, PanelConfig } from "../src/types";
 import type { MenuPlugin } from "../src/viewMenu";
 
@@ -55,7 +55,7 @@ describe("panel menu", () => {
       "plugin:docs:read",
     ]);
     expect(checked(note)).toEqual(["markdown"]);
-    expect(ids(note, "desk")).toEqual(["terminal", "spaces", "agents"]);
+    expect(ids(note, "desk")).toEqual(["space-panes", "terminals", "spaces", "agents"]);
     expect(ids(note, "plugins")).toEqual(["plugin:welcome:welcome", "plugin:docs:home"]);
 
     expect(ids(page, "view")).toEqual(["open", "files", "browser", "text", "plugin:vim:edit"]);
@@ -72,7 +72,7 @@ describe("panel menu", () => {
     expect(ids(blank, "view")).toEqual(["open", "files", "browser"]);
 
     expect(ids(terminal, "view")).toEqual(["open", "files", "browser"]);
-    expect(checked(terminal)).toEqual(["panes"]);
+    expect(checked(terminal)).toEqual(["space-panes"]);
     expect(ids({ type: "files" }, "view")).toEqual(["open", "files", "browser"]);
     expect(checked({ type: "files" })).toEqual(["spaces"]);
     expect(ids(inline, "view")).toEqual(["open", "browser", "text"]);
@@ -231,6 +231,19 @@ describe("panel menu", () => {
       control: true,
     });
     expect(showViewer(note, "plugin:welcome:welcome", plugins)).not.toHaveProperty("control");
+  });
+});
+
+describe("panel type", () => {
+  it("names every panel, and uses the plugin name for a plugin", () => {
+    expect(viewerName({ type: "herdr", paneId: null })).toBe("Panes");
+    expect(viewerName({ type: "herdr", paneId: "w1:p1", scope: "pane" })).toBe("Terminal");
+    expect(viewerName({ type: "files" })).toBe("Spaces");
+    expect(viewerName({ type: "agents" })).toBe("Agents");
+    expect(viewerName({ type: "explorer", path: "C:/work" })).toBe("Files");
+    expect(viewerName({ type: "iframe", url: "https://example.com", proxy: false })).toBe("Browser");
+    expect(viewerName({ type: "blank" })).toBe("Panel");
+    expect(viewerName({ type: "plugin", plugin: "checkin-report" }, "Check-in report")).toBe("Check-in report");
   });
 });
 

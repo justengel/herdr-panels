@@ -87,6 +87,7 @@ pub fn build_app(config_dir: PathBuf, herdr_socket: PathBuf, port: u16) -> anyho
         .route("/api/active", put(set_active))
         .route("/api/tree", get(tree))
         .route("/api/pick-file", post(pick_file))
+        .route("/api/local-open", post(local_open))
         .route("/api/save-png", post(save_png))
         .route("/api/frame", get(frame_policy))
         .route("/api/frame-pass", post(issue_frame_pass))
@@ -606,6 +607,7 @@ async fn put_desk(
     }
     let incoming = crate::desk::DeskDocument {
         revision: body.revision,
+        version: 0,
         pins: body.pins,
         spaces: body.spaces,
     };
@@ -687,6 +689,22 @@ struct PickFileBody {
     /// Current address: a directory opens there; a file opens its parent.
     #[serde(default)]
     directory: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct LocalOpenBody {
+    path: String,
+    action: String,
+}
+
+async fn local_open(Json(body): Json<LocalOpenBody>) -> Result<Json<Value>, ApiError> {
+    let path = body.path;
+    let action = body.action;
+    tokio::task::spawn_blocking(move || crate::local_open::open(&action, Path::new(&path)))
+        .await
+        .map_err(|err| ApiError::bad(err.to_string()))?
+        .map_err(ApiError::bad)?;
+    Ok(Json(json!({ "ok": true })))
 }
 
 async fn pick_file(Json(body): Json<PickFileBody>) -> Result<Json<Value>, ApiError> {
@@ -1338,7 +1356,8 @@ async fn plugin_bridge(
                         })
                         .and_then(|pane| pane.cwd.clone())
                         .ok_or_else(|| ApiError::bad("open a terminal in the project first"))?;
-                    crate::plugin_command::cwd_allowed(Path::new(&raw), &roots).map_err(ApiError::bad)?
+                    crate::plugin_command::cwd_allowed(Path::new(&raw), &roots)
+                        .map_err(ApiError::bad)?
                 }
             };
             let output = tokio::task::spawn_blocking(move || {
@@ -1347,7 +1366,9 @@ async fn plugin_bridge(
             .await
             .map_err(|err| ApiError::bad(err.to_string()))?
             .map_err(ApiError::bad)?;
-            Ok(Json(serde_json::to_value(output).unwrap_or_else(|_| json!({}))))
+            Ok(Json(
+                serde_json::to_value(output).unwrap_or_else(|_| json!({})),
+            ))
         }
         "scrollPane" => {
             let pane_id = param_str(&body.params, "paneId");
@@ -1436,7 +1457,8 @@ fn param_strings(params: &Value, key: &str) -> Vec<String> {
 
 /// 10% from 50% through 200%. 25% outside that, from 25% to 300%. The same list lives in `web/src/displayZoom.ts`.
 const DISPLAY_ZOOM_STEPS: [f64; 21] = [
-    0.25, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9, 2.0, 2.25, 2.5, 2.75, 3.0,
+    0.25, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9, 2.0, 2.25,
+    2.5, 2.75, 3.0,
 ];
 
 fn snap_display_zoom(value: f64) -> Result<f64, ApiError> {
@@ -1653,6 +1675,9 @@ struct HerdrAction {
     /// Index in the tab strip before the move. The length of the strip puts the tab at the end.
     #[serde(default)]
     insert_index: Option<u32>,
+    /// When set, a new tab uses this instead of taking focus.
+    #[serde(default)]
+    focus: Option<bool>,
 }
 
 async fn herdr_action(
@@ -1702,7 +1727,7 @@ async fn herdr_action(
             client.call("workspace.move_block", params).await
         }
         "tab.create" => {
-            let mut params = json!({ "focus": true });
+            let mut params = json!({ "focus": body.focus.unwrap_or(true) });
             if let Some(workspace_id) = body.workspace_id {
                 params["workspace_id"] = json!(workspace_id);
             }
@@ -1720,7 +1745,10 @@ async fn herdr_action(
             if !is_pane_id(&tab_id) {
                 return Err(ApiError::bad("invalid tab id"));
             }
-            let label = required(body.label.filter(|label| !label.trim().is_empty()), "a name")?;
+            let label = required(
+                body.label.filter(|label| !label.trim().is_empty()),
+                "a name",
+            )?;
             let label = label.trim();
             if label.chars().count() > 80 {
                 return Err(ApiError::bad("a tab name is at most 80 characters"));
@@ -2118,10 +2146,7 @@ mod tests {
         assert_eq!(screenshot_file_name(Some("")), "herdr-panels.png");
         assert_eq!(screenshot_file_name(Some("..")), "herdr-panels.png");
         assert_eq!(screenshot_file_name(Some(".hidden")), "herdr-panels.png");
-        assert_eq!(
-            screenshot_file_name(Some("../../etc/passwd")),
-            "passwd.png"
-        );
+        assert_eq!(screenshot_file_name(Some("../../etc/passwd")), "passwd.png");
         assert_eq!(screenshot_file_name(Some("note.md")), "note.png");
         assert_eq!(
             screenshot_file_name(Some("herdr-panels-20261028-225103.png")),

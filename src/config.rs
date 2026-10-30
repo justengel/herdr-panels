@@ -36,6 +36,7 @@ pub fn prepare_config_dir(flag: Option<PathBuf>) -> anyhow::Result<PathBuf> {
         let settings = Settings::default();
         crate::store::save_settings(&dir, &settings)?;
     }
+    crate::migrate::migrate_config(&dir)?;
     Ok(dir)
 }
 

@@ -670,20 +670,25 @@ body.panel-dragging, body.panel-dragging * { cursor: grabbing !important; user-s
   text-transform: lowercase;
 }
 
-.viewer-pill {
+.badge.badge-terminal {
+  text-transform: none;
+}
+
+.panel-type {
   padding: 1px 6px;
   border: 1px solid var(--line);
   border-radius: 4px;
   color: var(--muted);
   font-size: 11px;
   font-weight: 500;
+  white-space: nowrap;
 }
 
 .badge-idle { color: var(--idle); }
 .badge-working { color: var(--working); }
 .badge-blocked { color: var(--blocked); }
 .badge-done { color: var(--done); }
-.badge-shell, .badge-unknown, .badge-unbound { color: var(--shell); }
+.badge-terminal, .badge-unknown, .badge-unbound { color: var(--shell); }
 
 .panel-body {
   flex: 1;
@@ -923,9 +928,30 @@ body.panel-dragging, body.panel-dragging * { cursor: grabbing !important; user-s
 }
 
 .panel-menu button[aria-checked="true"] { color: var(--accent); }
+.panel-menu button.menu-radio,
+.panel-menu button.menu-flyout-trigger {
+  align-items: flex-start;
+}
+.menu-copy {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  min-width: 0;
+}
+.menu-hint {
+  display: block;
+  max-width: 28rem;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 1.35;
+  white-space: normal;
+}
 .panel-menu button.menu-radio {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 8px;
 }
 .panel.is-plain { position: relative; }

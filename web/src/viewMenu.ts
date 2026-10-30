@@ -1,7 +1,7 @@
 import type { LayoutNode, PanelConfig } from "./types";
 import { carryAddressBar } from "./addressBar";
 import { explorerRootFor, resolveWorkspacePath } from "./explorerRoot";
-import { parentPath, plainPath } from "./paths";
+import { baseName, isFilesystemAddress, parentPath, plainPath } from "./paths";
 
 export type ViewOpen = "file" | "markdown" | "html" | "directory" | "url";
 
@@ -25,7 +25,19 @@ export interface MenuEntry {
   section: "view" | "desk" | "plugins" | "panes" | "views";
   checked: boolean;
   submenu?: boolean;
+  /** Shown under the label and as the tooltip. */
+  hint?: string;
 }
+
+/** The space mirror: every Herdr tab, and the splits inside the selected tab. */
+export const PANES_HINT = "Herdr panes that contain the terminals.";
+
+/** One terminal, bound to a single Herdr tab. */
+export const TERMINAL_HINT = "Show a single terminal from the Herdr panes.";
+
+export const NEW_TERMINAL_HINT = "Open a new tab in Panes and display that terminal here.";
+
+export const TERMINALS_HINT = "Show a single terminal from the Herdr panes.";
 
 export interface MenuPane {
   paneId: string;
@@ -75,7 +87,7 @@ function activePanel(panel: PanelConfig): PanelConfig {
 }
 
 function extension(path: string): string {
-  const base = path.split(/[/\\]/).pop() ?? path;
+  const base = baseName(path);
   const dot = base.lastIndexOf(".");
   if (dot <= 0) return "";
   return base.slice(dot + 1).toLowerCase();
@@ -99,8 +111,11 @@ function subjectOf(panel: PanelConfig): Subject {
       if (content.path) return { kind: "file", path: content.path, file: "html" };
       if (content.inline) return { kind: "page", inline: content.inline };
       return { kind: "none" };
-    case "iframe":
-      return content.url.trim() ? { kind: "url", url: content.url } : { kind: "none" };
+    case "iframe": {
+      const url = content.url.trim();
+      if (isFilesystemAddress(url)) return { kind: "file", path: url, file: fileKind(url) };
+      return url ? { kind: "url", url: content.url } : { kind: "none" };
+    }
     case "explorer":
       if (content.focus) return { kind: "file", path: content.focus, file: fileKind(content.focus) };
       return { kind: "directory", path: content.path };
@@ -138,7 +153,7 @@ function viewMatches(view: PluginViewInfo, subject: Subject): boolean {
   return subject.file === "html" && view.opens.includes("html");
 }
 
-/** Label for the viewer pill. Empty for desk panels that are already named by their view. */
+/** Panel type, shown on the right of the title bar. A plugin uses its name. */
 export function viewerName(panel: PanelConfig, pluginTitle = ""): string {
   const content = activePanel(panel);
   switch (content.type) {
@@ -154,8 +169,18 @@ export function viewerName(panel: PanelConfig, pluginTitle = ""): string {
       return "Files";
     case "plugin":
       return pluginTitle || content.view || content.plugin;
+    case "herdr":
+      return content.scope === "pane" ? "Terminal" : "Panes";
+    case "files":
+      return "Spaces";
+    case "agents":
+      return "Agents";
+    case "chat":
+      return "Chat";
+    case "tabs":
+      return "Tabs";
     default:
-      return "";
+      return "Panel";
   }
 }
 
@@ -189,20 +214,7 @@ function mark(entries: MenuEntry[], active: string): MenuEntry[] {
   return entries.map((entry) => ({ ...entry, checked: entry.id === active }));
 }
 
-function deskEntries(panel: PanelConfig, subject: Subject, ctx: MenuContext): { desk: MenuEntry[]; panes: MenuEntry[] } {
-  const content = activePanel(panel);
-  const terminalLabel =
-    subject.kind === "file" || subject.kind === "directory" ? "Terminal here" : "Terminal";
-  if (content.type !== "herdr") {
-    return {
-      desk: [
-        { id: "terminal", label: terminalLabel, section: "desk", checked: false },
-        { id: "spaces", label: "Spaces", section: "desk", checked: false },
-        { id: "agents", label: "Agents", section: "desk", checked: false },
-      ],
-      panes: [],
-    };
-  }
+function deskEntries(ctx: MenuContext): { desk: MenuEntry[]; panes: MenuEntry[] } {
   const spaceId = ctx.workspaceId ?? null;
   const panes = (ctx.panes ?? []).filter(
     (pane) => !spaceId || !pane.workspaceId || pane.workspaceId === spaceId,
@@ -210,13 +222,34 @@ function deskEntries(panel: PanelConfig, subject: Subject, ctx: MenuContext): { 
   const paneRows: MenuEntry[] = panes.map((pane) => ({
     id: `pane:${pane.paneId}`,
     label: pane.label ? `${pane.paneId} · ${pane.label}` : pane.paneId,
+    hint: TERMINALS_HINT,
     section: "panes" as const,
     checked: false,
   }));
-  paneRows.push({ id: "pane:new", label: "New pane…", section: "panes", checked: false });
+  paneRows.push({
+    id: "pane:new",
+    label: "New terminal…",
+    hint: NEW_TERMINAL_HINT,
+    section: "panes",
+    checked: false,
+  });
   return {
     desk: [
-      { id: "panes", label: "Panes", section: "desk", checked: false, submenu: true },
+      {
+        id: "space-panes",
+        label: "Panes",
+        hint: PANES_HINT,
+        section: "desk",
+        checked: false,
+      },
+      {
+        id: "terminals",
+        label: "Terminals",
+        hint: TERMINALS_HINT,
+        section: "desk",
+        checked: false,
+        submenu: true,
+      },
       { id: "spaces", label: "Spaces", section: "desk", checked: false },
       { id: "agents", label: "Agents", section: "desk", checked: false },
     ],
@@ -288,7 +321,8 @@ export function menuFor(panel: PanelConfig, plugins: MenuPlugin[], ctx: MenuCont
   }
 
   const content = activePanel(panel);
-  const { desk, panes } = deskEntries(panel, subject, ctx);
+  const { desk, panes } = deskEntries(ctx);
+  const soloTerminal = content.type === "herdr" && content.scope === "pane";
   const spacePanes = (ctx.panes ?? []).filter(
     (pane) => !ctx.workspaceId || !pane.workspaceId || pane.workspaceId === ctx.workspaceId,
   );
@@ -296,12 +330,13 @@ export function menuFor(panel: PanelConfig, plugins: MenuPlugin[], ctx: MenuCont
     content.type === "herdr" && content.paneId && spacePanes.length > 0
       ? `pane:${content.paneId}`
       : active;
+  const deskActive = soloTerminal ? "terminals" : content.type === "herdr" ? "space-panes" : paneActive;
 
   return [
     ...mark(view, active),
     ...mark(moreViews, active),
-    ...mark(desk, content.type === "herdr" ? "panes" : paneActive),
-    ...mark(panes, paneActive),
+    ...mark(desk, deskActive),
+    ...mark(panes, soloTerminal ? paneActive : ""),
     ...mark(panels, active),
   ];
 }
@@ -381,10 +416,11 @@ function applyViewer(
     }
     return { type: "explorer", path: plainPath(ctx.workspaceRoot || "") };
   }
+  if (choice === "space-panes") return { type: "herdr", paneId: null };
   if (choice === "terminal") return panel.type === "herdr" ? panel : { type: "herdr", paneId: null };
   if (choice.startsWith("pane:") && choice !== "pane:new") {
     const paneId = choice.slice("pane:".length);
-    return { type: "herdr", paneId };
+    return { type: "herdr", paneId, scope: "pane" };
   }
   if (choice === "spaces") return panel.type === "files" ? panel : { type: "files" };
   if (choice === "agents") return panel.type === "agents" ? panel : { type: "agents" };

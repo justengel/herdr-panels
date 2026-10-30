@@ -17,6 +17,7 @@ import { frameOwnsKeys, framePrefix, readFrameKey, type FrameKey } from "./frame
 import { chordMatches, eventKey, expandBinding } from "./herdrKeys";
 import { HerdrSettings } from "./components/HerdrSettings";
 import { applyTheme } from "./themes";
+import { addedPane } from "./openTerminal";
 import type { RuntimeSnapshot } from "./types";
 
 interface HostValue {
@@ -36,6 +37,8 @@ interface HostValue {
   createSpace: (label?: string) => Promise<void>;
   /** Create a Herdr tab in this space, the same action as the TUI new-tab key. */
   newTab: (workspaceId?: string) => Promise<void>;
+  /** Open a shell in a new tab without taking the space mirror's place. Returns the new pane id. */
+  openShell: (workspaceId?: string) => Promise<string | null>;
   closeTab: (tabId: string) => Promise<void>;
   renameTab: (tabId: string, label: string) => Promise<void>;
   /** Move a Herdr tab. `insertIndex` is the index in the strip before the move, or the strip length for the end. */
@@ -405,6 +408,15 @@ export function HostProvider({
     }
   }
 
+  async function openShell(workspaceId?: string): Promise<string | null> {
+    const before = (runtimeRef.current?.panes ?? []).map((pane) => pane.paneId);
+    const space = workspaceId || runtimeRef.current?.focusedWorkspaceId || undefined;
+    await api.herdrAction({ action: "tab.create", workspaceId: space, focus: false });
+    const next = await api.runtime();
+    runtimeCb.current(next);
+    return addedPane(before, next.panes, space ?? null);
+  }
+
   async function newTab(workspaceId?: string) {
     const space = workspaceId || runtimeRef.current?.focusedWorkspaceId || undefined;
     try {
@@ -527,6 +539,7 @@ export function HostProvider({
     prefixArmed: () => prefixRef.current,
     createSpace,
     newTab,
+    openShell,
     closeTab,
     renameTab,
     moveTab,

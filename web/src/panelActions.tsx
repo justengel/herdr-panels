@@ -10,6 +10,8 @@ export interface PanelActions {
   use: (id: string, type: PanelConfig["type"], pluginId?: string) => void;
   edge: (id: string, edge: TabEdge) => void;
   place: (sourceId: string, targetId: string, place: PanelPlace) => void;
+  /** Split a new panel beside this one. */
+  spawn: (id: string, direction: "row" | "column", panel: PanelConfig, title: string) => void;
   rename: (id: string, title: string) => void;
   /** Fill the screen with this panel, or show the whole desk when it already does. */
   fill: (id: string) => void;

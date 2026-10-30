@@ -100,6 +100,9 @@ pub enum PanelConfig {
         source: Option<HerdrSource>,
         #[serde(default)]
         lines: Option<u32>,
+        /// `pane` shows that one shell. Absent means this panel mirrors the space.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        scope: Option<HerdrScope>,
     },
     Markdown {
         path: String,
@@ -210,6 +213,13 @@ pub enum PanelConfig {
 pub enum HerdrSource {
     Visible,
     Recent,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum HerdrScope {
+    Space,
+    Pane,
 }
 
 impl HerdrSource {
