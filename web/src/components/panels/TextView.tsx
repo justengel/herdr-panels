@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { wsUrl } from "../../api";
+import { useTabSession, wsUrl } from "../../api";
 
 export function TextView({ path, text }: { path?: string; text?: string }) {
   if (text !== undefined) return <StaticText text={text} />;
@@ -15,6 +15,7 @@ function WatchedText({ path }: { path: string }) {
   const [text, setText] = useState("");
   const [missing, setMissing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const sessionName = useTabSession();
 
   useEffect(() => {
     let stopped = false;
@@ -47,7 +48,7 @@ function WatchedText({ path }: { path: string }) {
       window.clearTimeout(timer);
       socket?.close();
     };
-  }, [path]);
+  }, [path, sessionName]);
 
   if (error) return <div className="empty">{error}</div>;
   if (missing) return <div className="empty">File not found: {path}</div>;

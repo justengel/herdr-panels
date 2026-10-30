@@ -220,13 +220,15 @@ The next change that has to rewrite those files adds a step in `src/migrate.rs` 
 
 ## Sessions
 
-A session is one running Herdr. `default` is the Herdr client already open on this machine. The page shows one session at a time, so changing it changes the session for every open tab.
+A session is one running Herdr. `default` is the Herdr client already open on this machine. Each browser tab keeps its own session. A new tab starts on `default`. Refreshing a tab keeps that tab's session. Switching, creating, renaming, or closing a session changes only that tab. Closing a tab leaves the other session connected.
+
+The page sends the tab's session on every request in the `X-Herdr-Session` header. WebSocket URLs send it as the `session` query parameter. A request without that name uses the session this server process was started with.
 
 - `GET /api/sessions` lists running sessions.
-- `PUT /api/sessions` `{"name"}` attaches to a session that is already running.
-- `POST /api/sessions` `{"name"}` starts a named session and attaches to it.
+- `PUT /api/sessions` `{"name"}` opens a session that is already running for this tab.
+- `POST /api/sessions` `{"name"}` starts a named session and opens it for this tab.
 - `POST /api/sessions/rename` `{"name","to"}` renames a named session and restarts it. `default` cannot be renamed.
-- `POST /api/sessions/close` `{"name"}` stops a named session. `default` cannot be closed from the page.
+- `POST /api/sessions/close` `{"name"}` stops a named session and returns this tab to `default`. `default` cannot be closed from the page.
 
 ## Contents
 

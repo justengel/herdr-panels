@@ -8,33 +8,32 @@ use tokio::sync::mpsc;
 use crate::herdr::HerdrClient;
 use crate::keys::{is_terminal_key, map_key, ClientInput, KeyAction};
 use crate::layout::{is_pane_id, HerdrSource};
-use crate::server::AppState;
-use crate::session::PaneView;
+use crate::session::{PaneView, SessionLink};
 
 pub async fn drive(
-    state: AppState,
+    link: SessionLink,
     pane_id: String,
     _source: String,
     _lines: Option<u32>,
     socket: WebSocket,
 ) {
-    let Some(viewer) = state.controls.retain(&pane_id).await else {
+    let Some(viewer) = link.controls.retain(&pane_id).await else {
         return;
     };
     let (mut sink, mut stream) = socket.split();
     let (tx, mut rx) = mpsc::channel::<String>(32);
-    let mut frames = state.controls.subscribe(&pane_id).await;
-    let mut roles = state.controls.subscribe_roles(&pane_id).await;
-    let backlog = state.controls.backlog(&pane_id).await;
+    let mut frames = link.controls.subscribe(&pane_id).await;
+    let mut roles = link.controls.subscribe_roles(&pane_id).await;
+    let backlog = link.controls.backlog(&pane_id).await;
     let mut seen_generation = 0u64;
     let mut seen_seq = 0u64;
     let mut frames_closed = false;
     let mut paused = false;
     let poller = {
-        let state = state.clone();
+        let link = link.clone();
         let pane_id = pane_id.clone();
         tokio::spawn(async move {
-            poll_loop(state, pane_id, tx).await;
+            poll_loop(link, pane_id, tx).await;
         })
     };
     if send_frames(&mut sink, &backlog, &mut seen_generation, &mut seen_seq)
@@ -42,7 +41,7 @@ pub async fn drive(
         .is_err()
     {
         poller.abort();
-        state.controls.release(&pane_id, viewer).await;
+        link.controls.release(&pane_id, viewer).await;
         return;
     }
 
@@ -67,7 +66,7 @@ pub async fn drive(
                     }
                     Ok(_) => {}
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
-                        let own = state.controls.allows_resize(&pane_id, viewer).await;
+                        let own = link.controls.allows_resize(&pane_id, viewer).await;
                         let payload = role_message(own);
                         if sink.send(Message::Text(payload.into())).await.is_err() {
                             break;
@@ -103,7 +102,7 @@ pub async fn drive(
             incoming = stream.next() => {
                 match incoming {
                     Some(Ok(Message::Text(text))) => {
-                        match handle_client(&state, &pane_id, viewer, text.as_ref()).await {
+                        match handle_client(&link, &pane_id, viewer, text.as_ref()).await {
                             Ok(Outcome::None) => {}
                             Ok(Outcome::Text(notice)) => {
                                 if sink.send(Message::Text(notice.into())).await.is_err() {
@@ -113,7 +112,7 @@ pub async fn drive(
                             Ok(Outcome::Paused(idle)) => {
                                 paused = idle;
                                 if !idle {
-                                    let caught_up = state.controls.backlog(&pane_id).await;
+                                    let caught_up = link.controls.backlog(&pane_id).await;
                                     if send_frames(
                                         &mut sink,
                                         &caught_up,
@@ -151,7 +150,7 @@ pub async fn drive(
         }
     }
     poller.abort();
-    state.controls.release(&pane_id, viewer).await;
+    link.controls.release(&pane_id, viewer).await;
 }
 
 async fn send_frames(
@@ -163,7 +162,11 @@ async fn send_frames(
     for frame in frames {
         *seen_generation = frame.generation;
         *seen_seq = frame.seq;
-        if sink.send(Message::Text(frame.body.clone().into())).await.is_err() {
+        if sink
+            .send(Message::Text(frame.body.clone().into()))
+            .await
+            .is_err()
+        {
             return Err(());
         }
     }
@@ -186,7 +189,7 @@ enum Outcome {
 }
 
 async fn handle_client(
-    state: &AppState,
+    link: &SessionLink,
     pane_id: &str,
     viewer: u64,
     text: &str,
@@ -198,23 +201,22 @@ async fn handle_client(
             .get("active")
             .and_then(Value::as_bool)
             .unwrap_or(false);
-        state.controls.set_presence(pane_id, viewer, active).await;
+        link.controls.set_presence(pane_id, viewer, active).await;
         return Ok(Outcome::Paused(!active));
     }
     if kind == Some("claim") {
-        state.controls.claim(pane_id, viewer).await;
+        link.controls.claim(pane_id, viewer).await;
         return Ok(Outcome::None);
     }
     if kind == Some("resize") {
-        if !state.controls.allows_resize(pane_id, viewer).await {
+        if !link.controls.allows_resize(pane_id, viewer).await {
             return Ok(Outcome::Text(role_message(false)));
         }
         let cols =
             dimension(&value, "cols").ok_or_else(|| Fault::Size("cols must be a number".into()))?;
         let rows =
             dimension(&value, "rows").ok_or_else(|| Fault::Size("rows must be a number".into()))?;
-        state
-            .controls
+        link.controls
             .fit(pane_id, cols, rows)
             .await
             .map_err(Fault::Size)?;
@@ -223,7 +225,7 @@ async fn handle_client(
         ));
     }
     if kind == Some("scroll") {
-        state.controls.claim(pane_id, viewer).await;
+        link.controls.claim(pane_id, viewer).await;
         let direction = value.get("direction").and_then(Value::as_str).unwrap_or("");
         let source = value
             .get("source")
@@ -231,8 +233,7 @@ async fn handle_client(
             .unwrap_or("wheel");
         let lines = dimension(&value, "lines")
             .ok_or_else(|| Fault::Size("lines must be a number".into()))?;
-        state
-            .controls
+        link.controls
             .scroll(pane_id, direction, lines, source)
             .await
             .map_err(Fault::Size)?;
@@ -241,7 +242,7 @@ async fn handle_client(
     if kind == Some("mouse") {
         let action = value.get("action").and_then(Value::as_str).unwrap_or("");
         if action != "move" {
-            state.controls.claim(pane_id, viewer).await;
+            link.controls.claim(pane_id, viewer).await;
         }
         let button = value
             .get("button")
@@ -256,17 +257,16 @@ async fn handle_client(
             .and_then(Value::as_u64)
             .unwrap_or(0)
             .min(255) as u8;
-        state
-            .controls
+        link.controls
             .mouse(pane_id, action, button, column, row, modifiers)
             .await
             .map_err(Fault::Size)?;
         return Ok(Outcome::None);
     }
     if matches!(kind, Some("key" | "text" | "keys")) {
-        state.controls.claim(pane_id, viewer).await;
+        link.controls.claim(pane_id, viewer).await;
     }
-    let client = state.runtime.client().clone();
+    let client = link.runtime.client().clone();
     apply_text(&client, pane_id, text)
         .await
         .map_err(Fault::Input)?;
@@ -303,14 +303,14 @@ fn dimension(value: &Value, key: &str) -> Option<u16> {
     u16::try_from(raw).ok()
 }
 
-async fn poll_loop(state: AppState, pane_id: String, tx: mpsc::Sender<String>) {
+async fn poll_loop(link: SessionLink, pane_id: String, tx: mpsc::Sender<String>) {
     let mut ticker = tokio::time::interval(Duration::from_millis(150));
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut last_meta = String::new();
 
     loop {
         ticker.tick().await;
-        let runtime = state.runtime.snapshot().await;
+        let runtime = link.runtime.snapshot().await;
         let pane = runtime
             .panes
             .iter()

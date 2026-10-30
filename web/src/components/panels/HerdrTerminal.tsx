@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from "react";
 import { Terminal } from "@xterm/xterm";
-import { api, wsUrl } from "../../api";
+import { api, useTabSession, wsUrl } from "../../api";
 import { panelZoom, subscribeZoom, terminalFontSize } from "../../displayZoom";
 import { useHost } from "../../host";
 import {
@@ -141,6 +141,7 @@ export function HerdrTerminal({ paneId, source, lines, onGone }: Props) {
   const goneHandler = useRef(onGone);
   goneHandler.current = onGone;
   const [status, setStatus] = useState("Connecting");
+  const sessionName = useTabSession();
 
   useEffect(() => {
     placeRef.current = { fromEnd: 0, extent: 0 };
@@ -580,7 +581,7 @@ export function HerdrTerminal({ paneId, source, lines, onGone }: Props) {
       term.dispose();
       termRef.current = null;
     };
-  }, [paneId, source, lines]);
+  }, [paneId, source, lines, sessionName]);
 
   useEffect(() => {
     const track = trackRef.current;

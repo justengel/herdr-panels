@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { marked } from "marked";
 import DOMPurify from "dompurify";
-import { wsUrl } from "../../api";
+import { useTabSession, wsUrl } from "../../api";
 import { noteLinkAction, openExternalUrl } from "../../externalLink";
 
 interface Props {
@@ -14,6 +14,7 @@ export function MarkdownView({ path, design = false, onPick }: Props) {
   const [text, setText] = useState("");
   const [missing, setMissing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const sessionName = useTabSession();
 
   useEffect(() => {
     let stopped = false;
@@ -46,7 +47,7 @@ export function MarkdownView({ path, design = false, onPick }: Props) {
       window.clearTimeout(timer);
       socket?.close();
     };
-  }, [path]);
+  }, [path, sessionName]);
 
   const html = useMemo(() => {
     const parsed = marked.parse(text, { async: false, gfm: true });

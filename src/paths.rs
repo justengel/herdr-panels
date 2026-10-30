@@ -85,22 +85,26 @@ pub fn list_herdr_sessions() -> anyhow::Result<Vec<(String, PathBuf)>> {
     Ok(sessions)
 }
 
-pub fn session_socket(name: &str) -> anyhow::Result<PathBuf> {
+/// Socket path for a session name. The file does not have to exist.
+pub fn session_socket_path(name: &str) -> anyhow::Result<PathBuf> {
     if name == "default" {
-        let socket = herdr_config_dir()?.join("herdr.sock");
-        if !socket.is_file() {
-            bail!("the default Herdr session is not running");
-        }
-        return Ok(socket);
+        return Ok(herdr_config_dir()?.join("herdr.sock"));
     }
     if !valid_session_name(name) {
         bail!("invalid Herdr session name");
     }
-    let socket = herdr_config_dir()?
+    Ok(herdr_config_dir()?
         .join("sessions")
         .join(name)
-        .join("herdr.sock");
+        .join("herdr.sock"))
+}
+
+pub fn session_socket(name: &str) -> anyhow::Result<PathBuf> {
+    let socket = session_socket_path(name)?;
     if !socket.is_file() {
+        if name == "default" {
+            bail!("the default Herdr session is not running");
+        }
         bail!("Herdr session {name} is not running");
     }
     Ok(socket)

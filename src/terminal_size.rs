@@ -191,6 +191,10 @@ impl PaneControls {
             .is_some_and(|slot| slot.lease.allows_resize(viewer))
     }
 
+    pub async fn holds(&self, pane_id: &str) -> bool {
+        self.inner.lock().await.contains_key(pane_id)
+    }
+
     async fn touch(&self, pane_id: &str, change: impl FnOnce(&mut PaneLease) -> Vec<LeaseNotice>) {
         let mut map = self.inner.lock().await;
         let Some(slot) = map.get_mut(pane_id) else {
@@ -289,20 +293,18 @@ impl PaneControls {
             }
         };
         match step {
-            Step::Current(tx) => {
-                match tx.send(resize_command(cols, rows)).await {
-                    Ok(()) => Ok(()),
-                    Err(_) => {
-                        let mut map = self.inner.lock().await;
-                        if let Some(slot) = map.get_mut(pane_id) {
-                            slot.io = None;
-                            slot.spawning = true;
-                        }
-                        drop(map);
-                        self.spawn_into(pane_id, cols, rows).await
+            Step::Current(tx) => match tx.send(resize_command(cols, rows)).await {
+                Ok(()) => Ok(()),
+                Err(_) => {
+                    let mut map = self.inner.lock().await;
+                    if let Some(slot) = map.get_mut(pane_id) {
+                        slot.io = None;
+                        slot.spawning = true;
                     }
+                    drop(map);
+                    self.spawn_into(pane_id, cols, rows).await
                 }
-            }
+            },
             Step::Spawn => self.spawn_into(pane_id, cols, rows).await,
             Step::Wait => Ok(()),
         }

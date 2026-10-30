@@ -18,7 +18,8 @@ use crate::keys::ClientInput;
 use crate::layout::{is_pane_id, Direction, HerdrScope, LayoutDocument, LayoutNode, PanelConfig};
 use crate::layout_ops::{self, list_panels};
 use crate::paths::{is_loopback_url, resolve_content};
-use crate::server::AppState;
+use crate::server::{AppState, HerdrSession};
+use crate::session::SessionLink;
 use crate::store;
 use crate::terminal::dispatch;
 
@@ -64,6 +65,7 @@ impl AgentHub {
 
     pub async fn inspect(
         &self,
+        session: &str,
         panel_id: &str,
         selector: Option<&str>,
         text: Option<&str>,
@@ -79,6 +81,7 @@ impl AgentHub {
         });
         self.publish(&json!({
             "type": "inspect",
+            "session": session,
             "requestId": request_id,
             "panelId": panel_id,
             "selector": selector,
@@ -156,9 +159,10 @@ struct SpaceQuery {
 
 async fn workspace(
     State(state): State<AppState>,
+    HerdrSession(link): HerdrSession,
     Query(query): Query<SpaceQuery>,
 ) -> Result<Json<Value>, AgentError> {
-    let (_, doc) = begin(&state, named_space(query.space.as_deref())).await?;
+    let (_, doc) = begin(&state, &link, named_space(query.space.as_deref())).await?;
     Ok(Json(workspace_json(&state, &doc)))
 }
 
@@ -185,6 +189,7 @@ struct SplitBody {
 
 async fn split(
     State(state): State<AppState>,
+    HerdrSession(link): HerdrSession,
     Json(body): Json<SplitBody>,
 ) -> Result<Json<Value>, AgentError> {
     let direction = match body.direction.as_str() {
@@ -192,7 +197,7 @@ async fn split(
         "down" => Direction::Column,
         _ => return Err(AgentError::bad("direction must be right or down")),
     };
-    let (source, mut doc) = begin(&state, named_space(body.space.as_deref())).await?;
+    let (source, mut doc) = begin(&state, &link, named_space(body.space.as_deref())).await?;
     let source_id = resolve_key(&state, &doc.root, &body.panel_id)?;
     let split_from = list_panels(&doc.root)
         .into_iter()
@@ -235,7 +240,7 @@ async fn split(
     if body.herdr {
         let pane_id = herdr_pane(&split_from.panel)
             .ok_or_else(|| AgentError::bad("herdr split needs a terminal panel with a pane"))?;
-        let client = state.runtime.client().clone();
+        let client = link.runtime.client().clone();
         let new_pane = client
             .split_pane(pane_id, herdr_direction(direction))
             .await
@@ -253,7 +258,7 @@ async fn split(
         )
         .map_err(AgentError::bad)?;
     }
-    let doc = commit(&state, &source, doc).await?;
+    let doc = commit(&state, &link, &source, doc).await?;
     Ok(Json(json!({
         "panelId": created_id,
         "workspace": workspace_json(&state, &doc),
@@ -270,22 +275,29 @@ struct PanelBody {
 
 async fn close(
     State(state): State<AppState>,
+    HerdrSession(link): HerdrSession,
     Json(body): Json<PanelBody>,
 ) -> Result<Json<Value>, AgentError> {
-    close_desk(&state, &body.panel_id, named_space(body.space.as_deref()))
-        .await
-        .map(Json)
+    close_desk(
+        &state,
+        &link,
+        &body.panel_id,
+        named_space(body.space.as_deref()),
+    )
+    .await
+    .map(Json)
 }
 
 pub(crate) async fn close_desk(
     state: &AppState,
+    link: &SessionLink,
     panel_id: &str,
     space: Option<&str>,
 ) -> Result<Value, AgentError> {
-    let (source, mut doc) = begin(state, space).await?;
+    let (source, mut doc) = begin(state, link, space).await?;
     let panel_id = resolve_key(state, &doc.root, panel_id)?;
     doc.root = layout_ops::close_panel(doc.root, &panel_id).map_err(AgentError::bad)?;
-    let doc = commit(state, &source, doc).await?;
+    let doc = commit(state, link, &source, doc).await?;
     Ok(workspace_json(state, &doc))
 }
 
@@ -300,10 +312,12 @@ struct ResizeBody {
 
 async fn resize(
     State(state): State<AppState>,
+    HerdrSession(link): HerdrSession,
     Json(body): Json<ResizeBody>,
 ) -> Result<Json<Value>, AgentError> {
     resize_desk(
         &state,
+        &link,
         &body.panel_id,
         body.ratio,
         named_space(body.space.as_deref()),
@@ -314,14 +328,15 @@ async fn resize(
 
 pub(crate) async fn resize_desk(
     state: &AppState,
+    link: &SessionLink,
     panel_id: &str,
     ratio: f64,
     space: Option<&str>,
 ) -> Result<Value, AgentError> {
-    let (source, mut doc) = begin(state, space).await?;
+    let (source, mut doc) = begin(state, link, space).await?;
     let panel_id = resolve_key(state, &doc.root, panel_id)?;
     doc.root = layout_ops::resize_panel(doc.root, &panel_id, ratio).map_err(AgentError::bad)?;
-    let doc = commit(state, &source, doc).await?;
+    let doc = commit(state, link, &source, doc).await?;
     Ok(workspace_json(state, &doc))
 }
 
@@ -367,10 +382,12 @@ fn open_direction() -> String {
 
 async fn open_target(
     State(state): State<AppState>,
+    HerdrSession(link): HerdrSession,
     Json(body): Json<OpenBody>,
 ) -> Result<Json<Value>, AgentError> {
     open_desk(
         &state,
+        &link,
         DeskOpen {
             target: body.target,
             panel_id: body.panel_id,
@@ -397,19 +414,23 @@ pub(crate) struct DeskOpen {
     pub control: Option<bool>,
 }
 
-pub(crate) async fn open_desk(state: &AppState, body: DeskOpen) -> Result<Value, AgentError> {
+pub(crate) async fn open_desk(
+    state: &AppState,
+    link: &SessionLink,
+    body: DeskOpen,
+) -> Result<Value, AgentError> {
     let direction = match body.direction.as_str() {
         "right" => Direction::Row,
         "down" => Direction::Column,
         _ => return Err(AgentError::bad("direction must be right or down")),
     };
-    let roots = crate::server::allowed_roots(state).await;
+    let roots = crate::server::allowed_roots(state, link).await;
     let located = locate_target(&body.target, &roots);
     let kind = crate::open_target::classify_target(&located, |path| file_kind(path))
         .map_err(AgentError::bad)?;
     let panel = finish_plugin_control(state, kind_to_panel(&kind), body.control, true)?;
     let title = body.title.filter(|title| !title.trim().is_empty());
-    let (source, mut doc) = begin(state, named_space(body.space.as_deref())).await?;
+    let (source, mut doc) = begin(state, link, named_space(body.space.as_deref())).await?;
     let (root, panel_id, created) = if let Some(panel_id) = body.panel_id.as_deref() {
         let panel_id = resolve_key(state, &doc.root, panel_id)?;
         let root =
@@ -431,7 +452,7 @@ pub(crate) async fn open_desk(state: &AppState, body: DeskOpen) -> Result<Value,
         (root, panel_id, created)
     };
     doc.root = root;
-    let doc = commit(state, &source, doc).await?;
+    let doc = commit(state, link, &source, doc).await?;
     Ok(json!({
         "panelId": panel_id,
         "created": created,
@@ -525,9 +546,10 @@ struct ResolveBody {
 
 async fn resolve_target(
     State(state): State<AppState>,
+    HerdrSession(link): HerdrSession,
     Json(body): Json<ResolveBody>,
 ) -> Result<Json<Value>, AgentError> {
-    let roots = crate::server::allowed_roots(&state).await;
+    let roots = crate::server::allowed_roots(&state, &link).await;
     let located = locate_target(&body.target, &roots);
     let kind = crate::open_target::address_target(&located, |path| file_kind(path))
         .map_err(AgentError::bad)?;
@@ -553,6 +575,7 @@ fn default_anchor(root: &LayoutNode) -> Option<String> {
 
 async fn update_panel(
     State(state): State<AppState>,
+    HerdrSession(link): HerdrSession,
     Json(body): Json<UpdateBody>,
 ) -> Result<Json<Value>, AgentError> {
     let title = if body.clear_title {
@@ -562,6 +585,7 @@ async fn update_panel(
     };
     update_desk(
         &state,
+        &link,
         &body.panel_id,
         title,
         body.panel,
@@ -574,13 +598,14 @@ async fn update_panel(
 
 pub(crate) async fn update_desk(
     state: &AppState,
+    link: &SessionLink,
     panel_id: &str,
     title: Option<Option<String>>,
     panel: Option<PanelConfig>,
     space: Option<&str>,
     control: Option<bool>,
 ) -> Result<Value, AgentError> {
-    let (source, mut doc) = begin(state, space).await?;
+    let (source, mut doc) = begin(state, link, space).await?;
     let panel_id = resolve_key(state, &doc.root, panel_id)?;
     let panel = match (panel, control) {
         (Some(panel), requested) => Some(finish_plugin_control(state, panel, requested, true)?),
@@ -600,7 +625,7 @@ pub(crate) async fn update_desk(
     };
     doc.root =
         layout_ops::update_panel(doc.root, &panel_id, title, panel).map_err(AgentError::bad)?;
-    let doc = commit(state, &source, doc).await?;
+    let doc = commit(state, link, &source, doc).await?;
     Ok(workspace_json(state, &doc))
 }
 
@@ -621,10 +646,12 @@ fn swap_place() -> String {
 
 async fn move_panel(
     State(state): State<AppState>,
+    HerdrSession(link): HerdrSession,
     Json(body): Json<MoveBody>,
 ) -> Result<Json<Value>, AgentError> {
     move_desk(
         &state,
+        &link,
         &body.panel_id,
         &body.target,
         &body.place,
@@ -636,12 +663,13 @@ async fn move_panel(
 
 pub(crate) async fn move_desk(
     state: &AppState,
+    link: &SessionLink,
     panel_id: &str,
     target: &str,
     place: &str,
     space: Option<&str>,
 ) -> Result<Value, AgentError> {
-    let (held, mut doc) = begin(state, space).await?;
+    let (held, mut doc) = begin(state, link, space).await?;
     let source = resolve_key(state, &doc.root, panel_id)?;
     let target = resolve_key(state, &doc.root, target)?;
     doc.root = layout_ops::move_panel(doc.root, &source, &target, place).map_err(|err| {
@@ -651,12 +679,16 @@ pub(crate) async fn move_desk(
             AgentError::bad(err)
         }
     })?;
-    let doc = commit(state, &held, doc).await?;
+    let doc = commit(state, link, &held, doc).await?;
     Ok(workspace_json(state, &doc))
 }
 
-pub(crate) async fn list_desk(state: &AppState, space: Option<&str>) -> Result<Value, AgentError> {
-    let (_, doc) = begin(state, space).await?;
+pub(crate) async fn list_desk(
+    state: &AppState,
+    link: &SessionLink,
+    space: Option<&str>,
+) -> Result<Value, AgentError> {
+    let (_, doc) = begin(state, link, space).await?;
     Ok(json!({ "panels": panel_rows(state, &doc.root) }))
 }
 
@@ -671,10 +703,12 @@ struct ZoomBody {
 
 async fn zoom(
     State(state): State<AppState>,
+    HerdrSession(link): HerdrSession,
     Json(body): Json<ZoomBody>,
 ) -> Result<Json<Value>, AgentError> {
     zoom_desk(
         &state,
+        &link,
         body.panel_id.as_deref(),
         named_space(body.space.as_deref()),
     )
@@ -685,10 +719,11 @@ async fn zoom(
 /// Fill the screen with one panel, or pass `None` to show the whole desk again.
 pub(crate) async fn zoom_desk(
     state: &AppState,
+    link: &SessionLink,
     panel_id: Option<&str>,
     space: Option<&str>,
 ) -> Result<Value, AgentError> {
-    let (source, doc) = begin(state, space).await?;
+    let (source, doc) = begin(state, link, space).await?;
     let panel_id = match panel_id {
         Some(panel_id) => Some(resolve_key(state, &doc.root, panel_id)?),
         None => None,
@@ -699,6 +734,7 @@ pub(crate) async fn zoom_desk(
     };
     state.agent.publish(&json!({
         "type": "zoom",
+        "session": &link.name,
         "panelId": panel_id,
         "space": space_id,
     }));
@@ -724,6 +760,7 @@ struct VisitBody {
 
 async fn visit(
     State(state): State<AppState>,
+    HerdrSession(link): HerdrSession,
     Json(body): Json<VisitBody>,
 ) -> Result<Json<Value>, AgentError> {
     let queries = if body.panel_ids.is_empty() {
@@ -733,6 +770,7 @@ async fn visit(
     };
     visit_desk(
         &state,
+        &link,
         &queries,
         body.arrange.as_deref(),
         &body.sizes,
@@ -743,8 +781,11 @@ async fn visit(
     .map(Json)
 }
 
-async fn spaces(State(state): State<AppState>) -> Result<Json<Value>, AgentError> {
-    list_spaces(&state).await.map(Json)
+async fn spaces(
+    State(state): State<AppState>,
+    HerdrSession(link): HerdrSession,
+) -> Result<Json<Value>, AgentError> {
+    list_spaces(&state, &link).await.map(Json)
 }
 
 struct OwnedSpace {
@@ -754,10 +795,10 @@ struct OwnedSpace {
     current: bool,
 }
 
-async fn visit_spaces(state: &AppState) -> Result<Vec<OwnedSpace>, AgentError> {
-    sync_live_desk(state).await?;
-    let snapshot = state.runtime.snapshot().await;
-    let session = session_name(&snapshot);
+async fn visit_spaces(state: &AppState, link: &SessionLink) -> Result<Vec<OwnedSpace>, AgentError> {
+    sync_live_desk(state, link).await?;
+    let snapshot = link.runtime.snapshot().await;
+    let session = link.name.clone();
     let stored = desk::load_desk(&state.config_dir, &session).map_err(AgentError::bad)?;
     let focused = focused_workspace(&snapshot);
     if stored.spaces.is_empty() {
@@ -811,6 +852,7 @@ async fn visit_spaces(state: &AppState) -> Result<Vec<OwnedSpace>, AgentError> {
 /// Show one or more panels from any saved space. One missing name rejects the whole visit.
 pub(crate) async fn visit_desk(
     state: &AppState,
+    link: &SessionLink,
     queries: &[String],
     arrange: Option<&str>,
     sizes: &[f64],
@@ -827,7 +869,7 @@ pub(crate) async fn visit_desk(
     let arrange = desk::choose_arrange(queries.len(), arrange).map_err(AgentError::bad)?;
     let weights = desk::visit_weights(queries.len(), arrange, sizes, columns, rows)
         .map_err(AgentError::bad)?;
-    let owned = visit_spaces(state).await?;
+    let owned = visit_spaces(state, link).await?;
     let views: Vec<desk::VisitSpace<'_>> = owned
         .iter()
         .map(|space| desk::VisitSpace {
@@ -858,6 +900,7 @@ pub(crate) async fn visit_desk(
     let first = &found[0];
     let mut message = json!({
         "type": "visit",
+        "session": &link.name,
         "arrange": arrange.as_str(),
         "panelId": first.panel_id,
         "spaceId": first.space_id,
@@ -902,8 +945,8 @@ pub(crate) async fn visit_desk(
     Ok(reply)
 }
 
-pub(crate) async fn list_spaces(state: &AppState) -> Result<Value, AgentError> {
-    let owned = visit_spaces(state).await?;
+pub(crate) async fn list_spaces(state: &AppState, link: &SessionLink) -> Result<Value, AgentError> {
+    let owned = visit_spaces(state, link).await?;
     let spaces: Vec<Value> = owned
         .iter()
         .map(|space| {
@@ -931,13 +974,14 @@ struct SayBody {
 
 async fn say(
     State(state): State<AppState>,
+    HerdrSession(link): HerdrSession,
     Json(body): Json<SayBody>,
 ) -> Result<Json<Value>, AgentError> {
     let spoken = body.text.trim();
     if spoken.is_empty() || spoken.chars().count() > 8_000 {
         return Err(AgentError::bad("text must be 1 to 8000 characters"));
     }
-    let doc = load_active(&state).await?;
+    let doc = load_active(&state, &link).await?;
     let target = if body.to == "*" {
         None
     } else {
@@ -961,7 +1005,7 @@ async fn say(
         .collect();
     let mut posted = Vec::new();
     for chat in &chats {
-        let chat_id = post_chat(&state, &doc.id, chat, &from, spoken).await?;
+        let chat_id = post_chat(&state, &link, &doc.id, chat, &from, spoken).await?;
         posted.push(chat_id);
     }
     Ok(Json(json!({"ok": true, "chats": posted})))
@@ -969,6 +1013,7 @@ async fn say(
 
 async fn post_chat(
     state: &AppState,
+    link: &SessionLink,
     layout_id: &str,
     chat: &layout_ops::PanelInfo,
     from: &str,
@@ -994,7 +1039,7 @@ async fn post_chat(
     } = &chat.panel
     {
         if is_pane_id(pane_id) {
-            let client = state.runtime.client().clone();
+            let client = link.runtime.client().clone();
             dispatch(&client, pane_id, ClientInput::Text { text: body })
                 .await
                 .map_err(AgentError::upstream)?;
@@ -1009,9 +1054,12 @@ async fn post_chat(
             .map_err(AgentError::upstream)?;
         }
     }
-    state
-        .agent
-        .publish(&json!({"type": "chat", "panelId": chat.id, "chatId": chat_id}));
+    state.agent.publish(&json!({
+        "type": "chat",
+        "session": &link.name,
+        "panelId": chat.id,
+        "chatId": chat_id
+    }));
     Ok(chat_id)
 }
 
@@ -1023,20 +1071,26 @@ struct ReadQuery {
 
 async fn read_panel(
     State(state): State<AppState>,
+    HerdrSession(link): HerdrSession,
     Path(id): Path<String>,
     axum::extract::Query(query): axum::extract::Query<ReadQuery>,
 ) -> Result<Json<Value>, AgentError> {
-    let doc = load_active(&state).await?;
+    let doc = load_active(&state, &link).await?;
     let id = resolve_key(&state, &doc.root, &id)?;
     let panel = list_panels(&doc.root)
         .into_iter()
         .find(|panel| panel.id == id)
         .ok_or_else(|| AgentError::missing("panel was not found"))?;
-    let (text, blocks) = read_static(&state, &doc.id, &panel.id, &panel.panel).await?;
+    let (text, blocks) = read_static(&state, &link, &doc.id, &panel.id, &panel.panel).await?;
     let matched = filter_blocks(&blocks, query.selector.as_deref(), query.text.as_deref());
     let live = state
         .agent
-        .inspect(&panel.id, query.selector.as_deref(), query.text.as_deref())
+        .inspect(
+            &link.name,
+            &panel.id,
+            query.selector.as_deref(),
+            query.text.as_deref(),
+        )
         .await;
     let label = plugin_manifest_title(&state, plugin_id_of(&panel.panel));
     Ok(Json(json!({
@@ -1066,10 +1120,11 @@ struct WriteBody {
 
 async fn write_panel(
     State(state): State<AppState>,
+    HerdrSession(link): HerdrSession,
     Path(id): Path<String>,
     Json(body): Json<WriteBody>,
 ) -> Result<Json<Value>, AgentError> {
-    let doc = load_active(&state).await?;
+    let doc = load_active(&state, &link).await?;
     let id = resolve_key(&state, &doc.root, &id)?;
     let panel = list_panels(&doc.root)
         .into_iter()
@@ -1078,7 +1133,7 @@ async fn write_panel(
     let Some(pane_id) = herdr_pane(&panel.panel).map(str::to_string) else {
         return Err(AgentError::bad("only a terminal panel can be written"));
     };
-    let client = state.runtime.client().clone();
+    let client = link.runtime.client().clone();
     if let Some(text) = body.text {
         if text.len() > 16_000 {
             return Err(AgentError::bad("text is limited to 16 KB"));
@@ -1105,23 +1160,30 @@ struct SelectBody {
 
 async fn select_panel(
     State(state): State<AppState>,
+    HerdrSession(link): HerdrSession,
     Path(id): Path<String>,
     Json(body): Json<SelectBody>,
 ) -> Result<Json<Value>, AgentError> {
-    let doc = load_active(&state).await?;
+    let doc = load_active(&state, &link).await?;
     let id = resolve_key(&state, &doc.root, &id)?;
     if !layout_ops::contains(&doc.root, &id) {
         return Err(AgentError::missing("panel was not found"));
     }
     state.agent.publish(&json!({
         "type": "select",
+        "session": &link.name,
         "panelId": id,
         "selector": body.selector,
         "text": body.text,
     }));
     let live = state
         .agent
-        .inspect(&id, body.selector.as_deref(), body.text.as_deref())
+        .inspect(
+            &link.name,
+            &id,
+            body.selector.as_deref(),
+            body.text.as_deref(),
+        )
         .await;
     Ok(Json(
         json!({"ok": true, "viewer": state.agent.viewers() > 0, "live": live}),
@@ -1189,14 +1251,6 @@ enum ActiveSource {
     Layout,
 }
 
-fn session_name(snapshot: &crate::session::RuntimeSnapshot) -> String {
-    if snapshot.session.is_empty() {
-        "default".into()
-    } else {
-        snapshot.session.clone()
-    }
-}
-
 fn focused_workspace(snapshot: &crate::session::RuntimeSnapshot) -> Option<String> {
     snapshot
         .focused_workspace_id
@@ -1224,10 +1278,11 @@ fn workspace_id_for_key(desk: &desk::DeskDocument, key: &str) -> String {
 
 async fn active_source(
     state: &AppState,
+    link: &SessionLink,
     requested: Option<&str>,
 ) -> Result<ActiveSource, AgentError> {
-    let snapshot = state.runtime.snapshot().await;
-    let session = session_name(&snapshot);
+    let snapshot = link.runtime.snapshot().await;
+    let session = link.name.clone();
     if let Some(requested) = requested {
         if snapshot.connected {
             if snapshot
@@ -1280,12 +1335,15 @@ async fn active_source(
 }
 
 /// Create a layout for a workspace as soon as Herdr has it, and drop layouts for workspaces that have closed.
-pub(crate) async fn sync_live_desk(state: &AppState) -> Result<bool, AgentError> {
-    let snapshot = state.runtime.snapshot().await;
+pub(crate) async fn sync_live_desk(
+    state: &AppState,
+    link: &SessionLink,
+) -> Result<bool, AgentError> {
+    let snapshot = link.runtime.snapshot().await;
     if !snapshot.connected || snapshot.workspaces.is_empty() {
         return Ok(false);
     }
-    let session = session_name(&snapshot);
+    let session = link.name.clone();
     let current = desk::load_desk(&state.config_dir, &session).map_err(AgentError::bad)?;
     let workspaces = snapshot
         .workspaces
@@ -1303,24 +1361,27 @@ pub(crate) async fn sync_live_desk(state: &AppState) -> Result<bool, AgentError>
         match desk::save_desk(&state.config_dir, &session, &next, true).map_err(AgentError::bad)? {
             desk::DeskSave::Stored(saved) | desk::DeskSave::Conflict(saved) => saved,
         };
-    state
-        .agent
-        .publish(&json!({"type": "desk", "desk": stored}));
+    state.agent.publish(&json!({
+        "type": "desk",
+        "session": &session,
+        "desk": stored
+    }));
     Ok(true)
 }
 
 async fn begin(
     state: &AppState,
+    link: &SessionLink,
     space: Option<&str>,
 ) -> Result<(ActiveSource, LayoutDocument), AgentError> {
-    sync_live_desk(state).await?;
-    let source = active_source(state, space).await?;
+    sync_live_desk(state, link).await?;
+    let source = active_source(state, link, space).await?;
     let doc = load_from(state, &source).await?;
     Ok((source, doc))
 }
 
-async fn load_active(state: &AppState) -> Result<LayoutDocument, AgentError> {
-    begin(state, None).await.map(|(_, doc)| doc)
+async fn load_active(state: &AppState, link: &SessionLink) -> Result<LayoutDocument, AgentError> {
+    begin(state, link, None).await.map(|(_, doc)| doc)
 }
 
 async fn load_from(state: &AppState, source: &ActiveSource) -> Result<LayoutDocument, AgentError> {
@@ -1352,6 +1413,7 @@ async fn load_from(state: &AppState, source: &ActiveSource) -> Result<LayoutDocu
 
 async fn commit(
     state: &AppState,
+    link: &SessionLink,
     source: &ActiveSource,
     doc: LayoutDocument,
 ) -> Result<LayoutDocument, AgentError> {
@@ -1368,16 +1430,20 @@ async fn commit(
             {
                 desk::DeskSave::Stored(saved) | desk::DeskSave::Conflict(saved) => saved,
             };
-            state
-                .agent
-                .publish(&json!({"type": "desk", "desk": stored}));
+            state.agent.publish(&json!({
+                "type": "desk",
+                "session": &link.name,
+                "desk": stored
+            }));
             Ok(doc)
         }
         ActiveSource::Layout => {
             store::save_layout(&state.config_dir, &doc).map_err(AgentError::bad)?;
-            state
-                .agent
-                .publish(&json!({"type": "layout", "layout": &doc}));
+            state.agent.publish(&json!({
+                "type": "layout",
+                "session": &link.name,
+                "layout": &doc
+            }));
             Ok(doc)
         }
     }
@@ -1541,6 +1607,7 @@ pub(crate) fn panel_from_kind(
 
 async fn read_static(
     state: &AppState,
+    link: &SessionLink,
     layout_id: &str,
     panel_id: &str,
     panel: &PanelConfig,
@@ -1557,7 +1624,7 @@ async fn read_static(
                 .copied()
                 .unwrap_or(crate::layout::HerdrSource::Visible)
                 .as_api();
-            let screen = state
+            let screen = link
                 .runtime
                 .client()
                 .read_pane(pane_id, source, *lines)
@@ -1567,7 +1634,7 @@ async fn read_static(
         }
         PanelConfig::Herdr { pane_id: None, .. } => Ok(("No pane selected".into(), Vec::new())),
         PanelConfig::Markdown { path, .. } => {
-            let text = read_content(state, path).await?;
+            let text = read_content(state, link, path).await?;
             let blocks = layout_ops::markdown_blocks(&text)
                 .into_iter()
                 .map(|(tag, id, text)| json!({"tag": tag, "id": id, "text": text}))
@@ -1577,7 +1644,7 @@ async fn read_static(
         PanelConfig::Html {
             path: Some(path), ..
         } => {
-            let text = read_content(state, path).await?;
+            let text = read_content(state, link, path).await?;
             Ok((truncate(&text, 48_000), Vec::new()))
         }
         PanelConfig::Html {
@@ -1586,7 +1653,7 @@ async fn read_static(
         } => Ok((truncate(inline, 48_000), Vec::new())),
         PanelConfig::Html { .. } => Ok((String::new(), Vec::new())),
         PanelConfig::Iframe { url, .. } => {
-            let text = fetch_frame(state, url).await.unwrap_or_default();
+            let text = fetch_frame(state, link, url).await.unwrap_or_default();
             Ok((truncate(&text, 48_000), Vec::new()))
         }
         PanelConfig::Chat { .. } => {
@@ -1615,7 +1682,7 @@ async fn read_static(
             Ok((truncate(&text, 48_000), Vec::new()))
         }
         PanelConfig::File { path, .. } => {
-            let text = read_content(state, path).await?;
+            let text = read_content(state, link, path).await?;
             Ok((truncate(&text, 48_000), Vec::new()))
         }
         PanelConfig::Tabs { active, tabs, .. } => {
@@ -1634,17 +1701,21 @@ async fn read_static(
     }
 }
 
-async fn read_content(state: &AppState, path: &str) -> Result<String, AgentError> {
-    let roots = crate::server::allowed_roots(state).await;
+async fn read_content(
+    state: &AppState,
+    link: &SessionLink,
+    path: &str,
+) -> Result<String, AgentError> {
+    let roots = crate::server::allowed_roots(state, link).await;
     let file = resolve_content(&state.config_dir, &roots, path).map_err(AgentError::bad)?;
     tokio::fs::read_to_string(&file)
         .await
         .map_err(|err| AgentError::bad(err.to_string()))
 }
 
-async fn fetch_frame(state: &AppState, url: &str) -> Option<String> {
+async fn fetch_frame(state: &AppState, link: &SessionLink, url: &str) -> Option<String> {
     if let Some(path) = url.strip_prefix("/content/") {
-        return read_content(state, path).await.ok();
+        return read_content(state, link, path).await.ok();
     }
     if !is_loopback_url(url) {
         return None;

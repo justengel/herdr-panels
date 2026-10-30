@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -143,6 +145,148 @@ impl RuntimeCache {
             },
             Err(err) => disconnected(&self.herdr.logical_socket(), err.to_string()),
         }
+    }
+}
+
+/// One Herdr connection and one pane-controller map for a session name.
+#[derive(Clone)]
+pub struct SessionLink {
+    pub name: String,
+    pub runtime: RuntimeCache,
+    pub controls: crate::terminal_size::PaneControls,
+}
+
+/// The sessions this server process is talking to.
+///
+/// A request with no session name uses the link created from the socket the
+/// process was started with. Each other name gets its own client and its own
+/// controllers. Retargeting or dropping one name leaves the others in place.
+#[derive(Clone)]
+pub struct SessionLinks {
+    startup_name: String,
+    startup_socket: PathBuf,
+    inner: Arc<Mutex<HashMap<String, SessionLink>>>,
+}
+
+impl SessionLinks {
+    pub fn new(startup_socket: PathBuf) -> Self {
+        let startup_name = crate::paths::session_label(&startup_socket);
+        let link = Self::make(&startup_name, startup_socket.clone());
+        let mut inner = HashMap::new();
+        inner.insert(startup_name.clone(), link);
+        Self {
+            startup_name,
+            startup_socket,
+            inner: Arc::new(Mutex::new(inner)),
+        }
+    }
+
+    pub fn startup_name(&self) -> &str {
+        &self.startup_name
+    }
+
+    /// The named session, or the startup session when `requested` is missing.
+    /// A stopped session still gets a link so the caller can report it offline.
+    pub fn open(&self, requested: Option<&str>) -> Result<SessionLink, String> {
+        let name = requested
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .unwrap_or(self.startup_name.as_str())
+            .to_string();
+        self.check(&name)?;
+        let mut map = self.map();
+        if let Some(link) = map.get(&name).cloned() {
+            return Ok(link);
+        }
+        let socket = if name == self.startup_name {
+            self.startup_socket.clone()
+        } else {
+            crate::paths::session_socket_path(&name).map_err(|err| err.to_string())?
+        };
+        let link = Self::make(&name, socket);
+        map.insert(name, link.clone());
+        Ok(link)
+    }
+
+    /// Point `name` at `socket`. The same socket keeps that session's controllers.
+    /// A different socket retargets only this session and clears only its controllers.
+    pub async fn attach(&self, name: &str, socket: PathBuf) -> Result<SessionLink, String> {
+        self.check(name)?;
+        let link = {
+            let mut map = self.map();
+            if let Some(link) = map.get(name).cloned() {
+                if link.runtime.client().logical_socket() == socket.display().to_string() {
+                    return Ok(link);
+                }
+                link.runtime.client().retarget(socket.clone());
+                link.runtime.invalidate();
+                link
+            } else {
+                let link = Self::make(name, socket);
+                map.insert(name.to_string(), link.clone());
+                return Ok(link);
+            }
+        };
+        link.controls
+            .use_session(crate::paths::session_name_from_socket(&socket))
+            .await;
+        Ok(link)
+    }
+
+    /// The Herdr process for this name was replaced. Clear only its controllers.
+    pub async fn reconnect(&self, name: &str, socket: PathBuf) -> Result<SessionLink, String> {
+        self.check(name)?;
+        let link = {
+            let mut map = self.map();
+            if let Some(link) = map.get(name).cloned() {
+                link.runtime.client().retarget(socket.clone());
+                link.runtime.invalidate();
+                link
+            } else {
+                let link = Self::make(name, socket.clone());
+                map.insert(name.to_string(), link.clone());
+                link
+            }
+        };
+        link.controls
+            .use_session(crate::paths::session_name_from_socket(&socket))
+            .await;
+        Ok(link)
+    }
+
+    /// Drop this session's link and its controllers. Other sessions stay.
+    pub async fn drop_session(&self, name: &str) {
+        let link = self.map().remove(name);
+        if let Some(link) = link {
+            let socket = link.runtime.client().logical_socket();
+            link.controls
+                .use_session(crate::paths::session_name_from_socket(
+                    std::path::Path::new(&socket),
+                ))
+                .await;
+        }
+    }
+
+    fn check(&self, name: &str) -> Result<(), String> {
+        if name == "default" || name == self.startup_name || crate::paths::valid_session_name(name)
+        {
+            Ok(())
+        } else {
+            Err("invalid Herdr session name".into())
+        }
+    }
+
+    fn make(name: &str, socket: PathBuf) -> SessionLink {
+        let flag = crate::paths::session_name_from_socket(&socket);
+        SessionLink {
+            name: name.to_string(),
+            runtime: RuntimeCache::new(HerdrClient::new(socket)),
+            controls: crate::terminal_size::PaneControls::new(flag),
+        }
+    }
+
+    fn map(&self) -> std::sync::MutexGuard<'_, HashMap<String, SessionLink>> {
+        self.inner.lock().unwrap_or_else(|err| err.into_inner())
     }
 }
 
@@ -609,7 +753,10 @@ mod tests {
         let runtime = map_snapshot("sock", &value).unwrap();
         assert_eq!(runtime.focused_tab_id.as_deref(), Some("w4:t2"));
         assert_eq!(runtime.focused_workspace_id.as_deref(), Some("w4"));
-        assert_eq!(runtime.workspaces[0].active_tab_id.as_deref(), Some("w4:t2"));
+        assert_eq!(
+            runtime.workspaces[0].active_tab_id.as_deref(),
+            Some("w4:t2")
+        );
         assert_eq!(runtime.tabs.len(), 2);
         assert_eq!(runtime.tabs[1].label, "2");
         assert!(runtime.tabs[1].focused);
@@ -748,5 +895,94 @@ mod tests {
         assert!(dirty);
         let (branch, _) = parse_branch_status("## HEAD (no branch)\n");
         assert_eq!(branch.as_deref(), Some("detached"));
+    }
+
+    #[tokio::test]
+    async fn two_session_names_keep_their_own_controllers() {
+        let default_sock = crate::paths::session_socket_path("default").unwrap();
+        let testing_sock = crate::paths::session_socket_path("testing").unwrap();
+        assert_ne!(default_sock, testing_sock);
+        assert!(
+            testing_sock.ends_with(
+                std::path::Path::new("sessions")
+                    .join("testing")
+                    .join("herdr.sock")
+            ),
+            "{}",
+            testing_sock.display()
+        );
+
+        let links = SessionLinks::new(default_sock.clone());
+        let left = links.open(Some("default")).unwrap();
+        let right = links.attach("testing", testing_sock.clone()).await.unwrap();
+        assert_ne!(
+            left.runtime.client().logical_socket(),
+            right.runtime.client().logical_socket()
+        );
+        left.controls.retain("w1:p1").await.unwrap();
+        right.controls.retain("w1:p1").await.unwrap();
+        assert!(left.controls.holds("w1:p1").await);
+        assert!(right.controls.holds("w1:p1").await);
+
+        let moved = testing_sock.with_file_name("moved.sock");
+        links.attach("testing", moved.clone()).await.unwrap();
+        assert_eq!(
+            left.runtime.client().logical_socket(),
+            default_sock.display().to_string()
+        );
+        assert!(left.controls.holds("w1:p1").await);
+        let testing = links.open(Some("testing")).unwrap();
+        assert_eq!(
+            testing.runtime.client().logical_socket(),
+            moved.display().to_string()
+        );
+        assert!(!testing.controls.holds("w1:p1").await);
+
+        testing.controls.retain("w1:p1").await.unwrap();
+        links.drop_session("testing").await;
+        assert!(left.controls.holds("w1:p1").await);
+        let testing = links.open(Some("testing")).unwrap();
+        assert!(!testing.controls.holds("w1:p1").await);
+
+        testing.controls.retain("w1:p1").await.unwrap();
+        links
+            .reconnect("default", default_sock.with_file_name("other.sock"))
+            .await
+            .unwrap();
+        assert!(testing.controls.holds("w1:p1").await);
+        assert!(
+            !links
+                .open(Some("default"))
+                .unwrap()
+                .controls
+                .holds("w1:p1")
+                .await
+        );
+        assert!(links.open(Some("../nope")).is_err());
+    }
+
+    #[test]
+    fn a_missing_session_name_uses_the_startup_socket() {
+        let custom = std::env::temp_dir().join(format!(
+            "herdr-panels-startup-{}-tab.sock",
+            std::process::id()
+        ));
+        let links = SessionLinks::new(custom.clone());
+        let link = links.open(None).unwrap();
+        assert_eq!(link.name, "default");
+        assert_eq!(
+            link.runtime.client().logical_socket(),
+            custom.display().to_string()
+        );
+        let testing = links.open(Some("testing")).unwrap();
+        assert_ne!(
+            testing.runtime.client().logical_socket(),
+            link.runtime.client().logical_socket()
+        );
+        assert!(testing
+            .runtime
+            .client()
+            .logical_socket()
+            .contains("testing"));
     }
 }

@@ -1,5 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { api, wsUrl, type DeskFile, type HerdrCtlStatus, type ViewerHealth } from "./api";
+import {
+  api,
+  rememberSession,
+  tabSession,
+  wsUrl,
+  type DeskFile,
+  type HerdrCtlStatus,
+  type ViewerHealth,
+} from "./api";
 import type { HerdrStatusAction } from "./herdrStatus";
 import { DesignProvider } from "./design";
 import { highlight, inspectPanel } from "./inspect";
@@ -148,7 +156,8 @@ export function App() {
       .bootstrap()
       .then(async (boot) => {
         if (stopped) return;
-        const session = boot.runtime.session || "default";
+        const session = boot.runtime.session || tabSession();
+        rememberSession(session);
         const server = await api.desk();
         if (stopped) return;
         const choice = chooseDesk(server, readLocalDesk(), deskMigrated());
@@ -625,6 +634,8 @@ export function App() {
       } catch {
         return;
       }
+      const posted = (msg as { session?: string }).session;
+      if (posted && posted !== tabSession()) return;
       if (msg.type === "desk" && msg.desk) {
         if (msg.desk.revision === deskRevision()) return;
         const space = spaceRef.current;
@@ -970,6 +981,7 @@ export function App() {
           onSession={(name) => {
             void api.useSession(name).then(
               (next) => {
+                rememberSession(next.runtime.session || name);
                 setRuntime(next.runtime);
                 setError(null);
                 setNotice(name);
@@ -980,6 +992,7 @@ export function App() {
           onCreateSession={(name) => {
             void api.createSession(name).then(
               async (next) => {
+                rememberSession(next.runtime.session || name);
                 setRuntime(next.runtime);
                 const list = await api.sessions();
                 setSessions(list.sessions.map((item) => item.name));
@@ -993,6 +1006,7 @@ export function App() {
             const current = runtime?.session || "default";
             void api.closeSession(current).then(
               async (next) => {
+                rememberSession(next.name || next.runtime.session || "default");
                 setRuntime(next.runtime);
                 const list = await api.sessions();
                 setSessions(list.sessions.map((item) => item.name));
@@ -1006,6 +1020,7 @@ export function App() {
             const current = runtime?.session || "default";
             void api.renameSession(current, name).then(
               async (next) => {
+                rememberSession(next.runtime.session || name);
                 setRuntime(next.runtime);
                 const list = await api.sessions();
                 setSessions(list.sessions.map((item) => item.name));

@@ -15,29 +15,51 @@ use serde::Deserialize;
 use serde::Serialize;
 use serde_json::{json, Value};
 
+use axum::extract::FromRequestParts;
+use axum::http::request::Parts;
+
 use crate::agent::AgentHub;
-use crate::herdr::HerdrClient;
 use crate::keys::ClientInput;
 use crate::layout::{is_layout_id, is_pane_id, LayoutDocument};
-use crate::paths::{find_dist_dir, session_name_from_socket};
-use crate::session::RuntimeCache;
+use crate::paths::find_dist_dir;
+use crate::session::{SessionLink, SessionLinks};
 use crate::store::{self, LayoutSummary, Settings};
 use crate::terminal::screen_source;
-use crate::terminal_size::PaneControls;
 use crate::watch::WatchHub;
 
 #[derive(Clone)]
 pub struct AppState {
     pub config_dir: Arc<PathBuf>,
-    pub runtime: RuntimeCache,
+    pub sessions: SessionLinks,
     pub http: reqwest::Client,
     pub dist_dir: Option<Arc<PathBuf>>,
     pub watch: WatchHub,
     pub agent: AgentHub,
-    pub controls: PaneControls,
     pub token: String,
     pub port: u16,
     pub passes: crate::frame_pass::FramePasses,
+}
+
+/// The Herdr session named by `X-Herdr-Session`, or the session this process started with.
+pub struct HerdrSession(pub SessionLink);
+
+impl FromRequestParts<AppState> for HerdrSession {
+    type Rejection = Response;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
+        let requested = parts
+            .headers
+            .get("x-herdr-session")
+            .and_then(|value| value.to_str().ok());
+        state
+            .sessions
+            .open(requested)
+            .map(HerdrSession)
+            .map_err(|err| ApiError::bad(err).into_response())
+    }
 }
 
 pub struct ServerConfig {
@@ -64,12 +86,11 @@ pub fn build_app(config_dir: PathBuf, herdr_socket: PathBuf, port: u16) -> anyho
     let dist_dir = find_dist_dir().map(Arc::new);
     let state = AppState {
         config_dir: Arc::new(config_dir),
-        runtime: RuntimeCache::new(HerdrClient::new(herdr_socket.clone())),
+        sessions: SessionLinks::new(herdr_socket),
         http,
         dist_dir: dist_dir.clone(),
         watch,
         agent: AgentHub::new(),
-        controls: PaneControls::new(session_name_from_socket(&herdr_socket)),
         token,
         port,
         passes: crate::frame_pass::FramePasses::new(),
@@ -214,7 +235,7 @@ async fn gate_entry(
     body: Bytes,
 ) -> Response {
     if uri.path().starts_with("/content/") && (method == Method::GET || method == Method::HEAD) {
-        return crate::content::handle(State(state), uri).await;
+        return crate::content::handle(State(state), headers.clone(), uri).await;
     }
     if uri.path().starts_with("/proxy/") {
         return crate::proxy::handle(State(state), method, uri, headers, gate, body).await;
@@ -510,9 +531,12 @@ struct Bootstrap {
     runtime: crate::session::RuntimeSnapshot,
 }
 
-async fn bootstrap(State(state): State<AppState>) -> Result<Json<Bootstrap>, ApiError> {
+async fn bootstrap(
+    State(state): State<AppState>,
+    HerdrSession(link): HerdrSession,
+) -> Result<Json<Bootstrap>, ApiError> {
     let (settings, layout, layouts) = active_layout(&state)?;
-    let runtime = state.runtime.snapshot().await;
+    let runtime = link.runtime.snapshot().await;
     Ok(Json(Bootstrap {
         config_dir: state.config_dir.display().to_string(),
         settings,
@@ -522,11 +546,14 @@ async fn bootstrap(State(state): State<AppState>) -> Result<Json<Bootstrap>, Api
     }))
 }
 
-async fn runtime(State(state): State<AppState>) -> Json<crate::session::RuntimeSnapshot> {
-    if let Err(err) = crate::agent::sync_live_desk(&state).await {
+async fn runtime(
+    State(state): State<AppState>,
+    HerdrSession(link): HerdrSession,
+) -> Json<crate::session::RuntimeSnapshot> {
+    if let Err(err) = crate::agent::sync_live_desk(&state, &link).await {
         tracing::warn!("desk sync: {}", err.message);
     }
-    Json(state.runtime.snapshot().await)
+    Json(link.runtime.snapshot().await)
 }
 
 async fn layouts(State(state): State<AppState>) -> Result<Json<Vec<LayoutSummary>>, ApiError> {
@@ -554,20 +581,11 @@ async fn put_layout(
     Ok(Json(doc))
 }
 
-async fn current_session(state: &AppState) -> String {
-    let session = state.runtime.snapshot().await.session;
-    if session.is_empty() {
-        "default".into()
-    } else {
-        session
-    }
-}
-
 async fn get_desk(
     State(state): State<AppState>,
+    HerdrSession(link): HerdrSession,
 ) -> Result<Json<crate::desk::DeskDocument>, ApiError> {
-    let session = current_session(&state).await;
-    crate::desk::load_desk(&state.config_dir, &session)
+    crate::desk::load_desk(&state.config_dir, &link.name)
         .map(Json)
         .map_err(ApiError::bad)
 }
@@ -595,9 +613,10 @@ struct DeskSaved {
 
 async fn put_desk(
     State(state): State<AppState>,
+    HerdrSession(link): HerdrSession,
     Json(body): Json<DeskPut>,
 ) -> Result<Json<DeskSaved>, ApiError> {
-    let session = current_session(&state).await;
+    let session = link.name.clone();
     if body.session != session {
         let desk = crate::desk::load_desk(&state.config_dir, &session).map_err(ApiError::bad)?;
         return Ok(Json(DeskSaved {
@@ -615,9 +634,11 @@ async fn put_desk(
         .map_err(ApiError::bad)?
     {
         crate::desk::DeskSave::Stored(desk) => {
-            state
-                .agent
-                .publish(&json!({ "type": "desk", "desk": &desk }));
+            state.agent.publish(&json!({
+                "type": "desk",
+                "session": &session,
+                "desk": &desk
+            }));
             Ok(Json(DeskSaved {
                 status: "stored",
                 desk,
@@ -660,11 +681,11 @@ struct TreeQuery {
     path: String,
 }
 
-pub async fn allowed_roots(state: &AppState) -> Vec<PathBuf> {
+pub async fn allowed_roots(state: &AppState, link: &SessionLink) -> Vec<PathBuf> {
     let mut roots = store::load_settings(&state.config_dir)
         .map(|settings| settings.content_roots)
         .unwrap_or_default();
-    let snapshot = state.runtime.snapshot().await;
+    let snapshot = link.runtime.snapshot().await;
     for workspace in &snapshot.workspaces {
         if let Some(root) = &workspace.root {
             roots.push(PathBuf::from(root));
@@ -938,7 +959,12 @@ async fn use_session(
     Json(body): Json<SessionBody>,
 ) -> Result<Json<Value>, ApiError> {
     let socket = crate::paths::session_socket(&body.name).map_err(ApiError::bad)?;
-    attach_session(&state, &body.name, socket).await
+    let link = state
+        .sessions
+        .attach(&body.name, socket)
+        .await
+        .map_err(ApiError::bad)?;
+    session_json(&link).await
 }
 
 async fn create_session(
@@ -948,7 +974,12 @@ async fn create_session(
     let socket = crate::session_proc::start_session(&body.name)
         .await
         .map_err(ApiError::bad)?;
-    attach_session(&state, &body.name, socket).await
+    let link = state
+        .sessions
+        .attach(&body.name, socket)
+        .await
+        .map_err(ApiError::bad)?;
+    session_json(&link).await
 }
 
 #[derive(Deserialize)]
@@ -965,22 +996,20 @@ async fn rename_session(
         .await
         .map_err(ApiError::bad)?;
     crate::desk::rename_desk(&state.config_dir, &body.name, &body.to).map_err(ApiError::bad)?;
-    attach_session(&state, &body.to, socket).await
+    if body.name != body.to {
+        state.sessions.drop_session(&body.name).await;
+    }
+    let link = state
+        .sessions
+        .attach(&body.to, socket)
+        .await
+        .map_err(ApiError::bad)?;
+    session_json(&link).await
 }
 
-async fn attach_session(
-    state: &AppState,
-    name: &str,
-    socket: PathBuf,
-) -> Result<Json<Value>, ApiError> {
-    state.runtime.client().retarget(socket.clone());
-    state.runtime.invalidate();
-    state
-        .controls
-        .use_session(session_name_from_socket(&socket))
-        .await;
-    let runtime = state.runtime.snapshot().await;
-    Ok(Json(json!({ "name": name, "runtime": runtime })))
+async fn session_json(link: &SessionLink) -> Result<Json<Value>, ApiError> {
+    let runtime = link.runtime.snapshot().await;
+    Ok(Json(json!({ "name": link.name, "runtime": runtime })))
 }
 
 #[derive(Deserialize)]
@@ -995,10 +1024,11 @@ struct FocusBody {
 }
 
 async fn focus_session(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
+    HerdrSession(link): HerdrSession,
     Json(body): Json<FocusBody>,
 ) -> Result<StatusCode, ApiError> {
-    let client = state.runtime.client().clone();
+    let client = link.runtime.client().clone();
     if let Some(pane_id) = body.pane_id {
         if !is_pane_id(&pane_id) {
             return Err(ApiError::bad("invalid pane id"));
@@ -1007,7 +1037,7 @@ async fn focus_session(
             .call("pane.focus", json!({ "pane_id": pane_id }))
             .await
             .map_err(|err| ApiError::upstream(err.to_string()))?;
-        state.runtime.invalidate();
+        link.runtime.invalidate();
         return Ok(StatusCode::NO_CONTENT);
     }
     if let Some(workspace_id) = body.workspace_id {
@@ -1018,7 +1048,7 @@ async fn focus_session(
             .call("workspace.focus", json!({ "workspace_id": workspace_id }))
             .await
             .map_err(|err| ApiError::upstream(err.to_string()))?;
-        state.runtime.invalidate();
+        link.runtime.invalidate();
         return Ok(StatusCode::NO_CONTENT);
     }
     if let Some(tab_id) = body.tab_id {
@@ -1029,7 +1059,7 @@ async fn focus_session(
             .call("tab.focus", json!({ "tab_id": tab_id }))
             .await
             .map_err(|err| ApiError::upstream(err.to_string()))?;
-        state.runtime.invalidate();
+        link.runtime.invalidate();
         return Ok(StatusCode::NO_CONTENT);
     }
     Err(ApiError::bad("focus needs a pane, a tab, or a workspace"))
@@ -1039,18 +1069,15 @@ async fn close_session(
     State(state): State<AppState>,
     Json(body): Json<SessionBody>,
 ) -> Result<Json<Value>, ApiError> {
-    let current = crate::paths::session_label(std::path::Path::new(
-        &state.runtime.client().logical_socket(),
-    ));
     crate::session_proc::close_session(&body.name)
         .await
         .map_err(ApiError::bad)?;
-    if current == body.name {
-        let socket = crate::paths::session_socket("default").map_err(ApiError::bad)?;
-        return attach_session(&state, "default", socket).await;
-    }
-    let runtime = state.runtime.snapshot().await;
-    Ok(Json(json!({ "name": current, "runtime": runtime })))
+    state.sessions.drop_session(&body.name).await;
+    let link = state
+        .sessions
+        .open(Some("default"))
+        .map_err(ApiError::bad)?;
+    session_json(&link).await
 }
 
 async fn list_plugins(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
@@ -1069,6 +1096,7 @@ struct BridgeBody {
 
 async fn plugin_bridge(
     State(state): State<AppState>,
+    HerdrSession(link): HerdrSession,
     axum::extract::Path(id): axum::extract::Path<String>,
     Json(body): Json<BridgeBody>,
 ) -> Result<Json<Value>, ApiError> {
@@ -1077,7 +1105,7 @@ async fn plugin_bridge(
         return Err(ApiError::bad("invalid bridge request"));
     }
     let manifest = crate::plugins::load_installed(&state.config_dir, &id).map_err(ApiError::bad)?;
-    let session = crate::paths::session_label(Path::new(&state.runtime.client().logical_socket()));
+    let session = link.name.clone();
     let desk = crate::desk::load_desk(&state.config_dir, &session).map_err(ApiError::bad)?;
     let decision = crate::plugin_grant::bridge_allowed(
         &manifest.permissions,
@@ -1100,10 +1128,10 @@ async fn plugin_bridge(
         other => other,
     };
     decision.map_err(ApiError::forbidden)?;
-    let client = state.runtime.client().clone();
+    let client = link.runtime.client().clone();
     match body.method.as_str() {
         "status" | "listPanes" => {
-            let snapshot = state.runtime.snapshot().await;
+            let snapshot = link.runtime.snapshot().await;
             Ok(Json(
                 serde_json::to_value(&snapshot).unwrap_or_else(|_| json!({})),
             ))
@@ -1154,7 +1182,7 @@ async fn plugin_bridge(
         }
         "focusPane" => {
             let pane_id = param_str(&body.params, "paneId");
-            let snapshot = state.runtime.snapshot().await;
+            let snapshot = link.runtime.snapshot().await;
             let ids: Vec<&str> = snapshot
                 .panes
                 .iter()
@@ -1177,14 +1205,14 @@ async fn plugin_bridge(
                 .call("pane.focus", json!({ "pane_id": pane_id }))
                 .await
                 .map_err(|err| ApiError::upstream(err.to_string()))?;
-            state.runtime.invalidate();
+            link.runtime.invalidate();
             Ok(Json(json!({
                 "ok": true,
                 "paneId": pane_id,
                 "workspaceId": workspace_id,
             })))
         }
-        "listPanels" => crate::agent::list_desk(&state, None)
+        "listPanels" => crate::agent::list_desk(&state, &link, None)
             .await
             .map(Json)
             .map_err(agent_error),
@@ -1195,6 +1223,7 @@ async fn plugin_bridge(
             }
             crate::agent::open_desk(
                 &state,
+                &link,
                 crate::agent::DeskOpen {
                     target,
                     panel_id: param_opt(&body.params, "panelId"),
@@ -1234,7 +1263,7 @@ async fn plugin_bridge(
                 None => None,
             };
             let title = param_opt(&body.params, "title").map(Some);
-            crate::agent::update_desk(&state, &panel_id, title, panel, None, None)
+            crate::agent::update_desk(&state, &link, &panel_id, title, panel, None, None)
                 .await
                 .map(Json)
                 .map_err(agent_error)
@@ -1244,7 +1273,7 @@ async fn plugin_bridge(
             if panel_id.trim().is_empty() {
                 return Err(ApiError::bad("panelId is required"));
             }
-            crate::agent::close_desk(&state, &panel_id, None)
+            crate::agent::close_desk(&state, &link, &panel_id, None)
                 .await
                 .map(Json)
                 .map_err(agent_error)
@@ -1256,7 +1285,7 @@ async fn plugin_bridge(
                 return Err(ApiError::bad("panelId and target are required"));
             }
             let place = param_opt(&body.params, "place").unwrap_or_else(|| "swap".into());
-            crate::agent::move_desk(&state, &panel_id, &target, &place, None)
+            crate::agent::move_desk(&state, &link, &panel_id, &target, &place, None)
                 .await
                 .map(Json)
                 .map_err(agent_error)
@@ -1271,7 +1300,7 @@ async fn plugin_bridge(
                 .get("ratio")
                 .and_then(Value::as_f64)
                 .ok_or_else(|| ApiError::bad("ratio is required"))?;
-            crate::agent::resize_desk(&state, &panel_id, ratio, None)
+            crate::agent::resize_desk(&state, &link, &panel_id, ratio, None)
                 .await
                 .map(Json)
                 .map_err(agent_error)
@@ -1294,6 +1323,7 @@ async fn plugin_bridge(
             let rows = param_numbers(&body.params, "rows")?;
             crate::agent::visit_desk(
                 &state,
+                &link,
                 &queries,
                 arrange.as_deref(),
                 &sizes,
@@ -1309,12 +1339,12 @@ async fn plugin_bridge(
             if panel_id.trim().is_empty() {
                 return Err(ApiError::bad("panelId is required"));
             }
-            crate::agent::zoom_desk(&state, Some(&panel_id), None)
+            crate::agent::zoom_desk(&state, &link, Some(&panel_id), None)
                 .await
                 .map(Json)
                 .map_err(agent_error)
         }
-        "showDesk" => crate::agent::zoom_desk(&state, None, None)
+        "showDesk" => crate::agent::zoom_desk(&state, &link, None, None)
             .await
             .map(Json)
             .map_err(agent_error),
@@ -1337,12 +1367,12 @@ async fn plugin_bridge(
             let args = param_command_args(&body.params)?;
             crate::plugin_command::validate_invocation(&manifest.commands, &name, &args)
                 .map_err(ApiError::forbidden)?;
-            let roots = allowed_roots(&state).await;
+            let roots = allowed_roots(&state, &link).await;
             let cwd = match param_opt(&body.params, "cwd") {
                 Some(raw) => crate::plugin_command::cwd_allowed(Path::new(&raw), &roots)
                     .map_err(ApiError::forbidden)?,
                 None => {
-                    let snapshot = state.runtime.snapshot().await;
+                    let snapshot = link.runtime.snapshot().await;
                     let raw = snapshot
                         .panes
                         .iter()
@@ -1377,7 +1407,7 @@ async fn plugin_bridge(
                 return Err(ApiError::bad("direction must be up or down"));
             }
             let lines = param_lines(&body.params)?;
-            let snapshot = state.runtime.snapshot().await;
+            let snapshot = link.runtime.snapshot().await;
             let ids: Vec<&str> = snapshot
                 .panes
                 .iter()
@@ -1390,8 +1420,7 @@ async fn plugin_bridge(
                     ApiError::bad(err)
                 }
             })?;
-            state
-                .controls
+            link.controls
                 .scroll(&pane_id, &direction, lines, "wheel")
                 .await
                 .map_err(ApiError::bad)?;
@@ -1537,11 +1566,14 @@ async fn plugin_files_ws(
     ws.on_upgrade(move |socket| crate::plugin_files::drive(config_dir, plugin, socket))
 }
 
-async fn herdr_config(State(state): State<AppState>) -> Json<Value> {
+async fn herdr_config(
+    State(state): State<AppState>,
+    HerdrSession(link): HerdrSession,
+) -> Json<Value> {
     let doc = tokio::task::spawn_blocking(crate::herdr_config::document)
         .await
         .unwrap_or_else(|_| json!({}));
-    Json(with_integrations(&state, doc).await)
+    Json(with_integrations(&state, &link, doc).await)
 }
 
 async fn herdr_ctl_status(State(state): State<AppState>) -> Json<crate::herdr_ctl::HerdrCtlStatus> {
@@ -1555,29 +1587,37 @@ struct HerdrCtlBody {
 
 async fn herdr_ctl_action(
     State(state): State<AppState>,
+    HerdrSession(link): HerdrSession,
     Json(body): Json<HerdrCtlBody>,
 ) -> Result<Json<Value>, ApiError> {
-    let session = {
-        let socket = state.runtime.client().logical_socket();
-        crate::paths::session_label(std::path::Path::new(&socket))
-    };
+    let session = link.name.clone();
     match body.action.as_str() {
         "start" => {
             let socket = crate::herdr_ctl::start(&session)
                 .await
                 .map_err(ApiError::bad)?;
-            attach_session(&state, &session, socket).await
+            let link = state
+                .sessions
+                .reconnect(&session, socket)
+                .await
+                .map_err(ApiError::bad)?;
+            session_json(&link).await
         }
         "restart" => {
             let socket = crate::herdr_ctl::restart(&session)
                 .await
                 .map_err(ApiError::bad)?;
-            attach_session(&state, &session, socket).await
+            let link = state
+                .sessions
+                .reconnect(&session, socket)
+                .await
+                .map_err(ApiError::bad)?;
+            session_json(&link).await
         }
         "update" => {
             let message = crate::herdr_ctl::update().await.map_err(ApiError::bad)?;
             let ctl = crate::herdr_ctl::status(&state.http).await;
-            let runtime = state.runtime.snapshot().await;
+            let runtime = link.runtime.snapshot().await;
             Ok(Json(json!({
                 "message": message,
                 "ctl": ctl,
@@ -1590,6 +1630,7 @@ async fn herdr_ctl_action(
 
 async fn put_herdr_config(
     State(state): State<AppState>,
+    HerdrSession(link): HerdrSession,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, ApiError> {
     if let Some(spec) = body.get("integration") {
@@ -1603,8 +1644,7 @@ async fn put_herdr_config(
             "uninstall" => "integration.uninstall",
             _ => return Err(ApiError::bad("unknown integration action")),
         };
-        state
-            .runtime
+        link.runtime
             .client()
             .call(method, json!({ "target": target }))
             .await
@@ -1615,7 +1655,7 @@ async fn put_herdr_config(
         || body.get("keys").is_some()
         || body.get("reload").and_then(Value::as_bool).unwrap_or(false);
     let doc = if touches {
-        let socket = state.runtime.client().logical_socket();
+        let socket = link.runtime.client().logical_socket();
         let session = crate::paths::session_name_from_socket(std::path::Path::new(&socket));
         crate::herdr_config::apply(&body, session.as_deref())
             .await
@@ -1625,7 +1665,7 @@ async fn put_herdr_config(
             .await
             .map_err(|_| ApiError::bad("could not read Herdr config"))?
     };
-    Ok(Json(with_integrations(&state, doc).await))
+    Ok(Json(with_integrations(&state, &link, doc).await))
 }
 
 fn integration_target(target: &str) -> bool {
@@ -1637,8 +1677,8 @@ fn integration_target(target: &str) -> bool {
             .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '_' || ch == '-')
 }
 
-async fn with_integrations(state: &AppState, mut doc: Value) -> Value {
-    match state
+async fn with_integrations(_state: &AppState, link: &SessionLink, mut doc: Value) -> Value {
+    match link
         .runtime
         .client()
         .call("integration.list", json!({}))
@@ -1681,10 +1721,11 @@ struct HerdrAction {
 }
 
 async fn herdr_action(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
+    HerdrSession(link): HerdrSession,
     Json(body): Json<HerdrAction>,
 ) -> Result<Json<Value>, ApiError> {
-    let client = state.runtime.client();
+    let client = link.runtime.client();
     let result = match body.action.as_str() {
         "workspace.create" => {
             let mut params = json!({ "focus": true });
@@ -1807,7 +1848,7 @@ async fn herdr_action(
     };
     match result {
         Ok(value) => {
-            state.runtime.invalidate();
+            link.runtime.invalidate();
             Ok(Json(json!({ "ok": true, "result": value })))
         }
         Err(err) => Err(ApiError::bad(err.to_string())),
@@ -1831,13 +1872,14 @@ struct InputBody {
 }
 
 async fn terminal_input(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
+    HerdrSession(link): HerdrSession,
     Json(body): Json<InputBody>,
 ) -> Result<StatusCode, ApiError> {
     if !is_pane_id(&body.pane_id) {
         return Err(ApiError::bad("invalid pane id"));
     }
-    let client = state.runtime.client().clone();
+    let client = link.runtime.client().clone();
     if let Some(text) = body.text {
         crate::terminal::dispatch(&client, &body.pane_id, ClientInput::Text { text })
             .await
@@ -1859,7 +1901,8 @@ struct SplitBody {
 }
 
 async fn terminal_split(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
+    HerdrSession(link): HerdrSession,
     Json(body): Json<SplitBody>,
 ) -> Result<Json<Value>, ApiError> {
     if !is_pane_id(&body.pane_id) {
@@ -1868,7 +1911,7 @@ async fn terminal_split(
     if body.direction != "right" && body.direction != "down" {
         return Err(ApiError::bad("direction must be right or down"));
     }
-    let client = state.runtime.client().clone();
+    let client = link.runtime.client().clone();
     let pane_id = client
         .split_pane(&body.pane_id, &body.direction)
         .await
@@ -1901,7 +1944,8 @@ struct ScreenQuery {
 }
 
 async fn terminal_screen(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
+    HerdrSession(link): HerdrSession,
     axum::extract::Path(pane_id): axum::extract::Path<String>,
     Query(query): Query<ScreenQuery>,
 ) -> Result<Json<Value>, ApiError> {
@@ -1910,7 +1954,7 @@ async fn terminal_screen(
     }
     let source = screen_source(query.source.as_deref()).map_err(ApiError::bad)?;
     validate_lines(query.lines)?;
-    let screen = state
+    let screen = link
         .runtime
         .client()
         .read_pane(&pane_id, source, query.lines)
@@ -1929,6 +1973,7 @@ struct TerminalQuery {
     pane_id: String,
     source: Option<String>,
     lines: Option<u32>,
+    session: Option<String>,
 }
 
 async fn terminal_ws(
@@ -1946,14 +1991,20 @@ async fn terminal_ws(
     if let Err(err) = validate_lines(query.lines) {
         return err.into_response();
     }
+    let link = match state.sessions.open(query.session.as_deref()) {
+        Ok(link) => link,
+        Err(err) => return ApiError::bad(err).into_response(),
+    };
     ws.on_upgrade(move |socket| {
-        crate::terminal::drive(state, query.pane_id, source, query.lines, socket)
+        crate::terminal::drive(link, query.pane_id, source, query.lines, socket)
     })
 }
 
 #[derive(Deserialize)]
 struct WatchQuery {
     path: String,
+    #[serde(default)]
+    session: Option<String>,
 }
 
 async fn watch_ws(
@@ -1968,8 +2019,12 @@ async fn watch_ws(
     {
         return ApiError::bad("invalid content path").into_response();
     }
+    let link = match state.sessions.open(query.session.as_deref()) {
+        Ok(link) => link,
+        Err(err) => return ApiError::bad(err).into_response(),
+    };
     let config_dir = Arc::clone(&state.config_dir);
-    let roots = allowed_roots(&state).await;
+    let roots = allowed_roots(&state, &link).await;
     let events = state.watch.subscribe();
     let path = query.path;
     ws.on_upgrade(move |socket| crate::watch::drive(config_dir, roots, path, socket, events))

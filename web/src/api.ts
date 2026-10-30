@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import type { PluginInfo } from "./desk";
 import type { DeskSnapshot } from "./deskSync";
 import type { Bootstrap, ChatMessage, LayoutDocument, PanelConfig, RuntimeSnapshot } from "./types";
@@ -62,9 +63,51 @@ function viewerToken(): string {
   return typeof value === "string" ? value : "";
 }
 
+const TAB_SESSION = "herdr-panels-session";
+const TAB_SESSION_EVENT = "herdr-tab-session";
+
+/** The session this browser tab is showing. A new tab starts at default. */
+export function tabSession(): string {
+  try {
+    const stored = sessionStorage.getItem(TAB_SESSION)?.trim();
+    if (stored) return stored;
+  } catch {
+    // sessionStorage can be blocked. The tab then stays on default.
+  }
+  return "default";
+}
+
+/** Remember the session for this tab so a refresh stays on it. */
+export function rememberSession(name: string) {
+  const next = name.trim() || "default";
+  try {
+    sessionStorage.setItem(TAB_SESSION, next);
+  } catch {
+    // The tab can still finish this response. The next load starts at default.
+  }
+  if (typeof window !== "undefined" && typeof window.dispatchEvent === "function") {
+    window.dispatchEvent(new Event(TAB_SESSION_EVENT));
+  }
+}
+
+/** The session this tab is showing, including a switch made after the page opened. */
+export function useTabSession(): string {
+  const [name, setName] = useState(tabSession);
+  useEffect(() => {
+    const sync = () => setName(tabSession());
+    window.addEventListener(TAB_SESSION_EVENT, sync);
+    return () => window.removeEventListener(TAB_SESSION_EVENT, sync);
+  }, []);
+  return name;
+}
+
 function authHeaders(): Record<string, string> {
   const token = viewerToken();
   return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
+function sessionHeaders(): Record<string, string> {
+  return { "X-Herdr-Session": tabSession() };
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -73,6 +116,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     headers: {
       Accept: "application/json",
       ...(init?.body ? { "Content-Type": "application/json" } : {}),
+      ...sessionHeaders(),
       ...init?.headers,
       ...authHeaders(),
     },
@@ -239,6 +283,7 @@ export const api = {
       method: "POST",
       headers: {
         ...authHeaders(),
+        ...sessionHeaders(),
         "Content-Type": "image/png",
         "X-Screenshot-Name": name,
       },
@@ -280,11 +325,13 @@ export const api = {
 
 export function wsUrl(path: string): string {
   const protocol = location.protocol === "https:" ? "wss:" : "ws:";
+  const extra = new URLSearchParams();
   const token = viewerToken();
-  const authed = token
-    ? `${path}${path.includes("?") ? "&" : "?"}token=${encodeURIComponent(token)}`
-    : path;
-  return `${protocol}//${location.host}${authed}`;
+  if (token) extra.set("token", token);
+  extra.set("session", tabSession());
+  const query = extra.toString();
+  const joined = query ? `${path}${path.includes("?") ? "&" : "?"}${query}` : path;
+  return `${protocol}//${location.host}${joined}`;
 }
 
 export function contentUrl(path: string, bridge = false): string {

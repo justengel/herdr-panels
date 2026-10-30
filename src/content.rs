@@ -1,6 +1,6 @@
 use axum::body::Body;
 use axum::extract::State;
-use axum::http::{header, HeaderValue, Response, StatusCode, Uri};
+use axum::http::{header, HeaderMap, HeaderValue, Response, StatusCode, Uri};
 use axum::response::IntoResponse;
 
 use crate::server::AppState;
@@ -10,7 +10,7 @@ const FRAME_SELECT: &str = include_str!("../assets/frame-select.js");
 const BRIDGE: &str = include_str!("../assets/panel-bridge.js");
 const MAX_FILE: usize = 8 * 1024 * 1024;
 
-pub async fn handle(State(state): State<AppState>, uri: Uri) -> Response<Body> {
+pub async fn handle(State(state): State<AppState>, headers: HeaderMap, uri: Uri) -> Response<Body> {
     let Some(requested) = uri.path().strip_prefix("/content/") else {
         return (StatusCode::NOT_FOUND, "missing content path").into_response();
     };
@@ -18,7 +18,14 @@ pub async fn handle(State(state): State<AppState>, uri: Uri) -> Response<Body> {
     if requested.is_empty() {
         return (StatusCode::BAD_REQUEST, "missing content path").into_response();
     }
-    let roots = crate::server::allowed_roots(&state).await;
+    let requested_session = headers
+        .get("x-herdr-session")
+        .and_then(|value| value.to_str().ok());
+    let link = match state.sessions.open(requested_session) {
+        Ok(link) => link,
+        Err(err) => return (StatusCode::BAD_REQUEST, err).into_response(),
+    };
+    let roots = crate::server::allowed_roots(&state, &link).await;
     let path = match crate::paths::resolve_content(&state.config_dir, &roots, &requested) {
         Ok(path) => path,
         Err(err) => {

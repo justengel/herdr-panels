@@ -649,6 +649,125 @@ async fn a_tab_group_can_hold_several_panels_and_cannot_contain_another_group() 
 }
 
 #[tokio::test]
+async fn a_tab_on_a_stopped_session_keeps_its_own_desk() {
+    let desk = desk().await;
+    let (status, startup) = desk.call("GET", "/api/runtime", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(startup["connected"], false);
+    assert_eq!(startup["session"], "default");
+    assert!(
+        startup["socket"]
+            .as_str()
+            .unwrap()
+            .contains("missing-herdr.sock"),
+        "{startup}"
+    );
+
+    let (status, named) = desk
+        .exchange(
+            "GET",
+            "/api/runtime",
+            None,
+            None,
+            true,
+            &[("x-herdr-session", "default")],
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(named["socket"], startup["socket"]);
+
+    let (status, testing) = desk
+        .exchange(
+            "GET",
+            "/api/runtime",
+            None,
+            None,
+            true,
+            &[("x-herdr-session", "panels-stopped")],
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{testing}");
+    assert_eq!(testing["connected"], false);
+    assert_eq!(testing["session"], "panels-stopped");
+    assert_ne!(testing["socket"], startup["socket"]);
+    let socket = testing["socket"].as_str().unwrap();
+    assert!(socket.contains("panels-stopped"), "{testing}");
+    assert!(socket.contains("herdr.sock"), "{testing}");
+
+    let (status, bad) = desk
+        .exchange(
+            "GET",
+            "/api/runtime",
+            None,
+            None,
+            true,
+            &[("x-herdr-session", "../nope")],
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{bad}");
+
+    let panel = json!({
+        "type": "panel",
+        "id": "shell",
+        "title": "Shell",
+        "panel": {"type": "herdr", "paneId": null}
+    });
+    let (status, saved) = desk
+        .exchange(
+            "PUT",
+            "/api/desk",
+            Some(json!({
+                "session": "panels-stopped",
+                "revision": 0,
+                "pins": [],
+                "spaces": {"one": panel}
+            })),
+            None,
+            true,
+            &[("x-herdr-session", "panels-stopped")],
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+    assert_eq!(saved["status"], "stored");
+
+    let (status, home) = desk.call("GET", "/api/desk", None).await;
+    assert_eq!(status, StatusCode::OK, "{home}");
+    assert!(home["spaces"]["one"].is_null(), "{home}");
+
+    let (status, again) = desk
+        .exchange(
+            "GET",
+            "/api/desk",
+            None,
+            None,
+            true,
+            &[("x-herdr-session", "panels-stopped")],
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{again}");
+    assert_eq!(again["spaces"]["one"]["id"], "shell");
+
+    let (status, mismatch) = desk
+        .exchange(
+            "PUT",
+            "/api/desk",
+            Some(json!({
+                "session": "panels-stopped",
+                "revision": 0,
+                "pins": [],
+                "spaces": {}
+            })),
+            None,
+            true,
+            &[("x-herdr-session", "default")],
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{mismatch}");
+    assert_eq!(mismatch["status"], "session");
+    assert!(mismatch["desk"]["spaces"]["one"].is_null(), "{mismatch}");
+}
+
+#[tokio::test]
 async fn the_default_herdr_session_cannot_be_closed_from_the_viewer() {
     let desk = desk().await;
     let (status, error) = desk
@@ -1904,10 +2023,7 @@ async fn a_named_space_is_edited_without_a_focused_workspace() {
         .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{missing}");
     assert!(
-        missing["error"]
-            .as_str()
-            .unwrap()
-            .contains("not connected"),
+        missing["error"].as_str().unwrap().contains("not connected"),
         "{missing}"
     );
 
@@ -2009,10 +2125,7 @@ async fn a_plugin_opens_with_control_when_its_manifest_or_the_call_asks() {
         .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
     assert!(
-        refused["error"]
-            .as_str()
-            .unwrap()
-            .contains("plugin panel"),
+        refused["error"].as_str().unwrap().contains("plugin panel"),
         "{refused}"
     );
 }
