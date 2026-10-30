@@ -4,6 +4,12 @@ Recorded 2026-10-27 from the review before the first public release. Closed item
 
 ## Unreleased
 
+## Done in 0.1.12
+
+- Each browser tab keeps its own Herdr session. Switching a session changes only that tab.
+- A plugin bridge call is looked up in the space that is showing the panel. `herdrPanels.context()` returns that panel and space.
+- `panel list` shows whether control is on. `panel open --id` chooses the new panel's id. A `files` path may start with `~` or `${HOME}`. Opening again with reuse replaces the last note, file, HTML page, or browser panel.
+
 ## Done in 0.1.11
 
 - A space stays on the Herdr tab you left, and both tab bars can be renamed, reordered, and closed.

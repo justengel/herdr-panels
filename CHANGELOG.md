@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.1.12 - 2026-10-30
+
+Each browser tab keeps its own Herdr session. A new tab starts on `default`. Refreshing a tab keeps that tab's session. Switching, creating, renaming, or closing a session changes only that tab. Closing a tab leaves the other session connected.
+
 A plugin bridge call names the space it is running in, and the server looks up that panel only in that space. The same panel id in another space no longer answers first. `herdrPanels.context()` returns this panel and space. The host also posts `{ source: "hwp-host", type: "context", panelId, spaceId }` when the frame loads. A bridge error names the panel and the space it checked.
 
 `herdr-panels panel list` adds a control column: `on`, `off`, or empty. `herdr-panels panel open --id` chooses the new panel's id in this space. A `files` path may start with `~` or `${HOME}`.
