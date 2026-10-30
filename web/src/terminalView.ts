@@ -61,13 +61,26 @@ function sameGrid(frame: StreamFrame, cols: number, rows: number): boolean {
  * left out.
  */
 export function openingScreen(frames: StreamFrame[], cols: number, rows: number): StreamFrame[] {
-  const usable = frames.filter((frame) => sameGrid(frame, cols, rows));
+  const matched = screenFrom(frames.filter((frame) => sameGrid(frame, cols, rows)));
+  if (matched.length > 0) return matched;
+  return screenFrom(frames);
+}
+
+/** A full frame and the partials that follow it at that same size. */
+function screenFrom(frames: StreamFrame[]): StreamFrame[] {
   let lastFull = -1;
-  for (let index = 0; index < usable.length; index += 1) {
-    if (usable[index].full) lastFull = index;
+  for (let index = 0; index < frames.length; index += 1) {
+    if (frames[index].full) lastFull = index;
   }
   if (lastFull < 0) return [];
-  return usable.slice(lastFull);
+  const anchor = frames[lastFull];
+  const tail = [anchor];
+  for (let index = lastFull + 1; index < frames.length; index += 1) {
+    if (sameGrid(frames[index], anchor.cols ?? 0, anchor.rows ?? 0) || (anchor.cols == null && anchor.rows == null)) {
+      tail.push(frames[index]);
+    }
+  }
+  return tail;
 }
 
 /**
@@ -95,6 +108,47 @@ export function frameDraw(
     reset: frame.full,
     drawn: frame.text,
   };
+}
+
+export interface FollowDecision {
+  waitingForFull: boolean;
+  draw: boolean;
+  reset: boolean;
+  drawn: string;
+  grid: { cols: number; rows: number } | null;
+}
+
+/**
+ * Keep the picture moving when another viewer owns the pane size.
+ * Partials for the grid on screen are drawn. A full frame at any size
+ * replaces the screen. Partials for a size not on screen wait.
+ */
+export function frameFollow(
+  waitingForFull: boolean,
+  frame: StreamFrame,
+  drawn: string,
+  fitted: { cols: number; rows: number } | null,
+  showing: { cols: number; rows: number } | null,
+): FollowDecision {
+  const reported = frame.cols != null && frame.rows != null ? { cols: frame.cols, rows: frame.rows } : null;
+  if (showing && reported && reported.cols === showing.cols && reported.rows === showing.rows) {
+    const decision = frameDraw(false, frame, drawn, showing);
+    return { ...decision, grid: showing };
+  }
+  if (frame.full && reported) {
+    const switched = !showing || reported.cols !== showing.cols || reported.rows !== showing.rows;
+    const draw = switched || frame.text !== drawn;
+    return { waitingForFull: false, draw, reset: draw, drawn: frame.text, grid: reported };
+  }
+  if (fitted && reported && reported.cols === fitted.cols && reported.rows === fitted.rows) {
+    const decision = frameDraw(true, frame, drawn, fitted);
+    return { ...decision, grid: showing };
+  }
+  if (!reported) {
+    const decision = frameDraw(waitingForFull, frame, drawn, showing ?? fitted);
+    return { ...decision, grid: showing };
+  }
+  return { waitingForFull, draw: false, reset: false, drawn, grid: showing };
 }
 
 /** Uniform scale that keeps a grid inside the panel without enlarging it. */

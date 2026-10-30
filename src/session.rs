@@ -317,6 +317,35 @@ fn geometry_for(layouts: &[Value], pane_id: &str) -> Option<PaneRect> {
     None
 }
 
+/// Pane a new workspace's Terminal panel should show.
+/// A workspace is created with one pane, and that pane is its root pane.
+pub fn root_pane_id(snapshot: &RuntimeSnapshot, workspace_id: &str) -> Option<String> {
+    let active_tab = snapshot
+        .workspaces
+        .iter()
+        .find(|space| space.workspace_id == workspace_id)
+        .and_then(|space| space.active_tab_id.as_deref());
+    let on_tab: Vec<&PaneView> = snapshot
+        .panes
+        .iter()
+        .filter(|pane| pane.workspace_id == workspace_id)
+        .filter(|pane| match active_tab {
+            Some(tab) => pane.tab_id == tab,
+            None => true,
+        })
+        .collect();
+    let panes = if on_tab.is_empty() {
+        snapshot
+            .panes
+            .iter()
+            .filter(|pane| pane.workspace_id == workspace_id)
+            .collect::<Vec<_>>()
+    } else {
+        on_tab
+    };
+    panes.first().map(|pane| pane.pane_id.clone())
+}
+
 fn fill_workspace_roots(snapshot: &mut RuntimeSnapshot) {
     let dirs: Vec<(String, String)> = snapshot
         .workspaces
@@ -633,6 +662,79 @@ mod tests {
             snapshot.workspaces[0].root.as_deref(),
             Some("C:/Users/me/proj")
         );
+    }
+
+    #[test]
+    fn a_new_workspace_root_pane_is_the_pane_on_its_active_tab() {
+        let snapshot = RuntimeSnapshot {
+            connected: true,
+            error: None,
+            version: None,
+            protocol: None,
+            socket: "sock".into(),
+            session: "default".into(),
+            focused_pane_id: Some("w1:p1".into()),
+            focused_tab_id: Some("w1:t1".into()),
+            focused_workspace_id: Some("w1".into()),
+            workspaces: vec![
+                WorkspaceView {
+                    workspace_id: "w1".into(),
+                    label: "here".into(),
+                    focused: true,
+                    active_tab_id: Some("w1:t1".into()),
+                    root: None,
+                    branch: None,
+                    dirty: false,
+                },
+                WorkspaceView {
+                    workspace_id: "w3".into(),
+                    label: "next".into(),
+                    focused: false,
+                    active_tab_id: Some("w3:t1".into()),
+                    root: None,
+                    branch: None,
+                    dirty: false,
+                },
+            ],
+            tabs: Vec::new(),
+            panes: vec![
+                PaneView {
+                    pane_id: "w1:p1".into(),
+                    workspace_id: "w1".into(),
+                    tab_id: "w1:t1".into(),
+                    label: None,
+                    title: None,
+                    cwd: None,
+                    agent_status: "unknown".into(),
+                    agent: None,
+                    agent_name: None,
+                    focused: true,
+                    x: None,
+                    y: None,
+                    cols: None,
+                    rows: None,
+                },
+                PaneView {
+                    pane_id: "w3:p1".into(),
+                    workspace_id: "w3".into(),
+                    tab_id: "w3:t1".into(),
+                    label: None,
+                    title: None,
+                    cwd: None,
+                    agent_status: "unknown".into(),
+                    agent: None,
+                    agent_name: None,
+                    focused: false,
+                    x: None,
+                    y: None,
+                    cols: None,
+                    rows: None,
+                },
+            ],
+            agents: Vec::new(),
+        };
+        assert_eq!(root_pane_id(&snapshot, "w3").as_deref(), Some("w3:p1"));
+        assert_eq!(root_pane_id(&snapshot, "w9"), None);
     }
 
     #[test]

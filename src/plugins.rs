@@ -114,6 +114,13 @@ pub struct PluginManifest {
     pub files: Vec<std::path::PathBuf>,
     #[serde(default)]
     pub commands: Vec<String>,
+    /// When set, a panel of this plugin opens with Herdr control on.
+    #[serde(default, rename = "controlDefault", skip_serializing_if = "is_false")]
+    pub control_default: bool,
+}
+
+fn is_false(value: &bool) -> bool {
+    !value
 }
 
 #[derive(Deserialize)]
@@ -137,6 +144,8 @@ struct ManifestDraft {
     files: Vec<String>,
     #[serde(default)]
     commands: Vec<String>,
+    #[serde(default)]
+    control: Option<serde_json::Value>,
 }
 
 #[derive(Deserialize)]
@@ -250,6 +259,7 @@ pub fn parse_manifest(text: &str) -> anyhow::Result<PluginManifest> {
     let views = normalize_views(&draft.id, &draft.title, draft.views)?;
     let grants =
         crate::plugin_grant::parse_grants(draft.permissions, draft.files, draft.commands)?;
+    let control_default = control_default(draft.control, &grants.permissions)?;
     Ok(PluginManifest {
         id: draft.id,
         title: draft.title,
@@ -262,7 +272,27 @@ pub fn parse_manifest(text: &str) -> anyhow::Result<PluginManifest> {
         permissions: grants.permissions,
         files: grants.files,
         commands: grants.commands,
+        control_default,
     })
+}
+
+fn control_default(
+    value: Option<serde_json::Value>,
+    permissions: &[String],
+) -> anyhow::Result<bool> {
+    match value {
+        None | Some(serde_json::Value::Null) => Ok(false),
+        Some(serde_json::Value::String(text)) if text == "default" => {
+            if !permissions
+                .iter()
+                .any(|name| name == crate::plugin_grant::CONTROL)
+            {
+                bail!("\"control\": \"default\" requires the herdr:control permission");
+            }
+            Ok(true)
+        }
+        Some(_) => bail!("plugin control must be \"default\""),
+    }
 }
 
 impl PluginManifest {
@@ -702,6 +732,26 @@ mod tests {
             vec![PathBuf::from("/home/engel/projects/checkin/state")]
         );
         assert!(manifest.wants_bridge());
+        assert!(!manifest.control_default);
+    }
+
+    #[test]
+    fn control_default_opens_with_control_and_still_requires_the_permission() {
+        let manifest = parse_manifest(
+            r#"{"id":"checkin-report","title":"Check-in report","permissions":["herdr:control"],"control":"default"}"#,
+        )
+        .unwrap();
+        assert!(manifest.control_default);
+        let missing = parse_manifest(
+            r#"{"id":"checkin-report","title":"Check-in report","control":"default"}"#,
+        )
+        .unwrap_err();
+        assert!(missing.to_string().contains("herdr:control"));
+        let other = parse_manifest(
+            r#"{"id":"checkin-report","title":"Check-in report","permissions":["herdr:control"],"control":true}"#,
+        )
+        .unwrap_err();
+        assert!(other.to_string().contains("default"));
     }
 
     #[test]

@@ -222,6 +222,16 @@ describe("panel menu", () => {
       panel: { path: "notes/other.md" },
     });
   });
+
+  it("opens a plugin that asks for control with control on", () => {
+    const report: MenuPlugin = { id: "checkin-report", title: "Check-in report", controlDefault: true };
+    expect(showViewer(note, "plugin:checkin-report:checkin-report", [report])).toMatchObject({
+      type: "plugin",
+      plugin: "checkin-report",
+      control: true,
+    });
+    expect(showViewer(note, "plugin:welcome:welcome", plugins)).not.toHaveProperty("control");
+  });
 });
 
 function welcomePanel(): PanelConfig {

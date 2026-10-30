@@ -83,6 +83,25 @@ pub fn embedding_refusal(headers: &[(&str, &str)]) -> Option<&'static str> {
     None
 }
 
+/// A path the CLI should resolve against the caller's directory.
+/// Web addresses and `plugin:` ids stay as they were typed.
+pub fn is_filesystem_target(target: &str) -> bool {
+    let target = target.trim();
+    if target.is_empty() {
+        return false;
+    }
+    if http_url(target).is_some() || web_address(target).is_some() {
+        return false;
+    }
+    if target.starts_with("plugin:") {
+        return false;
+    }
+    if has_scheme(target) {
+        return false;
+    }
+    true
+}
+
 pub fn open_title(kind: &OpenKind) -> String {
     match kind {
         OpenKind::Browser { url, .. } => browser_title(url),

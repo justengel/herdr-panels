@@ -18,14 +18,105 @@ pub struct PaneControls {
 
 struct Slot {
     users: usize,
+    next_viewer: u64,
+    lease: PaneLease,
     applied_cols: u16,
     applied_rows: u16,
     want_cols: u16,
     want_rows: u16,
     spawning: bool,
     frames: broadcast::Sender<LiveFrame>,
+    roles: broadcast::Sender<LeaseNotice>,
     replay: Arc<Mutex<Replay>>,
     io: Option<Io>,
+}
+
+/// One connected view of a pane. `own` means that view is allowed to resize it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LeaseNotice {
+    pub viewer: u64,
+    pub own: bool,
+}
+
+/// Which connected view may change the pane's size.
+///
+/// The shell has one size. The view that is in use owns it. A second tab or
+/// the desktop can show the same frames, and it does not resize the pane until
+/// someone types, clicks, or scrolls there. A hidden owner hands the pane to
+/// another visible view.
+#[derive(Debug, Default, Clone)]
+pub struct PaneLease {
+    owner: Option<u64>,
+    active: Vec<u64>,
+}
+
+impl PaneLease {
+    pub fn allows_resize(&self, viewer: u64) -> bool {
+        self.owner == Some(viewer)
+    }
+
+    pub fn owner(&self) -> Option<u64> {
+        self.owner
+    }
+
+    /// A view became visible or hidden. The first visible view owns the pane.
+    /// Hiding the owner gives it to another visible view.
+    pub fn set_active(&mut self, viewer: u64, active: bool) -> Vec<LeaseNotice> {
+        let before = self.owner;
+        if active {
+            if !self.active.contains(&viewer) {
+                self.active.push(viewer);
+            }
+            if self.owner.is_none() {
+                self.owner = Some(viewer);
+            }
+        } else {
+            self.active.retain(|id| *id != viewer);
+            if self.owner == Some(viewer) {
+                self.owner = self.active.first().copied();
+            }
+        }
+        self.handoff(before)
+    }
+
+    /// The person typed, clicked, or scrolled in this view.
+    pub fn claim(&mut self, viewer: u64) -> Vec<LeaseNotice> {
+        let before = self.owner;
+        if !self.active.contains(&viewer) {
+            self.active.push(viewer);
+        }
+        self.owner = Some(viewer);
+        self.handoff(before)
+    }
+
+    pub fn leave(&mut self, viewer: u64) -> Vec<LeaseNotice> {
+        let before = self.owner;
+        self.active.retain(|id| *id != viewer);
+        if self.owner == Some(viewer) {
+            self.owner = self.active.first().copied();
+        }
+        self.handoff(before)
+    }
+
+    fn handoff(&self, before: Option<u64>) -> Vec<LeaseNotice> {
+        if before == self.owner {
+            return Vec::new();
+        }
+        let mut notes = Vec::new();
+        if let Some(old) = before {
+            notes.push(LeaseNotice {
+                viewer: old,
+                own: false,
+            });
+        }
+        if let Some(new) = self.owner {
+            notes.push(LeaseNotice {
+                viewer: new,
+                own: true,
+            });
+        }
+        notes
+    }
 }
 
 /// One decoded terminal frame, in the order Herdr produced it.
@@ -66,14 +157,51 @@ impl PaneControls {
         self.inner.lock().await.clear();
     }
 
-    pub async fn retain(&self, pane_id: &str) {
+    pub async fn retain(&self, pane_id: &str) -> Option<u64> {
         if !is_pane_id(pane_id) {
-            return;
+            return None;
         }
+        let mut map = self.inner.lock().await;
+        let slot = map.entry(pane_id.to_string()).or_insert_with(empty_slot);
+        slot.users += 1;
+        slot.next_viewer = slot.next_viewer.saturating_add(1);
+        Some(slot.next_viewer)
+    }
+
+    pub async fn subscribe_roles(&self, pane_id: &str) -> broadcast::Receiver<LeaseNotice> {
         let mut map = self.inner.lock().await;
         map.entry(pane_id.to_string())
             .or_insert_with(empty_slot)
-            .users += 1;
+            .roles
+            .subscribe()
+    }
+
+    pub async fn set_presence(&self, pane_id: &str, viewer: u64, active: bool) {
+        self.touch(pane_id, |lease| lease.set_active(viewer, active))
+            .await;
+    }
+
+    pub async fn claim(&self, pane_id: &str, viewer: u64) {
+        self.touch(pane_id, |lease| lease.claim(viewer)).await;
+    }
+
+    pub async fn allows_resize(&self, pane_id: &str, viewer: u64) -> bool {
+        let map = self.inner.lock().await;
+        map.get(pane_id)
+            .is_some_and(|slot| slot.lease.allows_resize(viewer))
+    }
+
+    async fn touch(&self, pane_id: &str, change: impl FnOnce(&mut PaneLease) -> Vec<LeaseNotice>) {
+        let mut map = self.inner.lock().await;
+        let Some(slot) = map.get_mut(pane_id) else {
+            return;
+        };
+        let notes = change(&mut slot.lease);
+        let roles = slot.roles.clone();
+        drop(map);
+        for note in notes {
+            let _ = roles.send(note);
+        }
     }
 
     pub async fn subscribe(&self, pane_id: &str) -> broadcast::Receiver<LiveFrame> {
@@ -104,14 +232,21 @@ impl PaneControls {
             .collect()
     }
 
-    pub async fn release(&self, pane_id: &str) {
+    pub async fn release(&self, pane_id: &str, viewer: u64) {
         let mut map = self.inner.lock().await;
         let Some(slot) = map.get_mut(pane_id) else {
             return;
         };
+        let notes = slot.lease.leave(viewer);
+        let roles = slot.roles.clone();
         slot.users = slot.users.saturating_sub(1);
         if slot.users == 0 {
             map.remove(pane_id);
+            return;
+        }
+        drop(map);
+        for note in notes {
+            let _ = roles.send(note);
         }
     }
 
@@ -154,16 +289,20 @@ impl PaneControls {
             }
         };
         match step {
-            Step::Current(tx) => match tx.send(resize_command(cols, rows)).await {
-                Ok(()) => Ok(()),
-                Err(_) => {
-                    let mut map = self.inner.lock().await;
-                    if let Some(slot) = map.get_mut(pane_id) {
-                        slot.io = None;
+            Step::Current(tx) => {
+                match tx.send(resize_command(cols, rows)).await {
+                    Ok(()) => Ok(()),
+                    Err(_) => {
+                        let mut map = self.inner.lock().await;
+                        if let Some(slot) = map.get_mut(pane_id) {
+                            slot.io = None;
+                            slot.spawning = true;
+                        }
+                        drop(map);
+                        self.spawn_into(pane_id, cols, rows).await
                     }
-                    Err("terminal size controller closed".into())
                 }
-            },
+            }
             Step::Spawn => self.spawn_into(pane_id, cols, rows).await,
             Step::Wait => Ok(()),
         }
@@ -195,11 +334,19 @@ impl PaneControls {
             slot.io.as_ref().map(|io| io.tx.clone())
         };
         let Some(tx) = tx else {
-            return Ok(());
+            return self
+                .replace_controller(pane_id, scroll_command(direction, lines, source))
+                .await;
         };
-        tx.send(scroll_command(direction, lines, source))
+        if tx
+            .send(scroll_command(direction, lines, source))
             .await
-            .map_err(|_| "terminal size controller closed".to_string())
+            .is_ok()
+        {
+            return Ok(());
+        }
+        self.replace_controller(pane_id, scroll_command(direction, lines, source))
+            .await
     }
 
     /// Forward a click or drag. Herdr delivers it only when the program asked for the mouse.
@@ -228,12 +375,14 @@ impl PaneControls {
             };
             slot.io.as_ref().map(|io| io.tx.clone())
         };
+        let line = mouse_command(action, button, column, row, modifiers);
         let Some(tx) = tx else {
-            return Ok(());
+            return self.replace_controller(pane_id, line).await;
         };
-        tx.send(mouse_command(action, button, column, row, modifiers))
-            .await
-            .map_err(|_| "terminal size controller closed".to_string())
+        if tx.send(line.clone()).await.is_ok() {
+            return Ok(());
+        }
+        self.replace_controller(pane_id, line).await
     }
 
     async fn spawn_into(&self, pane_id: &str, cols: u16, rows: u16) -> Result<(), String> {
@@ -281,18 +430,53 @@ impl PaneControls {
         }
         Ok(())
     }
+
+    /// The size controller is exclusive. Start another when the previous one was taken over.
+    async fn replace_controller(&self, pane_id: &str, line: String) -> Result<(), String> {
+        let (cols, rows) = {
+            let mut map = self.inner.lock().await;
+            let Some(slot) = map.get_mut(pane_id) else {
+                return Ok(());
+            };
+            if slot.users == 0 {
+                return Ok(());
+            }
+            slot.io = None;
+            if slot.spawning || slot.want_cols == 0 || slot.want_rows == 0 {
+                return Ok(());
+            }
+            slot.spawning = true;
+            (slot.want_cols, slot.want_rows)
+        };
+        self.spawn_into(pane_id, cols, rows).await?;
+        let tx = {
+            let map = self.inner.lock().await;
+            map.get(pane_id)
+                .and_then(|slot| slot.io.as_ref().map(|io| io.tx.clone()))
+        };
+        let Some(tx) = tx else {
+            return Err("terminal size controller closed".into());
+        };
+        tx.send(line)
+            .await
+            .map_err(|_| "terminal size controller closed".to_string())
+    }
 }
 
 fn empty_slot() -> Slot {
     let (frames, _) = broadcast::channel(64);
+    let (roles, _) = broadcast::channel(16);
     Slot {
         users: 0,
+        next_viewer: 0,
+        lease: PaneLease::default(),
         applied_cols: 0,
         applied_rows: 0,
         want_cols: 0,
         want_rows: 0,
         spawning: false,
         frames,
+        roles,
         replay: Arc::new(Mutex::new(Replay {
             generation: 0,
             next_seq: 0,
@@ -367,6 +551,23 @@ async fn spawn_control(
     replay: Arc<Mutex<Replay>>,
     generation: u64,
 ) -> Result<Io, String> {
+    let mut child = spawn_herdr(session, &control_args(pane_id, cols, rows))?;
+    let stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| "herdr size controller has no stdin".to_string())?;
+    if let Some(stdout) = child.stdout.take() {
+        tokio::spawn(read_frames(stdout, frames, replay, generation));
+    }
+    if let Some(stderr) = child.stderr.take() {
+        tokio::spawn(discard(stderr));
+    }
+    let (tx, rx) = mpsc::channel(8);
+    tokio::spawn(write_commands(stdin, rx));
+    Ok(Io { tx, child })
+}
+
+fn spawn_herdr(session: Option<&str>, args: &[String]) -> Result<Child, String> {
     let mut command = Command::new("herdr");
     command.kill_on_drop(true);
     if let Some(session) = session {
@@ -376,30 +577,19 @@ async fn spawn_control(
         command.env_remove("HERDR_SESSION");
     }
     command
-        .args(control_args(pane_id, cols, rows))
+        .args(args)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
     crate::quiet_process::quiet_async(&mut command);
-    let mut child = command
+    command
         .spawn()
-        .map_err(|err| format!("could not start herdr to size the shell: {err}"))?;
-    let stdin = child
-        .stdin
-        .take()
-        .ok_or_else(|| "herdr size controller has no stdin".to_string())?;
-    if let Some(stdout) = child.stdout.take() {
-        tokio::spawn(read_frames(stdout, frames, replay, generation));
-    }
-    if let Some(stderr) = child.stderr.take() {
-        tokio::spawn(async move {
-            let mut lines = BufReader::new(stderr).lines();
-            while let Ok(Some(_)) = lines.next_line().await {}
-        });
-    }
-    let (tx, rx) = mpsc::channel(8);
-    tokio::spawn(write_commands(stdin, rx));
-    Ok(Io { tx, child })
+        .map_err(|err| format!("could not start herdr to size the shell: {err}"))
+}
+
+async fn discard(reader: impl tokio::io::AsyncRead + Unpin) {
+    let mut lines = BufReader::new(reader).lines();
+    while let Ok(Some(_)) = lines.next_line().await {}
 }
 
 async fn read_frames(
@@ -557,6 +747,20 @@ pub fn control_args(pane_id: &str, cols: u16, rows: u16) -> Vec<String> {
     ]
 }
 
+/// Read the pane without replacing another viewer's size controller.
+pub fn observe_args(pane_id: &str, cols: u16, rows: u16) -> Vec<String> {
+    vec![
+        "terminal".into(),
+        "session".into(),
+        "observe".into(),
+        pane_id.into(),
+        "--cols".into(),
+        cols.to_string(),
+        "--rows".into(),
+        rows.to_string(),
+    ]
+}
+
 const MIN_COLS: u16 = 2;
 const MAX_COLS: u16 = 500;
 const MIN_ROWS: u16 = 1;
@@ -565,6 +769,95 @@ const MAX_ROWS: u16 = 200;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_visible_viewer_owns_the_pane_until_someone_uses_another() {
+        let mut lease = PaneLease::default();
+        let desktop = lease.set_active(1, true);
+        assert_eq!(
+            desktop,
+            vec![LeaseNotice {
+                viewer: 1,
+                own: true
+            }]
+        );
+        assert!(lease.allows_resize(1));
+        assert!(lease.set_active(2, true).is_empty());
+        assert!(!lease.allows_resize(2));
+
+        assert_eq!(
+            lease.claim(2),
+            vec![
+                LeaseNotice {
+                    viewer: 1,
+                    own: false
+                },
+                LeaseNotice {
+                    viewer: 2,
+                    own: true
+                },
+            ]
+        );
+        assert!(lease.allows_resize(2));
+        assert!(!lease.allows_resize(1));
+    }
+
+    #[test]
+    fn hiding_the_owner_hands_the_pane_to_the_other_visible_viewer() {
+        let mut lease = PaneLease::default();
+        lease.set_active(1, true);
+        lease.set_active(2, true);
+        assert_eq!(
+            lease.set_active(1, false),
+            vec![
+                LeaseNotice {
+                    viewer: 1,
+                    own: false
+                },
+                LeaseNotice {
+                    viewer: 2,
+                    own: true
+                },
+            ]
+        );
+        assert_eq!(lease.owner(), Some(2));
+        assert!(lease.set_active(3, false).is_empty());
+        assert_eq!(lease.owner(), Some(2));
+    }
+
+    #[test]
+    fn closing_the_owner_hands_the_pane_to_a_remaining_viewer() {
+        let mut lease = PaneLease::default();
+        lease.set_active(1, true);
+        lease.set_active(2, true);
+        assert_eq!(lease.leave(2), Vec::new());
+        assert_eq!(lease.owner(), Some(1));
+
+        let mut lease = PaneLease::default();
+        lease.set_active(1, true);
+        lease.set_active(2, true);
+        assert_eq!(
+            lease.leave(1),
+            vec![
+                LeaseNotice {
+                    viewer: 1,
+                    own: false
+                },
+                LeaseNotice {
+                    viewer: 2,
+                    own: true
+                },
+            ]
+        );
+        assert_eq!(
+            lease.leave(2),
+            vec![LeaseNotice {
+                viewer: 2,
+                own: false
+            }]
+        );
+        assert_eq!(lease.owner(), None);
+    }
 
     #[test]
     fn mouse_command_uses_herdr_names() {
@@ -644,5 +937,15 @@ mod tests {
             args.join(" "),
             "terminal session control w1:p1 --cols 70 --rows 40 --takeover"
         );
+    }
+
+    #[test]
+    fn observe_args_watch_the_pane_without_taking_it_over() {
+        let args = observe_args("w1:p1", 70, 40);
+        assert_eq!(
+            args.join(" "),
+            "terminal session observe w1:p1 --cols 70 --rows 40"
+        );
+        assert!(!args.iter().any(|arg| arg == "--takeover"));
     }
 }

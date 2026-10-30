@@ -218,6 +218,25 @@ pub fn consent_text(
     lines.join("\n")
 }
 
+/// Install text. The permission list stays, and a plugin that opens with control says so.
+pub fn install_notice(
+    id: &str,
+    title: &str,
+    permissions: &[String],
+    files: &[PathBuf],
+    commands: &[String],
+    control_default: bool,
+) -> String {
+    let mut text = consent_text(id, title, permissions, files, commands);
+    if control_default {
+        if !text.ends_with('\n') {
+            text.push('\n');
+        }
+        text.push_str("Panels of this plugin open with control on.\n");
+    }
+    text
+}
+
 /// `File` is a readable file inside a grant. `Missing` is allowed, but not on disk yet.
 #[derive(Debug, PartialEq, Eq)]
 pub enum ReadPath {
@@ -845,6 +864,9 @@ mod tests {
         assert!(text.contains("Set this panel's zoom"));
         let typing = consent_text("report", "Report", &[CONTROL.into()], &[], &[]);
         assert!(typing.contains("scroll one"));
+        let notice = install_notice("report", "Report", &[CONTROL.into()], &[], &[], true);
+        assert!(notice.contains("scroll one"));
+        assert!(notice.contains("open with control on"));
     }
 
     #[test]

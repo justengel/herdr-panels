@@ -34,6 +34,9 @@ enum ClientCommand {
     Status,
     /// Arrange the open layout
     Panel {
+        /// Herdr workspace to edit. Defaults to the focused space.
+        #[arg(long, global = true)]
+        space: Option<String>,
         #[command(subcommand)]
         command: PanelCommand,
     },
@@ -88,6 +91,9 @@ enum PanelCommand {
         /// Also split the Herdr pane when the source is a terminal
         #[arg(long)]
         herdr: bool,
+        /// Turn on control for a plugin panel
+        #[arg(long)]
+        control: bool,
     },
     /// Close a panel. The last panel stays open
     Close { panel: String },
@@ -119,6 +125,9 @@ enum PanelCommand {
         plugin: Option<String>,
         #[arg(long)]
         pane: Option<String>,
+        /// Turn on control for a plugin panel
+        #[arg(long)]
+        control: bool,
     },
     /// Fill the page with one panel. Omit the panel to restore the layout
     Zoom { panel: Option<String> },
@@ -154,6 +163,9 @@ enum PanelCommand {
         direction: String,
         #[arg(long)]
         title: Option<String>,
+        /// Turn on control when the target is a plugin panel
+        #[arg(long)]
+        control: bool,
     },
 }
 
@@ -187,10 +199,10 @@ pub async fn execute() -> anyhow::Result<()> {
     let config_dir = prepare_config_dir(cli.config)?;
     match cli.command {
         ClientCommand::Status => status(&config_dir, cli.url).await,
-        ClientCommand::Panel { command } => {
+        ClientCommand::Panel { space, command } => {
             let base = server_url(&config_dir, cli.url)?;
             let token = crate::auth::session_token(&config_dir)?;
-            panel_command(&base, &token, command).await
+            panel_command(&base, &token, space, command).await
         }
         ClientCommand::Plugin { command } => match command {
             PluginCommand::List => {
@@ -247,12 +259,13 @@ fn confirm_install(manifest: &plugins::PluginManifest, yes: bool) -> anyhow::Res
     if !crate::plugin_grant::needs_consent(&manifest.permissions) {
         return Ok(());
     }
-    let text = crate::plugin_grant::consent_text(
+    let text = crate::plugin_grant::install_notice(
         &manifest.id,
         &manifest.title,
         &manifest.permissions,
         &manifest.files,
         &manifest.commands,
+        manifest.control_default,
     );
     println!("{text}");
     if yes {
@@ -311,10 +324,16 @@ async fn status(config_dir: &std::path::Path, url: Option<String>) -> anyhow::Re
     }
 }
 
-async fn panel_command(base: &str, token: &str, command: PanelCommand) -> anyhow::Result<()> {
+async fn panel_command(
+    base: &str,
+    token: &str,
+    space: Option<String>,
+    command: PanelCommand,
+) -> anyhow::Result<()> {
     match command {
         PanelCommand::List => {
-            let body = call(base, token, "GET", "/api/agent/workspace", None).await?;
+            let path = format!("/api/agent/workspace{}", space_query(space));
+            let body = call(base, token, "GET", &path, None).await?;
             let value: Value = serde_json::from_str(&body)?;
             for panel in value
                 .get("panels")
@@ -342,6 +361,7 @@ async fn panel_command(base: &str, token: &str, command: PanelCommand) -> anyhow
             plugin,
             pane,
             herdr,
+            control,
         } => {
             let mut body = json!({
                 "panelId": from,
@@ -351,9 +371,11 @@ async fn panel_command(base: &str, token: &str, command: PanelCommand) -> anyhow
             if let Some(title) = title {
                 body["title"] = json!(title);
             }
-            if let Some(panel) = panel_config(&kind, path, page, plugin, pane)? {
+            if let Some(panel) = panel_config(&kind, path, page, plugin, pane, control)? {
                 body["panel"] = panel;
             }
+            attach_space(&mut body, space);
+            attach_control(&mut body, control);
             let response = call(base, token, "POST", "/api/agent/split", Some(body)).await?;
             println!("{response}");
             Ok(())
@@ -364,7 +386,7 @@ async fn panel_command(base: &str, token: &str, command: PanelCommand) -> anyhow
                 token,
                 "POST",
                 "/api/agent/close",
-                Some(json!({ "panelId": panel })),
+                Some(with_space(json!({ "panelId": panel }), space)),
             )
             .await?;
             println!("{response}");
@@ -376,7 +398,7 @@ async fn panel_command(base: &str, token: &str, command: PanelCommand) -> anyhow
                 token,
                 "POST",
                 "/api/agent/resize",
-                Some(json!({ "panelId": panel, "ratio": ratio })),
+                Some(with_space(json!({ "panelId": panel, "ratio": ratio }), space)),
             )
             .await?;
             println!("{response}");
@@ -388,7 +410,10 @@ async fn panel_command(base: &str, token: &str, command: PanelCommand) -> anyhow
                 token,
                 "POST",
                 "/api/agent/move",
-                Some(json!({ "panelId": panel, "target": to, "place": place })),
+                Some(with_space(
+                    json!({ "panelId": panel, "target": to, "place": place }),
+                    space,
+                )),
             )
             .await?;
             println!("{response}");
@@ -402,15 +427,18 @@ async fn panel_command(base: &str, token: &str, command: PanelCommand) -> anyhow
             page,
             plugin,
             pane,
+            control,
         } => {
             let mut body = json!({ "panelId": panel });
             if let Some(title) = title {
                 body["title"] = json!(title);
             }
             if let Some(kind) = kind {
-                body["panel"] = panel_config(&kind, path, page, plugin, pane)?
+                body["panel"] = panel_config(&kind, path, page, plugin, pane, control)?
                     .context("panel kind was empty")?;
             }
+            attach_space(&mut body, space);
+            attach_control(&mut body, control);
             let response = call(base, token, "POST", "/api/agent/update", Some(body)).await?;
             println!("{response}");
             Ok(())
@@ -421,7 +449,7 @@ async fn panel_command(base: &str, token: &str, command: PanelCommand) -> anyhow
                 token,
                 "POST",
                 "/api/agent/zoom",
-                Some(json!({ "panelId": panel })),
+                Some(with_space(json!({ "panelId": panel }), space)),
             )
             .await?;
             println!("{response}");
@@ -434,6 +462,12 @@ async fn panel_command(base: &str, token: &str, command: PanelCommand) -> anyhow
             columns,
             rows,
         } => {
+            if space
+                .as_ref()
+                .is_some_and(|value| !value.trim().is_empty())
+            {
+                anyhow::bail!("visit already searches every space");
+            }
             if panels.is_empty() {
                 if size.is_some() || columns.is_some() || rows.is_some() || arrange.is_some() {
                     anyhow::bail!("name the panels in the visit");
@@ -496,8 +530,15 @@ async fn panel_command(base: &str, token: &str, command: PanelCommand) -> anyhow
             from,
             direction,
             title,
+            control,
         } => {
-            let mut body = json!({ "target": target, "direction": direction });
+            if control && !target.trim().starts_with("plugin:") {
+                anyhow::bail!("--control is only for a plugin panel");
+            }
+            let mut body = json!({
+                "target": cli_open_target(&std::env::current_dir().context("reading the working directory")?, &target),
+                "direction": direction,
+            });
             if let Some(panel) = panel {
                 body["panelId"] = json!(panel);
             }
@@ -507,6 +548,8 @@ async fn panel_command(base: &str, token: &str, command: PanelCommand) -> anyhow
             if let Some(title) = title {
                 body["title"] = json!(title);
             }
+            attach_space(&mut body, space);
+            attach_control(&mut body, control);
             let response = call(base, token, "POST", "/api/agent/open", Some(body)).await?;
             println!("{response}");
             Ok(())
@@ -520,7 +563,11 @@ fn panel_config(
     page: Option<String>,
     plugin: Option<String>,
     pane: Option<String>,
+    control: bool,
 ) -> anyhow::Result<Option<Value>> {
+    if control && kind != "plugin" {
+        bail!("--control is only for a plugin panel");
+    }
     let panel = match kind {
         "herdr" => json!({ "type": "herdr", "paneId": pane }),
         "markdown" => {
@@ -533,7 +580,11 @@ fn panel_config(
             json!({ "type": "iframe", "url": page.context("--page is required for an iframe panel")?, "proxy": false })
         }
         "plugin" => {
-            json!({ "type": "plugin", "plugin": plugin.context("--plugin is required for a plugin panel")? })
+            let mut panel = json!({ "type": "plugin", "plugin": plugin.context("--plugin is required for a plugin panel")? });
+            if control {
+                panel["control"] = json!(true);
+            }
+            panel
         }
         "tabs" => json!({
             "type": "tabs",
@@ -550,6 +601,68 @@ fn panel_config(
         other => bail!("unknown panel kind {other}"),
     };
     Ok(Some(panel))
+}
+
+fn with_space(mut body: Value, space: Option<String>) -> Value {
+    attach_space(&mut body, space);
+    body
+}
+
+fn attach_space(body: &mut Value, space: Option<String>) {
+    if let Some(space) = space.map(|value| value.trim().to_string()).filter(|value| !value.is_empty()) {
+        body["space"] = json!(space);
+    }
+}
+
+fn attach_control(body: &mut Value, control: bool) {
+    if control {
+        body["control"] = json!(true);
+    }
+}
+
+fn space_query(space: Option<String>) -> String {
+    let Some(space) = space.map(|value| value.trim().to_string()).filter(|value| !value.is_empty()) else {
+        return String::new();
+    };
+    let mut encoded = String::new();
+    for byte in space.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                encoded.push(byte as char);
+            }
+            _ => encoded.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    format!("?space={encoded}")
+}
+
+/// A relative file from the CLI is the caller's file. The viewer still resolves a relative path from the page against its content roots.
+pub(crate) fn cli_open_target(cwd: &std::path::Path, target: &str) -> String {
+    let target = target.trim();
+    if !crate::open_target::is_filesystem_target(target) {
+        return target.to_string();
+    }
+    let path = std::path::Path::new(target);
+    if path.is_absolute() {
+        return crate::files::plain_path(path);
+    }
+    let joined = cwd.join(path);
+    let absolute = joined.canonicalize().unwrap_or_else(|_| normalize_dots(&joined));
+    crate::files::plain_path(&absolute)
+}
+
+fn normalize_dots(path: &std::path::Path) -> std::path::PathBuf {
+    let mut out = std::path::PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                out.pop();
+            }
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
 }
 
 fn weight_list(raw: Option<String>) -> anyhow::Result<Vec<f64>> {
@@ -627,4 +740,40 @@ async fn call(
         bail!("{status}: {text}");
     }
     Ok(text)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::cli_open_target;
+
+    #[test]
+    fn a_relative_open_target_uses_the_caller_directory() {
+        let dir = std::env::temp_dir().join(format!(
+            "hwp-cli-open-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("note.md"), "hi\n").unwrap();
+        let sent = cli_open_target(&dir, "note.md");
+        assert!(
+            std::path::Path::new(&sent).is_absolute(),
+            "the viewer should receive an absolute path, got {sent}"
+        );
+        assert!(sent.ends_with("note.md"), "{sent}");
+        assert_ne!(sent, "note.md");
+        let missing = cli_open_target(&dir, "notes/new.md");
+        assert!(std::path::Path::new(&missing).is_absolute(), "{missing}");
+        assert!(missing.ends_with("new.md"), "{missing}");
+        assert_eq!(
+            cli_open_target(&dir, "plugin:checkin-report"),
+            "plugin:checkin-report"
+        );
+        assert_eq!(cli_open_target(&dir, "https://example.com/a"), "https://example.com/a");
+        assert_eq!(cli_open_target(&dir, "example.com"), "example.com");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

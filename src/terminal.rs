@@ -18,14 +18,18 @@ pub async fn drive(
     _lines: Option<u32>,
     socket: WebSocket,
 ) {
+    let Some(viewer) = state.controls.retain(&pane_id).await else {
+        return;
+    };
     let (mut sink, mut stream) = socket.split();
     let (tx, mut rx) = mpsc::channel::<String>(32);
-    state.controls.retain(&pane_id).await;
     let mut frames = state.controls.subscribe(&pane_id).await;
+    let mut roles = state.controls.subscribe_roles(&pane_id).await;
     let backlog = state.controls.backlog(&pane_id).await;
     let mut seen_generation = 0u64;
     let mut seen_seq = 0u64;
     let mut frames_closed = false;
+    let mut paused = false;
     let poller = {
         let state = state.clone();
         let pane_id = pane_id.clone();
@@ -33,26 +37,47 @@ pub async fn drive(
             poll_loop(state, pane_id, tx).await;
         })
     };
-    for frame in backlog {
-        seen_generation = frame.generation;
-        seen_seq = frame.seq;
-        if sink.send(Message::Text(frame.body.into())).await.is_err() {
-            poller.abort();
-            state.controls.release(&pane_id).await;
-            return;
-        }
+    if send_frames(&mut sink, &backlog, &mut seen_generation, &mut seen_seq)
+        .await
+        .is_err()
+    {
+        poller.abort();
+        state.controls.release(&pane_id, viewer).await;
+        return;
     }
 
     loop {
         tokio::select! {
             outgoing = rx.recv() => {
                 let Some(text) = outgoing else { break };
+                if paused {
+                    continue;
+                }
                 if sink.send(Message::Text(text.into())).await.is_err() {
                     break;
                 }
             }
+            role = roles.recv() => {
+                match role {
+                    Ok(note) if note.viewer == viewer => {
+                        let payload = role_message(note.own);
+                        if sink.send(Message::Text(payload.into())).await.is_err() {
+                            break;
+                        }
+                    }
+                    Ok(_) => {}
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                        let own = state.controls.allows_resize(&pane_id, viewer).await;
+                        let payload = role_message(own);
+                        if sink.send(Message::Text(payload.into())).await.is_err() {
+                            break;
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                }
+            }
             frame = async {
-                if frames_closed {
+                if paused || frames_closed {
                     std::future::pending().await
                 } else {
                     frames.recv().await
@@ -78,13 +103,30 @@ pub async fn drive(
             incoming = stream.next() => {
                 match incoming {
                     Some(Ok(Message::Text(text))) => {
-                        match handle_client(&state, &pane_id, text.as_ref()).await {
-                            Ok(Some(notice)) => {
+                        match handle_client(&state, &pane_id, viewer, text.as_ref()).await {
+                            Ok(Outcome::None) => {}
+                            Ok(Outcome::Text(notice)) => {
                                 if sink.send(Message::Text(notice.into())).await.is_err() {
                                     break;
                                 }
                             }
-                            Ok(None) => {}
+                            Ok(Outcome::Paused(idle)) => {
+                                paused = idle;
+                                if !idle {
+                                    let caught_up = state.controls.backlog(&pane_id).await;
+                                    if send_frames(
+                                        &mut sink,
+                                        &caught_up,
+                                        &mut seen_generation,
+                                        &mut seen_seq,
+                                    )
+                                    .await
+                                    .is_err()
+                                    {
+                                        break;
+                                    }
+                                }
+                            }
                             Err(fault) => {
                                 let payload = json!({
                                     "type": fault.kind(),
@@ -109,16 +151,64 @@ pub async fn drive(
         }
     }
     poller.abort();
-    state.controls.release(&pane_id).await;
+    state.controls.release(&pane_id, viewer).await;
+}
+
+async fn send_frames(
+    sink: &mut futures_util::stream::SplitSink<WebSocket, Message>,
+    frames: &[crate::terminal_size::LiveFrame],
+    seen_generation: &mut u64,
+    seen_seq: &mut u64,
+) -> Result<(), ()> {
+    for frame in frames {
+        *seen_generation = frame.generation;
+        *seen_seq = frame.seq;
+        if sink.send(Message::Text(frame.body.clone().into())).await.is_err() {
+            return Err(());
+        }
+    }
+    Ok(())
+}
+
+fn role_message(own: bool) -> String {
+    json!({
+        "type": "terminalRole",
+        "role": if own { "own" } else { "watch" },
+    })
+    .to_string()
+}
+
+enum Outcome {
+    None,
+    Text(String),
+    /// True while this view is hidden and should not be sent frames.
+    Paused(bool),
 }
 
 async fn handle_client(
     state: &AppState,
     pane_id: &str,
+    viewer: u64,
     text: &str,
-) -> Result<Option<String>, Fault> {
+) -> Result<Outcome, Fault> {
     let value: Value = serde_json::from_str(text).map_err(|err| Fault::Input(err.to_string()))?;
-    if value.get("type").and_then(Value::as_str) == Some("resize") {
+    let kind = value.get("type").and_then(Value::as_str);
+    if kind == Some("presence") {
+        let active = value
+            .get("active")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        state.controls.set_presence(pane_id, viewer, active).await;
+        return Ok(Outcome::Paused(!active));
+    }
+    if kind == Some("claim") {
+        state.controls.claim(pane_id, viewer).await;
+        return Ok(Outcome::None);
+    }
+    if kind == Some("resize") {
+        if !state.controls.allows_resize(pane_id, viewer).await {
+            return Ok(Outcome::Text(role_message(false)));
+        }
         let cols =
             dimension(&value, "cols").ok_or_else(|| Fault::Size("cols must be a number".into()))?;
         let rows =
@@ -128,11 +218,12 @@ async fn handle_client(
             .fit(pane_id, cols, rows)
             .await
             .map_err(Fault::Size)?;
-        return Ok(Some(
+        return Ok(Outcome::Text(
             json!({"type": "resized", "cols": cols, "rows": rows}).to_string(),
         ));
     }
-    if value.get("type").and_then(Value::as_str) == Some("scroll") {
+    if kind == Some("scroll") {
+        state.controls.claim(pane_id, viewer).await;
         let direction = value.get("direction").and_then(Value::as_str).unwrap_or("");
         let source = value
             .get("source")
@@ -145,10 +236,13 @@ async fn handle_client(
             .scroll(pane_id, direction, lines, source)
             .await
             .map_err(Fault::Size)?;
-        return Ok(None);
+        return Ok(Outcome::None);
     }
-    if value.get("type").and_then(Value::as_str) == Some("mouse") {
+    if kind == Some("mouse") {
         let action = value.get("action").and_then(Value::as_str).unwrap_or("");
+        if action != "move" {
+            state.controls.claim(pane_id, viewer).await;
+        }
         let button = value
             .get("button")
             .and_then(Value::as_str)
@@ -167,13 +261,16 @@ async fn handle_client(
             .mouse(pane_id, action, button, column, row, modifiers)
             .await
             .map_err(Fault::Size)?;
-        return Ok(None);
+        return Ok(Outcome::None);
+    }
+    if matches!(kind, Some("key" | "text" | "keys")) {
+        state.controls.claim(pane_id, viewer).await;
     }
     let client = state.runtime.client().clone();
     apply_text(&client, pane_id, text)
         .await
         .map_err(Fault::Input)?;
-    Ok(None)
+    Ok(Outcome::None)
 }
 
 enum Fault {

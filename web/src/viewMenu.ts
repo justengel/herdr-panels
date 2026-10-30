@@ -15,6 +15,8 @@ export interface MenuPlugin {
   id: string;
   title: string;
   views?: PluginViewInfo[];
+  /** Open this plugin with Herdr control on. */
+  controlDefault?: boolean;
 }
 
 export interface MenuEntry {
@@ -389,11 +391,14 @@ function applyViewer(
   const found = findView(choice, plugins);
   if (!found) return panel;
   const config = panel.type === "plugin" && panel.plugin === found.plugin.id ? panel.config : undefined;
+  const keepControl = panel.type === "plugin" && panel.plugin === found.plugin.id && Boolean(panel.control);
+  const control = keepControl || Boolean(found.plugin.controlDefault);
   const base: PanelConfig = {
     type: "plugin",
     plugin: found.plugin.id,
     view: found.view.id,
     ...(config ? { config } : {}),
+    ...(control ? { control: true } : {}),
   };
   if (found.view.opens.length === 0) return base;
   if (subject.kind === "directory" && found.view.opens.includes("directory")) {

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { api, wsUrl, type DeskFile, type HerdrCtlStatus } from "./api";
+import { api, wsUrl, type DeskFile, type HerdrCtlStatus, type ViewerHealth } from "./api";
 import type { HerdrStatusAction } from "./herdrStatus";
 import { DesignProvider } from "./design";
 import { highlight, inspectPanel } from "./inspect";
@@ -63,6 +63,7 @@ import {
   spaceReturnFocus,
   readSpaceLayouts,
   saveSpaceLayout,
+  paneOnActiveTab,
   seedSpaceLayout,
   spaceLayoutKey,
   writeSpaceMap,
@@ -115,6 +116,8 @@ export function App() {
   const [openMenuToken, setOpenMenuToken] = useState(0);
   const [herdrCtl, setHerdrCtl] = useState<HerdrCtlStatus | null>(null);
   const [herdrBusy, setHerdrBusy] = useState(false);
+  const [viewer, setViewer] = useState<ViewerHealth | null>(null);
+  const [viewerDown, setViewerDown] = useState(false);
   const [deskReady, setDeskReady] = useState(false);
   const saveRef = useRef(0);
   const noticeRef = useRef(0);
@@ -209,6 +212,17 @@ export function App() {
       );
     };
     refreshCtl();
+    void api.health().then(
+      (next) => {
+        if (!stopped) {
+          setViewer(next);
+          setViewerDown(false);
+        }
+      },
+      () => {
+        if (!stopped) setViewerDown(true);
+      },
+    );
     const refreshPlugins = () => {
       void api.plugins().then(
         (list) => {
@@ -451,7 +465,13 @@ export function App() {
     saveSpaceLayout(spaceRef.current, doc.root);
     spaceRef.current = focusedSpaceId;
     writeSpaceMap(focusedSpaceId);
-    showSpaceLayout(doc, layoutForSpace(focusedSpaceId, seedSpaceLayout()));
+    let root = layoutForSpace(focusedSpaceId, seedSpaceLayout());
+    if (!loadSpaceLayout(focusedSpaceId)) {
+      const pane = runtimeRef.current ? paneOnActiveTab(runtimeRef.current, focusedSpaceId) : null;
+      root = bindTerminalPane(root, pane?.paneId ?? null);
+      saveSpaceLayout(focusedSpaceId, root);
+    }
+    showSpaceLayout(doc, root);
   }, [deskReady, focusedSpaceId, showSpaceLayout]);
 
   useEffect(() => {
@@ -592,6 +612,7 @@ export function App() {
         spaceId?: string;
         arrange?: string;
         panels?: { panelId?: string; spaceId?: string }[];
+        space?: string | null;
         sizes?: number[];
         columns?: number[];
         rows?: number[];
@@ -627,6 +648,7 @@ export function App() {
         return;
       }
       if (msg.type === "zoom") {
+        if (msg.space && spaceRef.current && msg.space !== spaceRef.current) return;
         setZoomedId(msg.panelId ?? null);
         return;
       }
@@ -785,7 +807,11 @@ export function App() {
   }
 
   function panelChoice(type: PanelConfig["type"], pluginId?: string): PanelConfig {
-    if (type === "plugin" && pluginId) return { type: "plugin", plugin: pluginId };
+    if (type === "plugin" && pluginId) {
+      return plugins.some((item) => item.id === pluginId && item.controlDefault)
+        ? { type: "plugin", plugin: pluginId, control: true }
+        : { type: "plugin", plugin: pluginId };
+    }
     if (type === "explorer") {
       const space = runtime?.workspaces.find((item) => item.focused) ?? runtime?.workspaces[0];
       const pane =
@@ -926,6 +952,8 @@ export function App() {
         />
         <TopBar
           runtime={runtime}
+          viewer={viewer}
+          viewerDown={viewerDown}
           herdrCtl={herdrCtl}
           herdrBusy={herdrBusy}
           notice={notice}

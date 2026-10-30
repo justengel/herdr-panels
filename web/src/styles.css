@@ -208,7 +208,33 @@ button.status:hover:not(:disabled) {
 }
 
 .status.live .dot { background: var(--idle); }
+.status.wait .dot { background: var(--unknown); }
 .status.update .dot { background: var(--done); }
+
+.status-card {
+  position: fixed;
+  z-index: 70;
+  margin: 0;
+  min-width: 240px;
+  padding: 8px 10px;
+  background: var(--bg-elev);
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 35%);
+  font-size: 12px;
+  display: grid;
+  gap: 4px;
+}
+
+.status-card div {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr);
+  column-gap: 8px;
+  align-items: baseline;
+}
+
+.status-card dt { color: var(--muted); }
+.status-card dd { margin: 0; }
 
 .workspace {
   position: relative;

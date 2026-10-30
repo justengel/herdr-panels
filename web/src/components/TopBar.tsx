@@ -1,10 +1,14 @@
-import { useState } from "react";
-import type { HerdrCtlStatus } from "../api";
+import { useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import type { HerdrCtlStatus, ViewerHealth } from "../api";
 import { herdrStatusView, type HerdrStatusAction } from "../herdrStatus";
+import { panelsStatusView, type PanelsLink } from "../panelsStatus";
 import type { RuntimeSnapshot } from "../types";
 
 interface Props {
   runtime: RuntimeSnapshot | null;
+  viewer: ViewerHealth | null;
+  viewerDown: boolean;
   herdrCtl: HerdrCtlStatus | null;
   herdrBusy: boolean;
   notice: string | null;
@@ -24,6 +28,8 @@ interface Props {
 
 export function TopBar({
   runtime,
+  viewer,
+  viewerDown,
   herdrCtl,
   herdrBusy,
   notice,
@@ -165,6 +171,7 @@ export function TopBar({
       <button type="button" className="accent" title="Insert a panel and choose what it shows" onClick={onAddPanel}>
         Add panel
       </button>
+      <PanelsChip link={panelsLink(viewer, viewerDown)} />
       {status.action ? (
         <button
           type="button"
@@ -184,5 +191,58 @@ export function TopBar({
       )}
     </header>
     </div>
+  );
+}
+
+function panelsLink(viewer: ViewerHealth | null, viewerDown: boolean): PanelsLink {
+  if (viewer) {
+    return {
+      state: "up",
+      version: viewer.version,
+      dev: viewer.dev,
+      build: viewer.build,
+      address: window.location.origin,
+      port: window.location.port,
+    };
+  }
+  return viewerDown ? { state: "down" } : { state: "pending" };
+}
+
+function PanelsChip({ link }: { link: PanelsLink }) {
+  const view = panelsStatusView(link);
+  const chip = useRef<HTMLSpanElement>(null);
+  const [box, setBox] = useState<{ top: number; right: number } | null>(null);
+  function place() {
+    const rect = chip.current?.getBoundingClientRect();
+    if (!rect) return;
+    setBox({ top: rect.bottom + 6, right: Math.max(8, window.innerWidth - rect.right) });
+  }
+  const open = box !== null && view.lines.length > 0;
+  return (
+    <span
+      ref={chip}
+      className={`status ${view.tone}`}
+      tabIndex={0}
+      onMouseEnter={place}
+      onMouseLeave={() => setBox(null)}
+      onFocus={place}
+      onBlur={() => setBox(null)}
+    >
+      <span className="dot" />
+      {view.label}
+      {open && box
+        ? createPortal(
+            <dl className="status-card" style={{ top: box.top, right: box.right }} role="tooltip">
+              {view.lines.map((line) => (
+                <div key={line.label}>
+                  <dt>{line.label}</dt>
+                  <dd>{line.value}</dd>
+                </div>
+              ))}
+            </dl>,
+            document.body,
+          )
+        : null}
+    </span>
   );
 }

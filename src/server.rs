@@ -491,7 +491,12 @@ async fn setup_page() -> Html<&'static str> {
 }
 
 async fn health() -> Json<Value> {
-    Json(json!({ "ok": true, "build": crate::BUILD_ID }))
+    Json(json!({
+        "ok": true,
+        "build": crate::BUILD_ID,
+        "version": env!("CARGO_PKG_VERSION"),
+        "dev": cfg!(debug_assertions),
+    }))
 }
 
 #[derive(Serialize)]
@@ -517,6 +522,9 @@ async fn bootstrap(State(state): State<AppState>) -> Result<Json<Bootstrap>, Api
 }
 
 async fn runtime(State(state): State<AppState>) -> Json<crate::session::RuntimeSnapshot> {
+    if let Err(err) = crate::agent::sync_live_desk(&state).await {
+        tracing::warn!("desk sync: {}", err.message);
+    }
     Json(state.runtime.snapshot().await)
 }
 
@@ -1158,7 +1166,7 @@ async fn plugin_bridge(
                 "workspaceId": workspace_id,
             })))
         }
-        "listPanels" => crate::agent::list_desk(&state)
+        "listPanels" => crate::agent::list_desk(&state, None)
             .await
             .map(Json)
             .map_err(agent_error),
@@ -1181,6 +1189,8 @@ async fn plugin_bridge(
                         .and_then(Value::as_bool)
                         .unwrap_or(false),
                     title: param_opt(&body.params, "title"),
+                    space: None,
+                    control: None,
                 },
             )
             .await
@@ -1206,7 +1216,7 @@ async fn plugin_bridge(
                 None => None,
             };
             let title = param_opt(&body.params, "title").map(Some);
-            crate::agent::update_desk(&state, &panel_id, title, panel)
+            crate::agent::update_desk(&state, &panel_id, title, panel, None, None)
                 .await
                 .map(Json)
                 .map_err(agent_error)
@@ -1216,7 +1226,7 @@ async fn plugin_bridge(
             if panel_id.trim().is_empty() {
                 return Err(ApiError::bad("panelId is required"));
             }
-            crate::agent::close_desk(&state, &panel_id)
+            crate::agent::close_desk(&state, &panel_id, None)
                 .await
                 .map(Json)
                 .map_err(agent_error)
@@ -1228,7 +1238,7 @@ async fn plugin_bridge(
                 return Err(ApiError::bad("panelId and target are required"));
             }
             let place = param_opt(&body.params, "place").unwrap_or_else(|| "swap".into());
-            crate::agent::move_desk(&state, &panel_id, &target, &place)
+            crate::agent::move_desk(&state, &panel_id, &target, &place, None)
                 .await
                 .map(Json)
                 .map_err(agent_error)
@@ -1243,7 +1253,7 @@ async fn plugin_bridge(
                 .get("ratio")
                 .and_then(Value::as_f64)
                 .ok_or_else(|| ApiError::bad("ratio is required"))?;
-            crate::agent::resize_desk(&state, &panel_id, ratio)
+            crate::agent::resize_desk(&state, &panel_id, ratio, None)
                 .await
                 .map(Json)
                 .map_err(agent_error)
@@ -1281,12 +1291,12 @@ async fn plugin_bridge(
             if panel_id.trim().is_empty() {
                 return Err(ApiError::bad("panelId is required"));
             }
-            crate::agent::zoom_desk(&state, Some(&panel_id))
+            crate::agent::zoom_desk(&state, Some(&panel_id), None)
                 .await
                 .map(Json)
                 .map_err(agent_error)
         }
-        "showDesk" => crate::agent::zoom_desk(&state, None)
+        "showDesk" => crate::agent::zoom_desk(&state, None, None)
             .await
             .map(Json)
             .map_err(agent_error),

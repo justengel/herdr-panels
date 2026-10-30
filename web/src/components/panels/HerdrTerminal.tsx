@@ -28,7 +28,8 @@ import {
   scrollThumb,
   type ScrollPlace,
   fittedGrid,
-  frameDraw,
+  fitScale,
+  frameFollow,
   openingScreen,
   screenMoved,
   viewBox,
@@ -224,7 +225,10 @@ export function HerdrTerminal({ paneId, source, lines, onGone }: Props) {
     let painting = false;
     let goLive = () => {};
 
+    let liveGrid: { cols: number; rows: number } | null = null;
+    let ownsPane = false;
     const flushSize = () => {
+      if (!ownsPane || document.hidden) return;
       const next = wanted;
       const socket = socketRef.current;
       if (!next || !socket || socket.readyState !== WebSocket.OPEN) return;
@@ -232,6 +236,13 @@ export function HerdrTerminal({ paneId, source, lines, onGone }: Props) {
       sent = next;
       socket.send(JSON.stringify({ type: "resize", cols: next.cols, rows: next.rows }));
     };
+    const sendPresence = () => {
+      const socket = socketRef.current;
+      if (!socket || socket.readyState !== WebSocket.OPEN) return;
+      socket.send(JSON.stringify({ type: "presence", active: !document.hidden }));
+    };
+    const onVisible = () => sendPresence();
+    document.addEventListener("visibilitychange", onVisible);
 
     const scheduleLive = () => {
       if (screenLive) return;
@@ -248,34 +259,14 @@ export function HerdrTerminal({ paneId, source, lines, onGone }: Props) {
       const next = fittedGrid(host.clientWidth, host.clientHeight, cell);
       if (!next || !cell) return;
       const shownGrid = viewBox(next, 0, 0) ?? next;
-      const sameGrid = current.cols === shownGrid.cols && current.rows === shownGrid.rows;
       const sameRequest = wanted !== null && wanted.cols === shownGrid.cols && wanted.rows === shownGrid.rows;
       const cellChanged =
         fittedCell !== null &&
         (Math.abs(fittedCell.w - cell.w) > 0.05 || Math.abs(fittedCell.h - cell.h) > 0.05);
-      if (!sameGrid) {
-        layoutEpoch += 1;
-        current.clearSelection();
-        anchorRef.current = null;
-        headRef.current = null;
-        heldRef.current = null;
-        anchorCellRef.current = null;
-        headCellRef.current = null;
-        lineCacheRef.current.clear();
-        if (screenLive) {
-          waitingFull = true;
-          drawn = "";
-          fromKeyboard.current = true;
-          current.reset();
-          fromKeyboard.current = false;
-        }
-        current.resize(shownGrid.cols, shownGrid.rows);
-      } else if (cellChanged && screenLive) {
-        current.refresh(0, current.rows - 1);
-      }
+      if (cellChanged && screenLive) current.refresh(0, current.rows - 1);
       fittedCell = cell;
       wanted = shownGrid;
-      rowsRef.current = shownGrid.rows;
+      if (!liveGrid) rowsRef.current = shownGrid.rows;
       if (sameRequest) return;
       window.clearTimeout(sizeTimer);
       sizeTimer = window.setTimeout(flushSize, 80);
@@ -385,14 +376,42 @@ export function HerdrTerminal({ paneId, source, lines, onGone }: Props) {
       if (previous === null) return;
       settleScroll(screenMoved(previous, next));
     };
+    const placeGrid = (grid: { cols: number; rows: number }) => {
+      const current = termRef.current;
+      const host = stageRef.current;
+      if (!current || !host) return;
+      if (current.cols !== grid.cols || current.rows !== grid.rows) {
+        layoutEpoch += 1;
+        current.clearSelection();
+        anchorRef.current = null;
+        headRef.current = null;
+        heldRef.current = null;
+        anchorCellRef.current = null;
+        headCellRef.current = null;
+        lineCacheRef.current.clear();
+        fromKeyboard.current = true;
+        current.resize(grid.cols, grid.rows);
+        fromKeyboard.current = false;
+      }
+      liveGrid = grid;
+      rowsRef.current = grid.rows;
+      const element = current.element;
+      const cell = measureCell(current);
+      if (!element || !cell) return;
+      const scale = fitScale(host.clientWidth, host.clientHeight, grid.cols * cell.w, grid.rows * cell.h);
+      element.style.transformOrigin = "0 0";
+      element.style.transform = scale < 0.999 ? `scale(${scale})` : "";
+    };
     const applyFrame = (frame: ScreenMessage) => {
-      const decision = frameDraw(
+      const decision = frameFollow(
         waitingFull,
         { text: frame.text ?? "", full: Boolean(frame.full), cols: frame.cols, rows: frame.rows },
         drawn,
         wanted,
+        liveGrid,
       );
       waitingFull = decision.waitingForFull;
+      if (decision.grid) liveGrid = decision.grid;
       if (!decision.draw) {
         const matches =
           wanted === null ||
@@ -403,6 +422,7 @@ export function HerdrTerminal({ paneId, source, lines, onGone }: Props) {
         return;
       }
       drawn = decision.drawn;
+      if (decision.grid) placeGrid(decision.grid);
       const text = frame.text ?? "";
       const token = ++paint;
       painting = true;
@@ -468,8 +488,9 @@ export function HerdrTerminal({ paneId, source, lines, onGone }: Props) {
       socketRef.current = socket;
       socket.onopen = () => {
         sent = null;
+        ownsPane = false;
         setStatus("");
-        flushSize();
+        sendPresence();
         window.clearTimeout(seedTimer);
         seedTimer = window.setTimeout(() => {
           if (stopped || gotFrame) return;
@@ -489,7 +510,8 @@ export function HerdrTerminal({ paneId, source, lines, onGone }: Props) {
           const frame = message as ScreenMessage;
           seenRef.current = true;
           gotFrame = true;
-          if (!sizeProblem.current) setStatus("");
+          sizeProblem.current = false;
+          setStatus("");
           if (!screenLive) {
             queued.push(frame);
             return;
@@ -505,6 +527,12 @@ export function HerdrTerminal({ paneId, source, lines, onGone }: Props) {
         } else if (message.type === "resized") {
           sizeProblem.current = false;
           setStatus("");
+        } else if (message.type === "terminalRole") {
+          ownsPane = (message as { role?: string }).role === "own";
+          if (ownsPane) {
+            sent = null;
+            flushSize();
+          }
         } else if (message.type === "meta") {
           const meta = message as { present?: boolean; connected?: boolean };
           if (meta.present) seenRef.current = true;
@@ -536,6 +564,7 @@ export function HerdrTerminal({ paneId, source, lines, onGone }: Props) {
       window.clearTimeout(copyNoticeRef.current);
       window.clearInterval(edgeTimerRef.current);
       window.removeEventListener("herdr-theme", onTheme);
+      document.removeEventListener("visibilitychange", onVisible);
       unsubscribeZoom();
       window.clearTimeout(flushTimer.current);
       const pendingText = bufferRef.current;

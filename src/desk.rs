@@ -202,6 +202,10 @@ fn named_panel(id: &str, title: &str, panel: PanelConfig) -> LayoutNode {
 }
 
 fn seed_space() -> LayoutNode {
+    seed_space_bound(None)
+}
+
+fn seed_space_bound(pane_id: Option<String>) -> LayoutNode {
     let sidebar = LayoutNode::Split {
         direction: Direction::Column,
         ratio: 0.62,
@@ -216,12 +220,77 @@ fn seed_space() -> LayoutNode {
             "terminal",
             "Terminal",
             PanelConfig::Herdr {
-                pane_id: None,
+                pane_id,
                 source: None,
                 lines: None,
             },
         )),
     }
+}
+
+pub struct LiveWorkspace {
+    pub id: String,
+    pub root_pane: Option<String>,
+}
+
+/// Add a layout for each workspace that does not have one yet, with Terminal
+/// bound to that workspace's root pane, and drop layouts for workspaces that
+/// are gone. An empty list leaves the desk alone.
+pub fn reconcile_spaces(desk: &DeskDocument, workspaces: &[LiveWorkspace]) -> DeskDocument {
+    if workspaces.is_empty() {
+        return desk.clone();
+    }
+    let mut next = desk.clone();
+    let live_keys: std::collections::BTreeSet<String> = workspaces
+        .iter()
+        .map(|workspace| space_key(&workspace.id))
+        .collect();
+    next.spaces.retain(|key, _| live_keys.contains(key));
+    next.pins.retain_mut(|pin| {
+        pin.spaces
+            .retain(|id| workspaces.iter().any(|workspace| workspace.id == *id));
+        !matches!(pin.mode, DeskPinMode::Chosen) || !pin.spaces.is_empty()
+    });
+    for workspace in workspaces {
+        let key = space_key(&workspace.id);
+        if let Some(root) = next.spaces.get(&key).cloned() {
+            if let Some(pane_id) = workspace.root_pane.as_deref() {
+                if let Some(bound) = bind_seed_terminal(root, pane_id) {
+                    next.spaces.insert(key, bound);
+                }
+            }
+            continue;
+        }
+        next.spaces
+            .insert(key, seed_space_bound(workspace.root_pane.clone()));
+    }
+    next
+}
+
+/// The seed Terminal starts unbound. Once the workspace's root pane is known, bind that panel and leave every other pane choice alone.
+fn bind_seed_terminal(root: LayoutNode, pane_id: &str) -> Option<LayoutNode> {
+    let terminal = layout_ops::list_panels(&root)
+        .into_iter()
+        .find(|panel| panel.id == "terminal")?;
+    let PanelConfig::Herdr {
+        pane_id: None,
+        source,
+        lines,
+    } = terminal.panel
+    else {
+        return None;
+    };
+    layout_ops::update_panel(
+        root,
+        "terminal",
+        None,
+        Some(PanelConfig::Herdr {
+            pane_id: Some(pane_id.to_string()),
+            source,
+            lines,
+        }),
+    )
+    .ok()
 }
 
 fn stack_column(nodes: &[LayoutNode]) -> LayoutNode {
@@ -846,5 +915,81 @@ mod tests {
             visit_weights(2, VisitArrange::Column, &[], &[2.0], &[]).unwrap_err(),
             "columns and rows are for a grid"
         );
+    }
+
+    fn terminal_pane(node: &LayoutNode) -> Option<String> {
+        crate::layout_ops::list_panels(node).into_iter().find_map(|panel| {
+            if panel.id != "terminal" {
+                return None;
+            }
+            match panel.panel {
+                PanelConfig::Herdr { pane_id, .. } => pane_id,
+                _ => None,
+            }
+        })
+    }
+
+    #[test]
+    fn a_new_workspace_is_saved_bound_to_its_root_pane_and_a_closed_one_is_dropped() {
+        let mut kept = terminal();
+        if let LayoutNode::Panel { panel, .. } = &mut kept {
+            *panel = PanelConfig::Herdr {
+                pane_id: Some("w1:p9".into()),
+                source: None,
+                lines: None,
+            };
+        }
+        let mut spaces = BTreeMap::new();
+        spaces.insert("w1".into(), kept);
+        spaces.insert("w4".into(), seed_space());
+        spaces.insert("w12".into(), seed_space());
+        let desk = DeskDocument {
+            pins: vec![DeskPin {
+                id: "notes".into(),
+                title: "Notes".into(),
+                panel: PanelConfig::Markdown {
+                    path: "a.md".into(),
+                    address_bar: None,
+                    raw: false,
+                },
+                mode: DeskPinMode::Chosen,
+                spaces: vec!["w12".into(), "w1".into()],
+            }],
+            spaces,
+            ..DeskDocument::default()
+        };
+        let next = reconcile_spaces(
+            &desk,
+            &[
+                LiveWorkspace {
+                    id: "w1".into(),
+                    root_pane: Some("w1:p1".into()),
+                },
+                LiveWorkspace {
+                    id: "w3".into(),
+                    root_pane: Some("w3:p1".into()),
+                },
+                LiveWorkspace {
+                    id: "w4".into(),
+                    root_pane: Some("w4:p1".into()),
+                },
+            ],
+        );
+        assert!(!next.spaces.contains_key("w12"));
+        assert_eq!(
+            terminal_pane(next.spaces.get("w1").unwrap()).as_deref(),
+            Some("w1:p9")
+        );
+        assert_eq!(
+            terminal_pane(next.spaces.get("w3").unwrap()).as_deref(),
+            Some("w3:p1")
+        );
+        assert_eq!(
+            terminal_pane(next.spaces.get("w4").unwrap()).as_deref(),
+            Some("w4:p1")
+        );
+        assert_eq!(next.pins[0].spaces, vec!["w1".to_string()]);
+        let again = reconcile_spaces(&next, &[]);
+        assert_eq!(again.spaces.len(), next.spaces.len());
     }
 }

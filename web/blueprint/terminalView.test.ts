@@ -17,6 +17,7 @@ import {
   fittedGrid,
   openingScreen,
   frameDraw,
+  frameFollow,
 } from "../src/terminalView";
 import {
   consumeZoomWheel,
@@ -57,6 +58,31 @@ describe("terminal view", () => {
       { text: "next", full: false, cols: 82, rows: 49 },
     ]);
     expect(openingScreen([{ text: "partial", full: false, cols: 82, rows: 49 }], 82, 49)).toEqual([]);
+    expect(
+      openingScreen(
+        [
+          { text: "other", full: true, cols: 120, rows: 40 },
+          { text: "more", full: false, cols: 120, rows: 40 },
+        ],
+        82,
+        49,
+      ),
+    ).toEqual([
+      { text: "other", full: true, cols: 120, rows: 40 },
+      { text: "more", full: false, cols: 120, rows: 40 },
+    ]);
+  });
+
+  it("keeps drawing a terminal whose frames are a different size from this panel", () => {
+    const fitted = { cols: 82, rows: 49 };
+    const first = frameFollow(true, { text: "browser", full: true, cols: 80, rows: 24 }, "", fitted, null);
+    expect(first).toMatchObject({ draw: true, reset: true, drawn: "browser", grid: { cols: 80, rows: 24 } });
+    const typed = frameFollow(false, { text: "browser ls", full: false, cols: 80, rows: 24 }, "browser", fitted, first.grid);
+    expect(typed).toMatchObject({ draw: true, drawn: "browser ls", grid: { cols: 80, rows: 24 } });
+    const stray = frameFollow(false, { text: "nope", full: false, cols: 40, rows: 10 }, "browser ls", fitted, first.grid);
+    expect(stray.draw).toBe(false);
+    const home = frameFollow(false, { text: "panel", full: true, cols: 82, rows: 49 }, "browser ls", fitted, first.grid);
+    expect(home).toMatchObject({ draw: true, reset: true, drawn: "panel", grid: fitted });
   });
 
   it("holds partial updates after a resize until a full screen for that grid arrives", () => {

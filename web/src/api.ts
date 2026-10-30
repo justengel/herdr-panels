@@ -40,6 +40,13 @@ export interface HerdrConfig {
   integrationError?: string;
 }
 
+export interface ViewerHealth {
+  ok: boolean;
+  build: string;
+  version: string;
+  dev: boolean;
+}
+
 export interface HerdrCtlStatus {
   clientVersion?: string | null;
   channel?: string | null;
@@ -94,6 +101,7 @@ export interface DeskSaveResult {
 }
 
 export const api = {
+  health: () => request<ViewerHealth>("/api/health"),
   bootstrap: () => request<Bootstrap>("/api/bootstrap"),
   runtime: () => request<RuntimeSnapshot>("/api/runtime"),
   saveLayout: (layout: LayoutDocument) =>

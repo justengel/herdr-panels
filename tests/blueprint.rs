@@ -206,6 +206,8 @@ async fn the_viewer_stays_up_when_herdr_is_offline() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(health["ok"], true);
     assert_eq!(health["build"], herdr_panels::BUILD_ID);
+    assert_eq!(health["version"], env!("CARGO_PKG_VERSION"));
+    assert!(health["dev"].is_boolean());
 
     let (status, runtime) = desk.call("GET", "/api/runtime", None).await;
     assert_eq!(status, StatusCode::OK);
@@ -1804,6 +1806,215 @@ async fn a_visit_names_the_space_and_a_miss_is_an_error() {
         .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
     assert_eq!(body["error"], "size has one weight per panel");
+}
+
+fn panel_named<'a>(node: &'a Value, plugin: &str) -> Option<&'a Value> {
+    if node["type"] == "panel" && node["panel"]["plugin"] == plugin {
+        return Some(&node["panel"]);
+    }
+    for key in ["first", "second", "root"] {
+        if let Some(found) = node.get(key).and_then(|child| panel_named(child, plugin)) {
+            return Some(found);
+        }
+    }
+    if let Some(cells) = node["cells"].as_array() {
+        for cell in cells {
+            if let Some(found) = panel_named(cell, plugin) {
+                return Some(found);
+            }
+        }
+    }
+    None
+}
+
+#[tokio::test]
+async fn a_relative_api_path_stays_in_the_content_root() {
+    let desk = desk().await;
+    let (status, opened) = desk
+        .call(
+            "POST",
+            "/api/agent/open",
+            Some(json!({"target": "notes/welcome.md", "title": "From page"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{opened}");
+    let saved: Value = serde_json::from_slice(
+        &std::fs::read(desk.root.join("layouts").join("desk.json")).unwrap(),
+    )
+    .unwrap();
+    let panel = panel_titled(&saved["root"], "From page").expect("the opened panel is saved");
+    let stored = PathBuf::from(panel["path"].as_str().expect("a page path"));
+    let note = desk.workspace.join("notes").join("welcome.md");
+    assert!(
+        stored.is_absolute(),
+        "a relative page path is resolved before it is stored, got {}",
+        stored.display()
+    );
+    assert_eq!(stored.canonicalize().unwrap(), note.canonicalize().unwrap());
+}
+
+fn panel_titled<'a>(node: &'a Value, title: &str) -> Option<&'a Value> {
+    if node["type"] == "panel" && node["title"] == title {
+        return Some(&node["panel"]);
+    }
+    for key in ["first", "second", "root"] {
+        if let Some(found) = node.get(key).and_then(|child| panel_titled(child, title)) {
+            return Some(found);
+        }
+    }
+    if let Some(cells) = node["cells"].as_array() {
+        for cell in cells {
+            if let Some(found) = panel_titled(cell, title) {
+                return Some(found);
+            }
+        }
+    }
+    None
+}
+
+#[tokio::test]
+async fn a_named_space_is_edited_without_a_focused_workspace() {
+    let desk = desk().await;
+    let space = |title: &str| {
+        json!({
+            "type": "panel",
+            "id": "notes",
+            "title": title,
+            "panel": {"type": "markdown", "path": "notes/welcome.md"}
+        })
+    };
+    std::fs::create_dir_all(desk.root.join("desks")).unwrap();
+    std::fs::write(
+        desk.root.join("desks").join("default.json"),
+        serde_json::to_vec_pretty(&json!({
+            "revision": 1,
+            "pins": [],
+            "spaces": { "w1": space("One"), "w12": space("Twelve") }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let (status, missing) = desk
+        .call(
+            "POST",
+            "/api/agent/update",
+            Some(json!({"panelId": "notes", "title": "Changed", "space": "w99"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{missing}");
+    assert!(
+        missing["error"]
+            .as_str()
+            .unwrap()
+            .contains("not connected"),
+        "{missing}"
+    );
+
+    let (status, updated) = desk
+        .call(
+            "POST",
+            "/api/agent/update",
+            Some(json!({"panelId": "notes", "title": "From script", "space": "w12"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{updated}");
+    assert_eq!(desk.panel(&updated, "From script")["title"], "From script");
+
+    let (status, listed) = desk
+        .call("GET", "/api/agent/workspace?space=w12", None)
+        .await;
+    assert_eq!(status, StatusCode::OK, "{listed}");
+    assert_eq!(desk.panel(&listed, "From script")["title"], "From script");
+
+    let (status, unfocused) = desk.call("GET", "/api/agent/workspace", None).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{unfocused}");
+
+    let saved: Value = serde_json::from_slice(
+        &std::fs::read(desk.root.join("desks").join("default.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(saved["spaces"]["w12"]["title"], "From script");
+    assert_eq!(saved["spaces"]["w1"]["title"], "One");
+}
+
+#[tokio::test]
+async fn a_plugin_opens_with_control_when_its_manifest_or_the_call_asks() {
+    let desk = desk().await;
+    let plugin = desk.root.join("plugins").join("report");
+    std::fs::create_dir_all(&plugin).unwrap();
+    std::fs::write(
+        plugin.join("plugin.json"),
+        r#"{"id":"report","title":"Report","entry":"index.html","permissions":["herdr:control"],"control":"default"}"#,
+    )
+    .unwrap();
+    std::fs::write(plugin.join("index.html"), "<p>Report</p>").unwrap();
+
+    let (status, opened) = desk
+        .call(
+            "POST",
+            "/api/agent/open",
+            Some(json!({"target": "plugin:report", "title": "Report"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{opened}");
+    let saved: Value = serde_json::from_slice(
+        &std::fs::read(desk.root.join("layouts").join("desk.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        panel_named(&saved, "report").unwrap()["control"],
+        true,
+        "{saved}"
+    );
+
+    let (status, plain) = desk
+        .call(
+            "POST",
+            "/api/agent/open",
+            Some(json!({"target": "plugin:welcome", "title": "Welcome"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{plain}");
+    let saved: Value = serde_json::from_slice(
+        &std::fs::read(desk.root.join("layouts").join("desk.json")).unwrap(),
+    )
+    .unwrap();
+    assert_ne!(panel_named(&saved, "welcome").unwrap()["control"], true);
+
+    let (status, forced) = desk
+        .call(
+            "POST",
+            "/api/agent/update",
+            Some(json!({
+                "panelId": "Welcome",
+                "control": true,
+                "panel": {"type": "plugin", "plugin": "welcome"}
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{forced}");
+    let saved: Value = serde_json::from_slice(
+        &std::fs::read(desk.root.join("layouts").join("desk.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(panel_named(&saved, "welcome").unwrap()["control"], true);
+
+    let (status, refused) = desk
+        .call(
+            "POST",
+            "/api/agent/open",
+            Some(json!({"target": "notes/welcome.md", "control": true})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+    assert!(
+        refused["error"]
+            .as_str()
+            .unwrap()
+            .contains("plugin panel"),
+        "{refused}"
+    );
 }
 
 fn query_url(url: &str) -> String {
