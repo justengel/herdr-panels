@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import type { AgentView, PaneView, WorkspaceView } from "../../types";
+import { useDesk } from "../../desk";
 import { useHost } from "../../host";
-import { agentSortLabel, listedAgents, nextAgentSort, orderAgents, type AgentSort } from "../../agentOrder";
+import { agentSortLabel, listedAgents, nextAgentSort, orderAgents, type AgentListRow, type AgentSort } from "../../agentOrder";
 import { StatusMark } from "../StatusMark";
 
 export function AgentsView({
@@ -16,6 +17,7 @@ export function AgentsView({
   onFocus: (paneId: string) => void;
 }) {
   const host = useHost();
+  const desk = useDesk();
   const symbols = host.config?.settings.find((field) => field.key === "status_indicators")?.value === "symbols";
   const configured = host.config?.settings.find((field) => field.key === "agent_panel_sort")?.value;
   const stored: AgentSort = configured === "priority" ? "priority" : "spaces";
@@ -29,7 +31,7 @@ export function AgentsView({
   }, [configured, override]);
 
   const ordered = orderAgents(
-    listedAgents(agents, panes, workspaces),
+    listedAgents(agents, panes, workspaces, desk.tabs),
     sort,
     workspaces.map((space) => space.workspaceId),
   );
@@ -69,7 +71,7 @@ export function AgentsView({
               >
                 <StatusMark status={agent.status} symbols={symbols} />
                 <span className="agent-copy">
-                  <span className="agent-name">{agent.title}</span>
+                  <AgentName title={agent.title} tabLabel={agent.tabLabel} />
                   {kind ? <span className="agent-kind">{kind}</span> : null}
                 </span>
               </button>
@@ -78,5 +80,16 @@ export function AgentsView({
         })}
       </ul>
     </div>
+  );
+}
+
+function AgentName({ title, tabLabel }: Pick<AgentListRow, "title" | "tabLabel">) {
+  const mark = tabLabel ? ` · ${tabLabel}` : "";
+  if (!mark || !title.endsWith(mark)) return <span className="agent-name">{title}</span>;
+  return (
+    <span className="agent-name">
+      {title.slice(0, -mark.length)}
+      <span className="agent-tab">{mark}</span>
+    </span>
   );
 }

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.1.13 - 2026-10-30
+
+In the agents list, a space with more than one Herdr tab shows that tab's name beside the space, such as `herdr-panels · general`. A space with one tab shows only the space name.
+
 ## 0.1.12 - 2026-10-30
 
 Each browser tab keeps its own Herdr session. A new tab starts on `default`. Refreshing a tab keeps that tab's session. Switching, creating, renaming, or closing a session changes only that tab. Closing a tab leaves the other session connected.

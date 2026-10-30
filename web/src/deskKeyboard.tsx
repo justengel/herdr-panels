@@ -176,7 +176,7 @@ export function DeskKeyboard({
     if (command.action === "cycle-agent" || command.action === "agent") {
       const sort = host.config?.settings.find((field) => field.key === "agent_panel_sort")?.value === "priority" ? "priority" : "spaces";
       const rows = orderAgents(
-        listedAgents(runtime?.agents ?? [], runtime?.panes ?? [], runtime?.workspaces ?? []),
+        listedAgents(runtime?.agents ?? [], runtime?.panes ?? [], runtime?.workspaces ?? [], runtime?.tabs ?? []),
         sort,
         (runtime?.workspaces ?? []).map((space) => space.workspaceId),
       );

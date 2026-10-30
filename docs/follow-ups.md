@@ -4,6 +4,10 @@ Recorded 2026-10-27 from the review before the first public release. Closed item
 
 ## Unreleased
 
+## Done in 0.1.13
+
+- The agents list shows the Herdr tab name beside the space when that space has more than one tab. A space with one tab shows only the space name.
+
 ## Done in 0.1.12
 
 - Each browser tab keeps its own Herdr session. Switching a session changes only that tab.

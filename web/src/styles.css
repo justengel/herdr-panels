@@ -733,7 +733,8 @@ body.panel-dragging, body.panel-dragging * { cursor: grabbing !important; user-s
 .tree { list-style: none; margin: 0; padding: 0 0 0 10px; }
 .tree-file { display: block; padding: 2px 0 2px 16px; }
 .agent-row:hover, .tree-dir:hover, .nav-root-name:hover { background: #1c2128; }
-.agent-name { flex: 1; }
+.agent-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agent-tab { color: var(--muted); }
 .nav-dot, .agent-row .dot {
   width: 8px;
   height: 8px;
