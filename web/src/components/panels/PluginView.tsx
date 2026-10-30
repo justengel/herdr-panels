@@ -14,6 +14,7 @@ export type PluginHostCommand =
 export function PluginView({
   pluginId,
   panelId,
+  spaceId,
   title,
   modify,
   command,
@@ -24,6 +25,7 @@ export function PluginView({
 }: {
   pluginId: string;
   panelId: string;
+  spaceId: string;
   title: string;
   modify: boolean;
   command: PluginHostCommand | null;
@@ -84,7 +86,12 @@ export function PluginView({
       if (call) {
         const frame = frameRef.current?.contentWindow;
         void api
-          .pluginBridge(pluginId, { panelId, method: call.method, params: call.params })
+          .pluginBridge(pluginId, {
+            panelId,
+            spaceId,
+            method: call.method,
+            params: call.params,
+          })
           .then(async (result) => {
             if (call.method === "openExternal") {
               const approved =
@@ -241,7 +248,13 @@ export function PluginView({
       fileSocket.current = null;
       fileQueue.current = [];
     };
-  }, [panelId, pluginId]);
+  }, [panelId, pluginId, spaceId]);
+
+  useEffect(() => {
+    const frame = frameRef.current?.contentWindow;
+    if (!frame) return;
+    frame.postMessage({ source: "hwp-host", type: "context", panelId, spaceId }, "*");
+  }, [panelId, spaceId]);
 
   const openKey = open ? `${open.view}\n${open.kind}\n${open.address}\n${JSON.stringify(open.config)}` : "";
 
@@ -260,6 +273,7 @@ export function PluginView({
         const frame = event.currentTarget.contentWindow;
         const arm = (window as Window & { __hwpArmFrame?: (frame: Window) => void }).__hwpArmFrame;
         if (frame) arm?.(frame);
+        frame?.postMessage({ source: "hwp-host", type: "context", panelId, spaceId }, "*");
         deliver(frame, modify, commandRef.current, openRef.current);
       }}
     />

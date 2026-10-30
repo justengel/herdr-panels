@@ -257,8 +257,7 @@ pub fn parse_manifest(text: &str) -> anyhow::Result<PluginManifest> {
         bail!("plugin version is limited to 32 characters");
     }
     let views = normalize_views(&draft.id, &draft.title, draft.views)?;
-    let grants =
-        crate::plugin_grant::parse_grants(draft.permissions, draft.files, draft.commands)?;
+    let grants = crate::plugin_grant::parse_grants(draft.permissions, draft.files, draft.commands)?;
     let control_default = control_default(draft.control, &grants.permissions)?;
     Ok(PluginManifest {
         id: draft.id,
@@ -801,6 +800,7 @@ mod tests {
         let served = String::from_utf8(prepare_entry(&powered, "index.html", html)).unwrap();
         assert!(served.contains("herdrPanels"));
         assert!(served.contains("focusPane"));
+        assert!(served.contains("context"));
         assert!(served.contains("/* hwp-frame-keys */"));
         assert_eq!(served.matches("/* hwp-frame-keys */").count(), 1);
         assert_eq!(prepare_entry(&powered, "app.js", b"var x"), b"var x");

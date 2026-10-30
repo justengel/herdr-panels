@@ -166,6 +166,9 @@ enum PanelCommand {
         /// Turn on control when the target is a plugin panel
         #[arg(long)]
         control: bool,
+        /// Id for the new panel. Omit to use the next panel-N in this space
+        #[arg(long)]
+        id: Option<String>,
     },
 }
 
@@ -336,14 +339,15 @@ fn panel_field(panel: &Value, key: &str) -> String {
 
 fn panel_line(panel: &Value) -> String {
     format!(
-        "{}\t{}\t{}\t{}\t{}\t{}\t{}",
+        "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
         panel_field(panel, "id"),
         panel_field(panel, "name"),
         panel_field(panel, "display"),
         panel_field(panel, "kind"),
         panel_field(panel, "type"),
         panel_field(panel, "summary"),
-        panel_field(panel, "role")
+        panel_field(panel, "role"),
+        panel_field(panel, "control")
     )
 }
 
@@ -542,6 +546,7 @@ async fn panel_command(
             direction,
             title,
             control,
+            id,
         } => {
             if control && !target.trim().starts_with("plugin:") {
                 anyhow::bail!("--control is only for a plugin panel");
@@ -558,6 +563,9 @@ async fn panel_command(
             }
             if let Some(title) = title {
                 body["title"] = json!(title);
+            }
+            if let Some(id) = id {
+                body["id"] = json!(id);
             }
             attach_space(&mut body, space);
             attach_control(&mut body, control);

@@ -1084,6 +1084,7 @@ export function App() {
                 workspaces={runtime?.workspaces ?? []}
                 agents={runtime?.agents ?? []}
                 layoutId={layout.id}
+                spaceIds={visit.spaceIds}
                 pending={{}}
                 onConsume={() => undefined}
                 onRatio={(path, ratio) =>

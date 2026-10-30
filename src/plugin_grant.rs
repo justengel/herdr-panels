@@ -3,7 +3,7 @@
 
 use std::path::{Path, PathBuf};
 
-use anyhow::bail;
+use anyhow::{bail, Context};
 
 use crate::desk::DeskDocument;
 use crate::layout::{is_herdr_pane_id, LayoutNode, PanelConfig};
@@ -100,18 +100,58 @@ pub fn grant_path(path: &str) -> anyhow::Result<PathBuf> {
     if path.is_empty() || path.contains('\0') {
         bail!("plugin file path is empty");
     }
-    if path
+    let expanded = expand_home(path)?;
+    if expanded
         .split(['/', '\\'])
         .any(|part| part == ".." || part == ".")
     {
         bail!("plugin file path cannot contain ..: {path}");
     }
-    let trimmed = trim_slash(path);
+    let trimmed = trim_slash(&expanded);
     let native = Path::new(trimmed);
     if native.is_absolute() || posix_absolute(trimmed) {
         return Ok(PathBuf::from(trimmed));
     }
     bail!("plugin file path must be absolute: {path}");
+}
+
+/// `~`, `~/...`, and `${HOME}` at the start become this user's home directory.
+/// The rest of a shared `plugin.json` can stay the same on every machine.
+fn expand_home(path: &str) -> anyhow::Result<String> {
+    if let Some(rest) = path.strip_prefix("${HOME}") {
+        return join_home(rest, path);
+    }
+    if path == "~" {
+        return Ok(home_directory()?.display().to_string());
+    }
+    if let Some(rest) = path.strip_prefix("~/").or_else(|| path.strip_prefix("~\\")) {
+        return join_home(&format!("/{rest}"), path);
+    }
+    if path.starts_with('~') || path.contains("${HOME}") {
+        bail!("plugin file path must be absolute: {path}");
+    }
+    Ok(path.to_string())
+}
+
+fn join_home(rest: &str, original: &str) -> anyhow::Result<String> {
+    let home = home_directory()?;
+    let rest = rest.trim_start_matches(['/', '\\']);
+    if rest.is_empty() {
+        return Ok(home.display().to_string());
+    }
+    if rest.starts_with('~') || rest.contains("${HOME}") {
+        bail!("plugin file path must be absolute: {original}");
+    }
+    Ok(home.join(rest).display().to_string())
+}
+
+fn home_directory() -> anyhow::Result<PathBuf> {
+    let home = std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(PathBuf::from)
+        .filter(|path| !path.as_os_str().is_empty())
+        .context("home directory is not set")?;
+    Ok(home)
 }
 
 fn trim_slash(path: &str) -> &str {
@@ -434,15 +474,31 @@ pub fn bridge_allowed(
     panel_id: &str,
     method: &str,
 ) -> Result<(), String> {
+    bridge_allowed_in_space(permissions, desk, plugin_id, None, panel_id, method)
+}
+
+/// Like [`bridge_allowed`], but the panel is read from `space_id` only.
+/// Panel ids repeat across spaces (`panel-1` in each one). The first space
+/// in the desk map is not a substitute for the space the frame is showing.
+pub fn bridge_allowed_in_space(
+    permissions: &[String],
+    desk: &DeskDocument,
+    plugin_id: &str,
+    space_id: Option<&str>,
+    panel_id: &str,
+    method: &str,
+) -> Result<(), String> {
     decide(
         permissions,
         method,
-        plugin_panel_control(desk, panel_id, plugin_id),
+        plugin_panel_control(desk, panel_id, plugin_id, space_id),
     )
 }
 
 /// Same check as [`bridge_allowed`], for the active layout. That file is the
 /// desk the page shows when Herdr is offline and no space has been saved yet.
+/// A layout is one tree, and a saved layout cannot contain two panels with the
+/// same id, so this check does not have the cross-space collision.
 pub fn bridge_allowed_in_layout(
     permissions: &[String],
     root: &LayoutNode,
@@ -450,13 +506,15 @@ pub fn bridge_allowed_in_layout(
     panel_id: &str,
     method: &str,
 ) -> Result<(), String> {
-    let flag = search_node(root, panel_id, plugin_id).unwrap_or(Err("panel was not found".into()));
+    let flag =
+        search_node(root, panel_id, plugin_id, None).unwrap_or(Err("panel was not found".into()));
     decide(permissions, method, flag)
 }
 
 fn decide(permissions: &[String], method: &str, flag: Result<bool, String>) -> Result<(), String> {
     let control_method = matches!(method, "sendText" | "sendKeys" | "focusPane" | "scrollPane");
     let read_method = matches!(method, "status" | "listPanes" | "readPane");
+    let context = method == "context";
     let panels_read = method == "listPanels";
     let panels_control = matches!(
         method,
@@ -472,10 +530,20 @@ fn decide(permissions: &[String], method: &str, flag: Result<bool, String>) -> R
     );
     let links = method == "openExternal";
     let run = method == "run";
-    if !control_method && !read_method && !panels_read && !panels_control && !links && !run {
+    if !control_method
+        && !read_method
+        && !panels_read
+        && !panels_control
+        && !links
+        && !run
+        && !context
+    {
         return Err(format!("Unknown bridge method: {method}"));
     }
     let flag = flag?;
+    if context {
+        return Ok(());
+    }
     if links {
         if !permissions.iter().any(|name| name == LINKS) {
             return Err("This plugin does not have links:open".into());
@@ -519,43 +587,124 @@ pub fn plugin_panel_control(
     desk: &DeskDocument,
     panel_id: &str,
     plugin_id: &str,
+    space_id: Option<&str>,
 ) -> Result<bool, String> {
-    for node in desk.spaces.values() {
-        if let Some(found) = search_node(node, panel_id, plugin_id) {
-            return found;
+    if let Some(space_id) = space_id.map(str::trim).filter(|id| !id.is_empty()) {
+        return control_in_space(desk, space_id, panel_id, plugin_id);
+    }
+    let mut hits = Vec::new();
+    for (space, node) in &desk.spaces {
+        if let Some(found) = search_node(node, panel_id, plugin_id, Some(space)) {
+            hits.push(found);
         }
     }
-    for pin in &desk.pins {
-        if pin.id == panel_id {
-            return control_of(&pin.panel, plugin_id);
+    match hits.len() {
+        0 => control_from_pins(desk, panel_id, plugin_id, None),
+        1 => hits.pop().expect("one hit"),
+        _ => {
+            let names = desk
+                .spaces
+                .iter()
+                .filter(|(space, node)| {
+                    search_node(node, panel_id, plugin_id, Some(space)).is_some()
+                })
+                .map(|(space, _)| space.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            Err(format!(
+                "panel {panel_id} is in more than one space ({names})"
+            ))
         }
+    }
+}
+
+fn control_in_space(
+    desk: &DeskDocument,
+    space_id: &str,
+    panel_id: &str,
+    plugin_id: &str,
+) -> Result<bool, String> {
+    if desk.spaces.is_empty() {
+        return control_from_pins(desk, panel_id, plugin_id, Some(space_id));
+    }
+    let key = crate::desk::space_key(space_id);
+    let Some(node) = desk.spaces.get(&key).or_else(|| desk.spaces.get(space_id)) else {
+        return Err(format!("space {space_id} was not found"));
+    };
+    if let Some(found) = search_node(node, panel_id, plugin_id, Some(space_id)) {
+        return found;
+    }
+    if pin_applies_here(desk, space_id, panel_id) {
+        return control_from_pins(desk, panel_id, plugin_id, Some(space_id));
+    }
+    Err(format!(
+        "panel {panel_id} was not found in space {space_id}"
+    ))
+}
+
+fn pin_applies_here(desk: &DeskDocument, space_id: &str, panel_id: &str) -> bool {
+    desk.pins
+        .iter()
+        .any(|pin| pin.id == panel_id && pin_on_space(pin, space_id))
+}
+
+fn pin_on_space(pin: &crate::desk::DeskPin, space_id: &str) -> bool {
+    match pin.mode {
+        crate::desk::DeskPinMode::All => !pin.spaces.iter().any(|id| id == space_id),
+        crate::desk::DeskPinMode::Chosen => pin.spaces.iter().any(|id| id == space_id),
+    }
+}
+
+fn control_from_pins(
+    desk: &DeskDocument,
+    panel_id: &str,
+    plugin_id: &str,
+    space_id: Option<&str>,
+) -> Result<bool, String> {
+    for pin in &desk.pins {
+        if pin.id != panel_id {
+            continue;
+        }
+        if let Some(space_id) = space_id {
+            if !pin_on_space(pin, space_id) {
+                continue;
+            }
+        }
+        return control_of(&pin.panel, plugin_id, panel_id, space_id);
     }
     Err("panel was not found".into())
 }
 
-fn search_node(node: &LayoutNode, panel_id: &str, plugin_id: &str) -> Option<Result<bool, String>> {
+fn search_node(
+    node: &LayoutNode,
+    panel_id: &str,
+    plugin_id: &str,
+    space_id: Option<&str>,
+) -> Option<Result<bool, String>> {
     match node {
         LayoutNode::Panel { id, panel, .. } => {
             if id == panel_id {
-                Some(control_of(panel, plugin_id))
+                Some(control_of(panel, plugin_id, panel_id, space_id))
             } else {
                 None
             }
         }
-        LayoutNode::Split { first, second, .. } => search_node(first, panel_id, plugin_id)
-            .or_else(|| search_node(second, panel_id, plugin_id)),
+        LayoutNode::Split { first, second, .. } => {
+            search_node(first, panel_id, plugin_id, space_id)
+                .or_else(|| search_node(second, panel_id, plugin_id, space_id))
+        }
         LayoutNode::Grid { cells, .. } => {
             for cell in cells {
                 if let Some(found) = cell
                     .node
                     .as_ref()
-                    .and_then(|node| search_node(node, panel_id, plugin_id))
+                    .and_then(|node| search_node(node, panel_id, plugin_id, space_id))
                 {
                     return Some(found);
                 }
                 if cell.id == panel_id {
                     if let Some(panel) = &cell.panel {
-                        return Some(control_of(panel, plugin_id));
+                        return Some(control_of(panel, plugin_id, panel_id, space_id));
                     }
                 }
             }
@@ -564,13 +713,25 @@ fn search_node(node: &LayoutNode, panel_id: &str, plugin_id: &str) -> Option<Res
     }
 }
 
-fn control_of(panel: &PanelConfig, plugin_id: &str) -> Result<bool, String> {
+fn control_of(
+    panel: &PanelConfig,
+    plugin_id: &str,
+    panel_id: &str,
+    space_id: Option<&str>,
+) -> Result<bool, String> {
     let panel = shown(panel);
     match panel {
         PanelConfig::Plugin {
             plugin, control, ..
         } if plugin == plugin_id => Ok(*control),
-        _ => Err("panel is not this plugin".into()),
+        _ => Err(not_this_plugin(panel_id, space_id)),
+    }
+}
+
+fn not_this_plugin(panel_id: &str, space_id: Option<&str>) -> String {
+    match space_id.map(str::trim).filter(|id| !id.is_empty()) {
+        Some(space) => format!("panel {panel_id} in space {space} is not this plugin"),
+        None => format!("panel {panel_id} is not this plugin"),
     }
 }
 
@@ -772,7 +933,7 @@ mod tests {
         assert!(bridge_allowed(&read_only, &quiet, "checkin-report", "report", "status").is_ok());
         assert_eq!(
             bridge_allowed(&control, &live, "other", "report", "focusPane").unwrap_err(),
-            "panel is not this plugin"
+            "panel report in space main is not this plugin"
         );
         assert_eq!(
             bridge_allowed(&control, &live, "checkin-report", "missing", "focusPane").unwrap_err(),
@@ -928,6 +1089,132 @@ mod tests {
     }
 
     #[test]
+    fn the_same_panel_id_in_another_space_resolves_to_the_named_space() {
+        let control = vec![CONTROL.to_string()];
+        // "w14" sorts before "w8", which is the desk that rejected Clean up.
+        for (markdown_space, plugin_space) in [("w14", "w8"), ("w8", "w14")] {
+            let desk = collided_desk(markdown_space, plugin_space);
+            for method in ["focusPane", "sendText"] {
+                assert!(
+                    bridge_allowed_in_space(
+                        &control,
+                        &desk,
+                        "checkin-report",
+                        Some(plugin_space),
+                        "panel-1",
+                        method,
+                    )
+                    .is_ok(),
+                    "{method} in {plugin_space} (markdown is in {markdown_space})"
+                );
+            }
+            let wrong = bridge_allowed_in_space(
+                &control,
+                &desk,
+                "checkin-report",
+                Some(markdown_space),
+                "panel-1",
+                "focusPane",
+            )
+            .unwrap_err();
+            assert!(
+                wrong.contains("panel-1") && wrong.contains(markdown_space),
+                "{wrong}"
+            );
+            assert!(wrong.contains("not this plugin"), "{wrong}");
+        }
+        let ambiguous = bridge_allowed(
+            &control,
+            &collided_desk("w14", "w8"),
+            "checkin-report",
+            "panel-1",
+            "focusPane",
+        )
+        .unwrap_err();
+        assert!(ambiguous.contains("more than one space"), "{ambiguous}");
+    }
+
+    #[test]
+    fn an_offline_layout_names_its_own_panel_and_ignores_other_layouts() {
+        let control = vec![CONTROL.to_string()];
+        let plugin = desk(true).spaces.into_values().next().unwrap();
+        let markdown = LayoutNode::Panel {
+            id: "panel-1".into(),
+            title: None,
+            collapsed: false,
+            panel: PanelConfig::Markdown {
+                path: "CLAUDE.md".into(),
+                address_bar: None,
+                raw: false,
+            },
+        };
+        assert!(bridge_allowed_in_layout(
+            &control,
+            &plugin,
+            "checkin-report",
+            "report",
+            "focusPane"
+        )
+        .is_ok());
+        let err = bridge_allowed_in_layout(
+            &control,
+            &markdown,
+            "checkin-report",
+            "panel-1",
+            "focusPane",
+        )
+        .unwrap_err();
+        assert!(err.contains("panel-1"), "{err}");
+        assert!(err.contains("not this plugin"), "{err}");
+        assert!(
+            !err.contains("w8") && !err.contains("w14"),
+            "one layout has no other space: {err}"
+        );
+    }
+
+    #[test]
+    fn a_plugin_can_ask_which_panel_it_is() {
+        let control = vec![CONTROL.to_string()];
+        let desk = collided_desk("w14", "w8");
+        assert!(bridge_allowed_in_space(
+            &control,
+            &desk,
+            "checkin-report",
+            Some("w8"),
+            "panel-1",
+            "context",
+        )
+        .is_ok());
+        let wrong = bridge_allowed_in_space(
+            &control,
+            &desk,
+            "checkin-report",
+            Some("w14"),
+            "panel-1",
+            "context",
+        )
+        .unwrap_err();
+        assert!(
+            wrong.contains("w14") && wrong.contains("not this plugin"),
+            "{wrong}"
+        );
+    }
+
+    #[test]
+    fn a_file_grant_may_start_at_home() {
+        let home = home_dir().expect("home");
+        let grants = parse_permissions(
+            vec![FILES.into()],
+            vec!["${HOME}/checkin/state".into(), "~/checkin/state".into()],
+        )
+        .unwrap();
+        let expected = home.join("checkin").join("state");
+        assert_eq!(grants.files, vec![expected]);
+        let bare = parse_permissions(vec![FILES.into()], vec!["~".into()]).unwrap();
+        assert_eq!(bare.files, vec![home]);
+    }
+
+    #[test]
     fn an_offline_layout_still_gates_control() {
         let control = vec![CONTROL.to_string()];
         assert_eq!(
@@ -971,6 +1258,59 @@ mod tests {
         );
         assert!(is_herdr_pane_id("wK:p1"));
         assert!(!is_herdr_pane_id("p1"));
+    }
+
+    fn collided_desk(markdown_space: &str, plugin_space: &str) -> DeskDocument {
+        let mut spaces = BTreeMap::new();
+        spaces.insert(markdown_space.into(), markdown_panel("panel-1"));
+        spaces.insert(
+            plugin_space.into(),
+            plugin_panel("panel-1", "checkin-report", true),
+        );
+        DeskDocument {
+            revision: 1,
+            version: 0,
+            pins: Vec::new(),
+            spaces,
+        }
+    }
+
+    fn markdown_panel(id: &str) -> LayoutNode {
+        LayoutNode::Panel {
+            id: id.into(),
+            title: Some("CLAUDE.md".into()),
+            collapsed: false,
+            panel: PanelConfig::Markdown {
+                path: "CLAUDE.md".into(),
+                address_bar: None,
+                raw: false,
+            },
+        }
+    }
+
+    fn plugin_panel(id: &str, plugin: &str, control: bool) -> LayoutNode {
+        LayoutNode::Panel {
+            id: id.into(),
+            title: None,
+            collapsed: false,
+            panel: PanelConfig::Plugin {
+                plugin: plugin.into(),
+                config: serde_json::Value::Null,
+                view: None,
+                path: None,
+                url: None,
+                directory: false,
+                address_bar: None,
+                control,
+            },
+        }
+    }
+
+    fn home_dir() -> Option<PathBuf> {
+        std::env::var_os("HOME")
+            .or_else(|| std::env::var_os("USERPROFILE"))
+            .map(PathBuf::from)
+            .filter(|path| !path.as_os_str().is_empty())
     }
 
     fn desk(control: bool) -> DeskDocument {

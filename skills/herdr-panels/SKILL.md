@@ -84,7 +84,7 @@ herdr-panels panel visit google Notes --size 2,1
 herdr-panels panel visit google Notes Agents Files --columns 2,1 --rows 1,2
 ```
 
-`open` adds a panel. `--from` is the panel to split. When it is omitted, the new panel is beside the last content panel. `--direction right` places it beside that panel. `--direction down` places it below. `--panel Name` replaces that panel instead of adding one. Do not replace Panes or a Terminal panel unless the user named that panel. See Panes and Terminal above.
+`open` adds a panel. `--from` is the panel to split. When it is omitted, the new panel is beside the last content panel. `--direction right` places it beside that panel. `--direction down` places it below. `--panel Name` replaces that panel instead of adding one. `--id` chooses the id of a panel that is being added. Do not replace Panes or a Terminal panel unless the user named that panel. See Panes and Terminal above. `panel list` ends with a control column: `on`, `off`, or empty.
 
 What `open` creates:
 

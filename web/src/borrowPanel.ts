@@ -54,6 +54,8 @@ export type VisitArrange = "row" | "column" | "grid";
 export interface OpenedVisit {
   node: LayoutNode;
   origins: Record<string, string>;
+  /** Panel id to the space that owns it. A visit can show a panel from another space. */
+  spaceIds: Record<string, string>;
   single: boolean;
   arrange: VisitArrange;
   spaceLabel: string;
@@ -141,7 +143,11 @@ export function openVisit(
     visits.push(found.visit);
   }
   const origins: Record<string, string> = {};
-  for (const visit of visits) origins[visit.panelId] = visit.spaceLabel;
+  const spaceIds: Record<string, string> = {};
+  for (const visit of visits) {
+    origins[visit.panelId] = visit.spaceLabel;
+    spaceIds[visit.panelId] = visit.spaceId;
+  }
   const weighted = visitWeights(visits.length, arrange, weights);
   if ("error" in weighted) return weighted;
   const node =
@@ -157,6 +163,7 @@ export function openVisit(
   return {
     node,
     origins,
+    spaceIds,
     single: visits.length === 1,
     arrange,
     spaceLabel: visits[0].spaceLabel,

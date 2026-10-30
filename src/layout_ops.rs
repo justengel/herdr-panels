@@ -17,6 +17,56 @@ pub fn contains(node: &LayoutNode, id: &str) -> bool {
     list_panels(node).iter().any(|panel| panel.id == id)
 }
 
+/// `on` or `off` when the panel can type into a pane. Empty for every other kind.
+pub fn panel_control_column(panel: &PanelConfig) -> &'static str {
+    match panel {
+        PanelConfig::Plugin { control, .. } | PanelConfig::Html { control, .. } => {
+            if *control {
+                "on"
+            } else {
+                "off"
+            }
+        }
+        PanelConfig::Tabs { tabs, active, .. } => tabs
+            .iter()
+            .find(|tab| &tab.id == active)
+            .or_else(|| tabs.first())
+            .map(|tab| panel_control_column(&tab.panel))
+            .unwrap_or(""),
+        _ => "",
+    }
+}
+
+/// Where a reuse open should write. An omitted `from` replaces the last viewer
+/// panel (a note, file, HTML page, or browser). A plugin, a terminal, and an
+/// explicit `from` are left in place and the new panel opens beside them.
+pub enum OpenPlace {
+    Replace(String),
+    Beside(String),
+}
+
+pub fn open_place(root: &LayoutNode, from: Option<&str>) -> Result<OpenPlace, &'static str> {
+    if let Some(from) = from.map(str::trim).filter(|id| !id.is_empty()) {
+        if !contains(root, from) {
+            return Err("panel was not found");
+        }
+        return Ok(OpenPlace::Beside(from.to_string()));
+    }
+    let panels = list_panels(root);
+    let Some(last) = panels
+        .iter()
+        .rev()
+        .find(|panel| !matches!(panel.panel, PanelConfig::Files | PanelConfig::Agents))
+    else {
+        return Err("layout has no panels");
+    };
+    if is_document(&last.panel) {
+        Ok(OpenPlace::Replace(last.id.clone()))
+    } else {
+        Ok(OpenPlace::Beside(last.id.clone()))
+    }
+}
+
 pub fn fresh_id(node: &LayoutNode) -> String {
     let used: Vec<String> = list_panels(node)
         .into_iter()
@@ -29,6 +79,18 @@ pub fn fresh_id(node: &LayoutNode) -> String {
         }
     }
     format!("panel-{}", used.len() + 1)
+}
+
+fn valid_panel_id(id: &str) -> bool {
+    let mut chars = id.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    first.is_ascii_alphanumeric()
+        && id.len() <= 49
+        && id
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '-')
 }
 
 pub fn split_panel(
@@ -94,6 +156,27 @@ pub fn open_panel(
     title: Option<String>,
     reuse_neighbor: bool,
 ) -> Result<(LayoutNode, String), &'static str> {
+    open_panel_with_id(
+        node,
+        anchor_id,
+        direction,
+        panel,
+        title,
+        reuse_neighbor,
+        None,
+    )
+}
+
+/// Open beside `anchor_id`, or with `chosen_id` when that id is free in this layout.
+pub fn open_panel_with_id(
+    node: LayoutNode,
+    anchor_id: &str,
+    direction: Direction,
+    panel: PanelConfig,
+    title: Option<String>,
+    reuse_neighbor: bool,
+    chosen_id: Option<&str>,
+) -> Result<(LayoutNode, String), &'static str> {
     if !contains(&node, anchor_id) {
         return Err("panel was not found");
     }
@@ -104,7 +187,18 @@ pub fn open_panel(
             return Ok((next, neighbor));
         }
     }
-    let id = fresh_id(&node);
+    let id = match chosen_id.map(str::trim).filter(|id| !id.is_empty()) {
+        Some(id) => {
+            if !valid_panel_id(id) {
+                return Err("panel id is invalid");
+            }
+            if contains(&node, id) {
+                return Err("a panel already has that id");
+            }
+            id.to_string()
+        }
+        None => fresh_id(&node),
+    };
     let created = LayoutNode::Panel {
         id: id.clone(),
         title,
@@ -1109,6 +1203,181 @@ mod tests {
         )
         .unwrap()
         .root
+    }
+
+    #[test]
+    fn panel_list_shows_whether_control_is_on() {
+        assert_eq!(
+            panel_control_column(&PanelConfig::Plugin {
+                plugin: "checkin-report".into(),
+                config: serde_json::Value::Null,
+                view: None,
+                path: None,
+                url: None,
+                directory: false,
+                address_bar: None,
+                control: true,
+            }),
+            "on"
+        );
+        assert_eq!(
+            panel_control_column(&PanelConfig::Html {
+                path: Some("a.html".into()),
+                inline: None,
+                control: false,
+                address_bar: None,
+                raw: false,
+            }),
+            "off"
+        );
+        assert_eq!(
+            panel_control_column(&PanelConfig::Markdown {
+                path: "CLAUDE.md".into(),
+                address_bar: None,
+                raw: false,
+            }),
+            ""
+        );
+    }
+
+    #[test]
+    fn an_open_can_choose_its_panel_id() {
+        let (created, id) = open_panel_with_id(
+            sample(),
+            "term",
+            Direction::Row,
+            PanelConfig::Html {
+                path: Some("a.html".into()),
+                inline: None,
+                control: false,
+                address_bar: None,
+                raw: false,
+            },
+            None,
+            false,
+            Some("report"),
+        )
+        .unwrap();
+        assert_eq!(id, "report");
+        assert!(contains(&created, "report"));
+        let taken = open_panel_with_id(
+            created,
+            "term",
+            Direction::Row,
+            PanelConfig::File {
+                path: "src/main.rs".into(),
+                address_bar: None,
+            },
+            None,
+            false,
+            Some("report"),
+        )
+        .unwrap_err();
+        assert_eq!(taken, "a panel already has that id");
+        assert_eq!(
+            open_panel_with_id(
+                sample(),
+                "term",
+                Direction::Row,
+                PanelConfig::File {
+                    path: "src/main.rs".into(),
+                    address_bar: None,
+                },
+                None,
+                false,
+                Some("bad id"),
+            )
+            .unwrap_err(),
+            "panel id is invalid"
+        );
+    }
+
+    #[test]
+    fn a_second_open_replaces_the_viewer_it_just_made_and_leaves_a_plugin() {
+        let terminal = LayoutNode::Panel {
+            id: "panel-1".into(),
+            title: None,
+            panel: PanelConfig::Herdr {
+                pane_id: Some("w8:p1".into()),
+                source: None,
+                lines: None,
+                scope: Some(HerdrScope::Pane),
+            },
+            collapsed: false,
+        };
+        let html = PanelConfig::Html {
+            path: Some("notes/board.html".into()),
+            inline: None,
+            control: false,
+            address_bar: None,
+            raw: false,
+        };
+        assert!(matches!(
+            open_place(&terminal, None).unwrap(),
+            OpenPlace::Beside(id) if id == "panel-1"
+        ));
+        let (opened, id) = open_panel(
+            terminal,
+            "panel-1",
+            Direction::Row,
+            html.clone(),
+            None,
+            true,
+        )
+        .unwrap();
+        assert_ne!(id, "panel-1");
+        assert!(matches!(
+            open_place(&opened, None).unwrap(),
+            OpenPlace::Replace(found) if found == id
+        ));
+        assert!(matches!(
+            open_place(&opened, Some(&id)).unwrap(),
+            OpenPlace::Beside(found) if found == id
+        ));
+
+        let plugin = LayoutNode::Panel {
+            id: "panel-1".into(),
+            title: None,
+            panel: PanelConfig::Plugin {
+                plugin: "checkin-report".into(),
+                config: serde_json::Value::Null,
+                view: None,
+                path: None,
+                url: None,
+                directory: false,
+                address_bar: None,
+                control: true,
+            },
+            collapsed: false,
+        };
+        assert!(
+            matches!(
+                open_place(&plugin, None).unwrap(),
+                OpenPlace::Beside(found) if found == "panel-1"
+            ),
+            "a plugin panel is not a viewer, so it is not replaced"
+        );
+        let (with_plugin, plugin_neighbor) =
+            open_panel(plugin, "panel-1", Direction::Row, html, None, true).unwrap();
+        // The plugin stays. The viewer beside it is what a later open replaces,
+        // and naming the plugin as `from` does not replace the plugin.
+        assert!(matches!(
+            open_place(&with_plugin, Some("panel-1")).unwrap(),
+            OpenPlace::Beside(found) if found == "panel-1"
+        ));
+        assert!(contains(&with_plugin, "panel-1"));
+        assert!(matches!(
+            list_panels(&with_plugin)
+                .iter()
+                .find(|panel| panel.id == "panel-1")
+                .unwrap()
+                .panel,
+            PanelConfig::Plugin { .. }
+        ));
+        assert!(matches!(
+            open_place(&with_plugin, None).unwrap(),
+            OpenPlace::Replace(found) if found == plugin_neighbor
+        ));
     }
 
     #[test]

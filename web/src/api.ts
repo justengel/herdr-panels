@@ -201,7 +201,7 @@ export const api = {
   plugins: () => request<{ plugins: PluginInfo[] }>("/api/plugins", { cache: "no-store" }),
   pluginBridge: (
     pluginId: string,
-    body: { panelId: string; method: string; params?: Record<string, unknown> },
+    body: { panelId: string; spaceId?: string; method: string; params?: Record<string, unknown> },
   ) =>
     request<unknown>(`/api/plugins/${encodeURIComponent(pluginId)}/bridge`, {
       method: "POST",

@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+A plugin bridge call names the space it is running in, and the server looks up that panel only in that space. The same panel id in another space no longer answers first. `herdrPanels.context()` returns this panel and space. The host also posts `{ source: "hwp-host", type: "context", panelId, spaceId }` when the frame loads. A bridge error names the panel and the space it checked.
+
+`herdr-panels panel list` adds a control column: `on`, `off`, or empty. `herdr-panels panel open --id` chooses the new panel's id in this space. A `files` path may start with `~` or `${HOME}`.
+
+Opening again with reuse, and without `--from` or `--panel`, replaces the last note, file, HTML page, or browser panel. A plugin panel is left as it is.
+
 ## 0.1.11 - 2026-10-30
 
 A space stays on the Herdr tab you left. Both tab bars can be renamed, reordered, and closed.

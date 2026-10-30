@@ -141,7 +141,7 @@ async fn index(State(state): State<AppState>) -> Json<Value> {
         "zoom": "POST /api/agent/zoom {panelId?, space?}",
         "visit": "POST /api/agent/visit {panelId | panelIds, arrange?} -> {arrange, panels: [{panelId, title, spaceId, space}]}",
         "spaces": "GET /api/agent/spaces",
-        "open": "POST /api/agent/open {target, panelId?, from?, direction?: right|down, reuse?: bool, title?, space?, control?}",
+        "open": "POST /api/agent/open {target, panelId?, id?, from?, direction?: right|down, reuse?: bool, title?, space?, control?}",
         "resolve": "POST /api/agent/resolve {target}",
         "read": "GET /api/agent/panels/{id}?selector=&text=",
         "write": "POST /api/agent/panels/{id}/write {text?, keys?}",
@@ -374,6 +374,9 @@ struct OpenBody {
     space: Option<String>,
     #[serde(default)]
     control: Option<bool>,
+    /// Id for a new panel. `panelId` still names an existing panel to replace.
+    #[serde(default)]
+    id: Option<String>,
 }
 
 fn open_direction() -> String {
@@ -397,6 +400,7 @@ async fn open_target(
             title: body.title,
             space: body.space,
             control: body.control,
+            id: body.id,
         },
     )
     .await
@@ -412,6 +416,7 @@ pub(crate) struct DeskOpen {
     pub title: Option<String>,
     pub space: Option<String>,
     pub control: Option<bool>,
+    pub id: Option<String>,
 }
 
 pub(crate) async fn open_desk(
@@ -431,12 +436,45 @@ pub(crate) async fn open_desk(
     let panel = finish_plugin_control(state, kind_to_panel(&kind), body.control, true)?;
     let title = body.title.filter(|title| !title.trim().is_empty());
     let (source, mut doc) = begin(state, link, named_space(body.space.as_deref())).await?;
+    let chosen_id = body
+        .id
+        .as_deref()
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .map(str::to_string);
+    if chosen_id.is_some() && body.panel_id.is_some() {
+        return Err(AgentError::bad(
+            "--id names a new panel; --panel replaces one that is already open",
+        ));
+    }
     let (root, panel_id, created) = if let Some(panel_id) = body.panel_id.as_deref() {
         let panel_id = resolve_key(state, &doc.root, panel_id)?;
         let root =
             layout_ops::update_panel(doc.root, &panel_id, title.clone().map(Some), Some(panel))
                 .map_err(AgentError::bad)?;
         (root, panel_id, false)
+    } else if chosen_id.is_none() && body.reuse && body.from.is_none() {
+        match layout_ops::open_place(&doc.root, None).map_err(AgentError::bad)? {
+            layout_ops::OpenPlace::Replace(panel_id) => {
+                let root = layout_ops::update_panel(
+                    doc.root,
+                    &panel_id,
+                    title.clone().map(Some),
+                    Some(panel),
+                )
+                .map_err(AgentError::bad)?;
+                (root, panel_id, false)
+            }
+            layout_ops::OpenPlace::Beside(anchor) => {
+                let before = list_panels(&doc.root).len();
+                let (root, panel_id) = layout_ops::open_panel_with_id(
+                    doc.root, &anchor, direction, panel, title, true, None,
+                )
+                .map_err(AgentError::bad)?;
+                let created = list_panels(&root).len() > before;
+                (root, panel_id, created)
+            }
+        }
     } else {
         let anchor = match body.from.as_deref() {
             Some(from) => resolve_key(state, &doc.root, from)?,
@@ -445,9 +483,16 @@ pub(crate) async fn open_desk(
             }
         };
         let before = list_panels(&doc.root).len();
-        let (root, panel_id) =
-            layout_ops::open_panel(doc.root, &anchor, direction, panel, title, body.reuse)
-                .map_err(AgentError::bad)?;
+        let (root, panel_id) = layout_ops::open_panel_with_id(
+            doc.root,
+            &anchor,
+            direction,
+            panel,
+            title,
+            body.reuse,
+            chosen_id.as_deref(),
+        )
+        .map_err(AgentError::bad)?;
         let created = list_panels(&root).len() > before;
         (root, panel_id, created)
     };
@@ -1534,6 +1579,7 @@ fn panel_rows(state: &AppState, root: &LayoutNode) -> Vec<Value> {
                 "kind": layout_ops::panel_kind(&panel.panel, &label),
                 "type": panel_type(&panel.panel),
                 "summary": panel_summary(&panel.panel),
+                "control": layout_ops::panel_control_column(&panel.panel),
             });
             if let Some(role) = herdr_role(&panel.panel) {
                 row["role"] = json!(role);

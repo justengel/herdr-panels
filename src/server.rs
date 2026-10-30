@@ -1089,6 +1089,9 @@ async fn list_plugins(State(state): State<AppState>) -> Result<Json<Value>, ApiE
 #[serde(rename_all = "camelCase")]
 struct BridgeBody {
     panel_id: String,
+    /// Space the frame is showing. Panel ids are only unique inside one space.
+    #[serde(default)]
+    space_id: Option<String>,
     method: String,
     #[serde(default)]
     params: Value,
@@ -1107,10 +1110,16 @@ async fn plugin_bridge(
     let manifest = crate::plugins::load_installed(&state.config_dir, &id).map_err(ApiError::bad)?;
     let session = link.name.clone();
     let desk = crate::desk::load_desk(&state.config_dir, &session).map_err(ApiError::bad)?;
-    let decision = crate::plugin_grant::bridge_allowed(
+    let space_id = body
+        .space_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|space| !space.is_empty());
+    let decision = crate::plugin_grant::bridge_allowed_in_space(
         &manifest.permissions,
         &desk,
         &id,
+        space_id,
         &body.panel_id,
         &body.method,
     );
@@ -1130,6 +1139,10 @@ async fn plugin_bridge(
     decision.map_err(ApiError::forbidden)?;
     let client = link.runtime.client().clone();
     match body.method.as_str() {
+        "context" => Ok(Json(json!({
+            "panelId": body.panel_id,
+            "spaceId": space_id.unwrap_or(""),
+        }))),
         "status" | "listPanes" => {
             let snapshot = link.runtime.snapshot().await;
             Ok(Json(
@@ -1238,6 +1251,7 @@ async fn plugin_bridge(
                     title: param_opt(&body.params, "title"),
                     space: None,
                     control: None,
+                    id: param_opt(&body.params, "id"),
                 },
             )
             .await

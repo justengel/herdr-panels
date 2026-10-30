@@ -54,6 +54,7 @@ interface Props {
   fromSpace?: string;
   borrowed?: boolean;
   origins?: Record<string, string>;
+  spaceIds?: Record<string, string>;
   openMenuId?: string | null;
   openMenuToken?: number;
   root?: LayoutNode;
@@ -78,6 +79,7 @@ export function LayoutView({
   fromSpace,
   borrowed,
   origins,
+  spaceIds,
   openMenuId = null,
   openMenuToken = 0,
   root,
@@ -98,6 +100,7 @@ export function LayoutView({
     onOpenSpace,
     borrowed,
     origins,
+    spaceIds,
     openMenuId,
     openMenuToken,
     root: tree,
@@ -157,6 +160,7 @@ function GridView({
   onOpenSpace,
   borrowed,
   origins,
+  spaceIds,
   openMenuId = null,
   openMenuToken = 0,
   root,
@@ -179,6 +183,7 @@ function GridView({
     onOpenSpace,
     borrowed,
     origins,
+    spaceIds,
     openMenuId,
     openMenuToken,
     root,
@@ -262,11 +267,12 @@ function PanelView(props: {
   onBack?: () => void;
   fromSpace?: string;
   borrowed?: boolean;
+  spaceIds?: Record<string, string>;
   openMenuId?: string | null;
   openMenuToken?: number;
   root?: LayoutNode;
 }) {
-  const { id, title, panel, panes, workspaces, onPanel, onCloseTab, openMenuId, openMenuToken, root, onBack, fromSpace, borrowed } =
+  const { id, title, panel, panes, workspaces, onPanel, onCloseTab, openMenuId, openMenuToken, root, onBack, fromSpace, borrowed, spaceIds } =
     props;
   const design = useDesign();
   const host = useHost();
@@ -293,6 +299,7 @@ function PanelView(props: {
   void pinTick;
   const pinned = findPin(id);
   const activeSpace = workspaces.find((item) => item.focused) ?? workspaces[0];
+  const bridgeSpaceId = spaceIds?.[id] || activeSpace?.workspaceId || "";
   const menuPanes = panes.map((pane) => ({
     paneId: pane.paneId,
     label: pane.label || pane.title || pane.agentName || baseName(pane.cwd || "") || pane.paneId,
@@ -427,7 +434,7 @@ function PanelView(props: {
             onChange={(next) => onPanel(id, next)}
             onClose={(tabId) => onCloseTab(id, tabId)}
             renderContent={(tab, update) => (
-              <Surface {...props} id={`${id}:${tab.id}`} panel={tab.panel} onPanel={(_id, next) => update(next)} />
+              <Surface {...props} id={`${id}:${tab.id}`} spaceId={bridgeSpaceId} panel={tab.panel} onPanel={(_id, next) => update(next)} />
             )}
           />
         </PanelChrome>
@@ -456,7 +463,7 @@ function PanelView(props: {
         badge={herdrBadge(panel, herdrPane(props))}
         badgeClass={herdrBadgeClass(panel, herdrPane(props))}
       >
-        <Surface {...props} />
+        <Surface {...props} spaceId={bridgeSpaceId} />
       </PanelChrome>
       {opening ? (
         <OpenAddressDialog
@@ -497,6 +504,7 @@ function Surface({
   onPanel,
   onFocusPane,
   onOpenSpace,
+  spaceId,
 }: {
   id: string;
   title?: string | null;
@@ -510,6 +518,7 @@ function Surface({
   onPanel: (id: string, panel: PanelConfig, retitle?: boolean) => void;
   onFocusPane: (paneId: string) => void;
   onOpenSpace?: (workspaceId: string) => void;
+  spaceId: string;
 }) {
   const design = useDesign();
   if (panel.type === "tabs") {
@@ -535,6 +544,7 @@ function Surface({
         panel={panel}
         panes={panes}
         workspaces={workspaces}
+        spaceId={spaceId}
         onPanel={onPanel}
       />
     );
@@ -583,6 +593,7 @@ function DocumentSurface({
   panel,
   panes,
   workspaces,
+  spaceId,
   onPanel,
 }: {
   id: string;
@@ -590,6 +601,7 @@ function DocumentSurface({
   panel: PanelConfig;
   panes: PaneView[];
   workspaces: WorkspaceView[];
+  spaceId: string;
   onPanel: (id: string, panel: PanelConfig, retitle?: boolean) => void;
 }) {
   const design = useDesign();
@@ -735,6 +747,7 @@ function DocumentSurface({
         <PluginView
           pluginId={panel.plugin}
           panelId={id}
+          spaceId={spaceId}
           title={title || panel.plugin}
           modify={bar.modify}
           command={liveCommand}
