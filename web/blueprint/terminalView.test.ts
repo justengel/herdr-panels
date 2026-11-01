@@ -12,8 +12,12 @@ import {
   pointerCell,
   viewportShift,
   scrollMetrics,
+  mergeScroll,
+  readWheelLines,
+  reportedPlace,
   viewBox,
   wheelScroll,
+  wheelStep,
   fittedGrid,
   openingScreen,
   frameDraw,
@@ -127,6 +131,16 @@ describe("terminal view", () => {
     expect(known.height).toBeCloseTo((20 / 60) * 400, 5);
   });
 
+  it("sizes the thumb from Herdr's scrollback once that length is known", () => {
+    expect(scrollThumb(400, 40, 0, 0, true)).toEqual({ top: 0, height: 400 });
+    const live = scrollThumb(400, 20, 0, 536, true);
+    const top = scrollThumb(400, 20, 536, 536, true);
+    expect(live.height).toBe(24);
+    expect(live.top + live.height).toBeCloseTo(400, 5);
+    expect(top.top).toBe(0);
+    expect(top.height).toBe(live.height);
+  });
+
   it("maps a thumb drag onto Herdr's range, and probes one line per cell before that", () => {
     expect(scrollDragTarget(0, 0, -51, 17, 400, 372, 28)).toBe(3);
     expect(scrollDragTarget(0, 0, 34, 17, 400, 372, 28)).toBe(0);
@@ -146,8 +160,37 @@ describe("terminal view", () => {
 
   it("jumps back to the live input from any distance above it", () => {
     expect(inputScroll({ fromEnd: 0, extent: 40 })).toBe(0);
-    expect(inputScroll({ fromEnd: 3, extent: 40 })).toBe(200);
+    expect(inputScroll({ fromEnd: 3, extent: 40 })).toBe(3);
+    expect(inputScroll({ fromEnd: 12, extent: 12 })).toBe(200);
     expect(inputScroll({ fromEnd: 480, extent: 480 })).toBe(480);
+    expect(inputScroll({ fromEnd: 12, extent: 536 })).toBe(12);
+  });
+
+  it("keeps a wheel preview until Herdr's scroll report catches up", () => {
+    expect(reportedPlace(12, 240)).toEqual({ fromEnd: 12, extent: 240 });
+    expect(reportedPlace(300, 240)).toEqual({ fromEnd: 240, extent: 240 });
+    expect(reportedPlace(Number.NaN, 10)).toBeNull();
+
+    const reported = { fromEnd: 10, extent: 536 };
+    const pending = { direction: "up" as const, lines: 6, place: { fromEnd: 10, extent: 536 } };
+    expect(mergeScroll(reported, { fromEnd: 16, extent: 536 }, pending)).toEqual({ fromEnd: 16, extent: 536 });
+    expect(mergeScroll({ fromEnd: 16, extent: 536 }, { fromEnd: 16, extent: 536 }, pending)).toEqual({
+      fromEnd: 16,
+      extent: 536,
+    });
+    const down = { direction: "down" as const, lines: 10, place: { fromEnd: 40, extent: 536 } };
+    expect(mergeScroll({ fromEnd: 40, extent: 536 }, { fromEnd: 30, extent: 536 }, down)).toEqual({
+      fromEnd: 30,
+      extent: 536,
+    });
+    expect(mergeScroll({ fromEnd: 0, extent: 536 }, { fromEnd: 30, extent: 536 }, down)).toEqual({
+      fromEnd: 0,
+      extent: 536,
+    });
+    expect(mergeScroll({ fromEnd: 0, extent: 536 }, { fromEnd: 40, extent: 40 }, null)).toEqual({
+      fromEnd: 0,
+      extent: 536,
+    });
   });
 
   it("ignores a clock tick and notices a page that shifted", () => {
@@ -179,8 +222,22 @@ describe("terminal view", () => {
   it("turns a wheel notch into a Herdr scroll and ignores a resting wheel", () => {
     expect(wheelScroll(-100, 0)).toEqual({ direction: "up", lines: 3, source: "wheel" });
     expect(wheelScroll(100, 0)).toEqual({ direction: "down", lines: 3, source: "wheel" });
+    expect(wheelScroll(120, 0, 9)).toEqual({ direction: "down", lines: 11, source: "wheel" });
     expect(wheelScroll(0, 0)).toBeNull();
     expect(wheelScroll(Number.NaN, 0)).toBeNull();
+  });
+
+  it("collects tiny wheel deltas until they make a line, in either direction", () => {
+    const first = wheelStep(0, -1, 0, 3);
+    expect(first.gesture).toBeNull();
+    const second = wheelStep(first.pending, -33, 0, 3);
+    expect(second.gesture).toEqual({ direction: "up", lines: 1, source: "wheel" });
+    expect(wheelStep(0, 100, 0, 6).gesture).toEqual({ direction: "down", lines: 6, source: "wheel" });
+    expect(readWheelLines(null)).toBe(3);
+    expect(readWheelLines("9")).toBe(9);
+    expect(readWheelLines("0")).toBe(1);
+    expect(readWheelLines("80")).toBe(40);
+    expect(readWheelLines("nope")).toBe(3);
   });
 
   it("turns page keys into a page of Herdr scroll", () => {
