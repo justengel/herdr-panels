@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import type { HerdrConfig, HerdrField, HerdrIntegration } from "../api";
+import { clampWheelLines, readWheelLines, WHEEL_LINES_EVENT, WHEEL_LINES_KEY } from "../terminalView";
 import {
   DESK_ACTIONS,
   bindingPlaceholder,
@@ -13,6 +14,7 @@ import { IndicatorSample } from "./StatusMark";
 
 const ORDER = [
   "theme",
+  "panels",
   "indicators",
   "sound",
   "toasts",
@@ -32,6 +34,7 @@ const ORDER = [
 
 const TAB_LABEL: Record<string, string> = {
   theme: "theme",
+  panels: "panels",
   indicators: "indicators",
   sound: "sound",
   toasts: "toasts",
@@ -51,6 +54,7 @@ const TAB_LABEL: Record<string, string> = {
 
 const BLURB: Record<string, string> = {
   theme: "This palette colors Herdr Panels and the Herdr terminal.",
+  panels: "This window. The terminal wheel uses this.",
   indicators: "Spaces and agents in this window use these marks and this order. The Herdr terminal uses them too.",
   sound: "Herdr plays these when an agent changes state. This window stays quiet.",
   toasts:
@@ -138,6 +142,7 @@ export function HerdrSettings({
   const [editing, setEditing] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [wheelLines, setWheelLines] = useState(() => readWheelLines(storedWheelLines()));
 
   useEffect(() => setTheme(config.theme), [config.theme]);
   useEffect(() => setSettings(config.settings), [config.settings]);
@@ -238,7 +243,8 @@ export function HerdrSettings({
     );
   });
   const editingAction = DESK_ACTIONS.find((action) => action.id === editing) ?? null;
-  const needsApply = mode === "keybinds" ? keyTab === "herdr" : tab !== "integrations" && fields.length > 0;
+  const needsApply =
+    mode === "keybinds" ? keyTab === "herdr" : tab !== "integrations" && tab !== "panels" && fields.length > 0;
 
   return (
     <div className="settings-backdrop" onMouseDown={onClose}>
@@ -339,6 +345,36 @@ export function HerdrSettings({
             ))}
           </div>
         ) : null}
+        {mode === "settings" && tab === "panels" ? (
+          <div className="setting-block">
+            <div className="setting-heading">
+              <h3>Terminal wheel lines</h3>
+              <AudienceMark audience="panels" />
+            </div>
+            <p className="settings-note">
+              Lines a terminal moves for one mouse notch. Up and down use the same count. Page Up and Page Down still move one page.
+            </p>
+            <input
+              className="setting-input"
+              type="number"
+              min={1}
+              max={40}
+              step={1}
+              aria-label="Terminal wheel lines"
+              value={wheelLines}
+              onChange={(event) => {
+                const next = clampWheelLines(event.target.value);
+                setWheelLines(next);
+                try {
+                  localStorage.setItem(WHEEL_LINES_KEY, String(next));
+                } catch {
+                  // The count still applies in this page.
+                }
+                window.dispatchEvent(new Event(WHEEL_LINES_EVENT));
+              }}
+            />
+          </div>
+        ) : null}
         {mode === "settings" && tab === "integrations" ? (
           <>
             <div className="setting-heading">
@@ -348,7 +384,7 @@ export function HerdrSettings({
             <IntegrationList items={config.integrations ?? []} error={config.integrationError} busy={busy} onChange={changeIntegration} />
           </>
         ) : null}
-        {mode === "settings" && tab !== "integrations"
+        {mode === "settings" && tab !== "integrations" && tab !== "panels"
           ? fields.map((field) => (
               <div className="setting-block" key={field.key}>
                 <div className="setting-heading">
@@ -440,9 +476,18 @@ function fallbackFor(id: string, overrides: Record<string, string>, keys: HerdrF
   return resolveDeskBindings(rest, keys)[id] ?? "";
 }
 
+function storedWheelLines(): string | null {
+  try {
+    return typeof localStorage === "undefined" ? null : localStorage.getItem(WHEEL_LINES_KEY);
+  } catch {
+    return null;
+  }
+}
+
 function tabsFor(settings: HerdrField[]): string[] {
   const present = new Set(settings.map((field) => field.group).filter((group): group is string => Boolean(group)));
   present.add("theme");
+  present.add("panels");
   present.add("integrations");
   const known = ORDER.filter((id) => present.has(id));
   const extra = [...present].filter((id) => !ORDER.includes(id)).sort();

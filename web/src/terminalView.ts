@@ -186,24 +186,99 @@ export function pointerCell(
   return { column, row, edge };
 }
 
-/** One mouse notch is about 100 pixels and moves three lines, matching a typical terminal. */
-export function wheelScroll(deltaY: number, deltaMode: number): ScrollGesture | null {
-  if (!Number.isFinite(deltaY) || deltaY === 0) return null;
+/** Lines one mouse notch moves. One notch is about 100 pixels. */
+export const DEFAULT_WHEEL_LINES = 3;
+export const MAX_WHEEL_LINES = 40;
+export const WHEEL_LINES_KEY = "herdr-panels.wheel-lines";
+export const WHEEL_LINES_EVENT = "herdr-wheel-lines";
+
+const NOTCH_PX = 100;
+
+export function clampWheelLines(value: unknown): number {
+  const number = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(number)) return DEFAULT_WHEEL_LINES;
+  return Math.max(1, Math.min(MAX_WHEEL_LINES, Math.round(number)));
+}
+
+export function readWheelLines(stored: string | null): number {
+  if (stored == null || stored.trim() === "") return DEFAULT_WHEEL_LINES;
+  return clampWheelLines(stored);
+}
+
+/** A partial notch waits. A one-pixel event is not a line, so up and down stay even. */
+export function wheelStep(
+  pending: number,
+  deltaY: number,
+  deltaMode: number,
+  linesPerNotch: number,
+): { gesture: ScrollGesture | null; pending: number } {
+  const carried = Number.isFinite(pending) ? pending : 0;
+  if (!Number.isFinite(deltaY) || deltaY === 0) return { gesture: null, pending: carried };
+  const linesEach = clampWheelLines(linesPerNotch);
   const magnitude = Math.abs(deltaY);
   const pixels = deltaMode === 1 ? magnitude * 16 : deltaMode === 2 ? magnitude * 400 : magnitude;
-  const lines = Math.max(1, Math.min(40, Math.round((pixels / 100) * 3) || 1));
-  return { direction: deltaY < 0 ? "up" : "down", lines, source: "wheel" };
+  const sign = deltaY < 0 ? -1 : 1;
+  let credit = carried + sign * pixels * linesEach;
+  if (Math.abs(credit) < NOTCH_PX) return { gesture: null, pending: credit };
+  const lines = Math.max(-200, Math.min(200, Math.round(credit / NOTCH_PX)));
+  if (lines === 0) return { gesture: null, pending: credit };
+  credit -= lines * NOTCH_PX;
+  return {
+    gesture: { direction: lines < 0 ? "up" : "down", lines: Math.abs(lines), source: "wheel" },
+    pending: credit,
+  };
+}
+
+/** One wheel event. Small deltas stay pending so they can join the next event. */
+export function wheelScroll(deltaY: number, deltaMode: number, linesPerNotch = DEFAULT_WHEEL_LINES): ScrollGesture | null {
+  return wheelStep(0, deltaY, deltaMode, linesPerNotch).gesture;
 }
 
 /**
  * Lines to move down so typing happens on the live screen. Zero when the view
- * is already there. A short distance still jumps a full page, because the
- * tracked distance can be short of the real one.
+ * is already there. Inside a measured range the distance is exact. At the
+ * edge of a range that may still be short, jump at least a page.
  */
 export function inputScroll(place: ScrollPlace): number {
   const above = Math.max(0, Math.round(place.fromEnd) || 0);
   if (above <= 0) return 0;
+  const extent = Math.max(above, Math.round(place.extent) || 0);
+  if (extent > above) return above;
   return Math.max(above, 200);
+}
+
+/** Herdr's scroll measurement. `offset` is lines above the live screen. `max` is the scrollback length. */
+export function reportedPlace(offset: number, maxOffset: number): ScrollPlace | null {
+  if (!Number.isFinite(offset) || !Number.isFinite(maxOffset)) return null;
+  const extent = Math.max(0, Math.round(maxOffset));
+  const fromEnd = Math.max(0, Math.min(extent, Math.round(offset)));
+  return { fromEnd, extent };
+}
+
+/**
+ * Herdr's report is the position once it has caught the gesture in flight.
+ * Until then the preview stays, and the thumb length still follows the report.
+ */
+export function mergeScroll(
+  reported: ScrollPlace,
+  preview: ScrollPlace,
+  pending: { direction: "up" | "down"; lines: number; place: ScrollPlace } | null,
+): ScrollPlace {
+  const extent = Math.max(0, Math.round(reported.extent) || 0);
+  const reportedAt = Math.max(0, Math.min(extent, Math.round(reported.fromEnd) || 0));
+  if (!pending) return { fromEnd: reportedAt, extent };
+  const asked = previewScroll(
+    { fromEnd: Math.max(0, pending.place.fromEnd), extent: Math.max(pending.place.extent, extent) },
+    pending.direction,
+    pending.lines,
+  );
+  const previewAt = Math.max(0, Math.min(Math.max(extent, preview.extent), Math.round(preview.fromEnd) || 0));
+  if (pending.direction === "up") {
+    if (reportedAt >= asked.fromEnd || reportedAt >= extent) return { fromEnd: reportedAt, extent };
+    return { fromEnd: Math.min(extent, Math.max(reportedAt, previewAt)), extent };
+  }
+  if (reportedAt <= asked.fromEnd) return { fromEnd: reportedAt, extent };
+  return { fromEnd: Math.min(extent, Math.max(asked.fromEnd, Math.min(previewAt, reportedAt))), extent };
 }
 
 export function pageScroll(key: string, rows: number): ScrollGesture | null {
@@ -337,9 +412,10 @@ export function scrollThumb(
   rows: number,
   fromEnd: number,
   extent: number,
+  known = false,
 ): { top: number; height: number } {
   if (track < 1) return { top: 0, height: 0 };
-  if (extent <= 0) {
+  if (!known && extent <= 0) {
     const height = Math.min(28, track);
     return { top: Math.max(0, track - height), height };
   }

@@ -39,6 +39,14 @@ pub struct PaneScreen {
     pub revision: u64,
 }
 
+/// Lines above the live screen, and how far that scrollback goes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ScrollMetrics {
+    pub offset_from_bottom: u64,
+    pub max_offset_from_bottom: u64,
+    pub viewport_rows: u64,
+}
+
 impl HerdrClient {
     pub fn new(logical_socket: PathBuf) -> Self {
         Self {
@@ -141,6 +149,11 @@ impl HerdrClient {
             .map(|_| ())
     }
 
+    pub async fn scroll_metrics(&self, pane_id: &str) -> Result<Option<ScrollMetrics>, HerdrError> {
+        let result = self.call("pane.get", json!({ "pane_id": pane_id })).await?;
+        Ok(parse_scroll_metrics(&result))
+    }
+
     pub async fn send_keys(&self, pane_id: &str, keys: &[String]) -> Result<(), HerdrError> {
         self.call("pane.send_keys", json!({"pane_id": pane_id, "keys": keys}))
             .await
@@ -171,6 +184,35 @@ impl HerdrClient {
         let stream = connect(&self.transport()).await?;
         exchange(stream, line).await
     }
+}
+
+/// `pane.get` returns this on `result.pane.scroll`. Offset is clamped to the length.
+pub fn parse_scroll_metrics(result: &Value) -> Option<ScrollMetrics> {
+    let scroll = result.pointer("/pane/scroll")?;
+    let max_offset_from_bottom = scroll.get("max_offset_from_bottom")?.as_u64()?;
+    let offset_from_bottom = scroll
+        .get("offset_from_bottom")?
+        .as_u64()?
+        .min(max_offset_from_bottom);
+    let viewport_rows = scroll
+        .get("viewport_rows")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    Some(ScrollMetrics {
+        offset_from_bottom,
+        max_offset_from_bottom,
+        viewport_rows,
+    })
+}
+
+pub fn scroll_metrics_message(metrics: ScrollMetrics) -> String {
+    json!({
+        "type": "scrollMetrics",
+        "offset": metrics.offset_from_bottom,
+        "max": metrics.max_offset_from_bottom,
+        "rows": metrics.viewport_rows,
+    })
+    .to_string()
 }
 
 fn target_for(logical_socket: PathBuf) -> Target {
@@ -229,6 +271,43 @@ async fn connect(transport: &str) -> Result<tokio::net::UnixStream, HerdrError> 
     tokio::net::UnixStream::connect(transport)
         .await
         .map_err(classify_io)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::{json, Value};
+
+    #[test]
+    fn reads_scroll_metrics_from_pane_get() {
+        let raw = r#"{"type":"pane_info","pane":{"pane_id":"w1:p1","scroll":{"offset_from_bottom":12,"max_offset_from_bottom":240,"viewport_rows":30}}}"#;
+        let value: Value = serde_json::from_str(raw).unwrap();
+        let metrics = parse_scroll_metrics(&value).unwrap();
+        assert_eq!(metrics.offset_from_bottom, 12);
+        assert_eq!(metrics.max_offset_from_bottom, 240);
+        assert_eq!(metrics.viewport_rows, 30);
+        let message: Value = serde_json::from_str(&scroll_metrics_message(metrics)).unwrap();
+        assert_eq!(message["type"], "scrollMetrics");
+        assert_eq!(message["offset"], 12);
+        assert_eq!(message["max"], 240);
+        assert_eq!(message["rows"], 30);
+    }
+
+    #[test]
+    fn missing_scroll_metrics_are_absent() {
+        let value = json!({"type":"pane_info","pane":{"pane_id":"w1:p1"}});
+        assert!(parse_scroll_metrics(&value).is_none());
+    }
+
+    #[test]
+    fn scroll_offset_cannot_exceed_the_length() {
+        let value = json!({
+            "pane": {"scroll": {"offset_from_bottom": 50, "max_offset_from_bottom": 40, "viewport_rows": 10}}
+        });
+        let metrics = parse_scroll_metrics(&value).unwrap();
+        assert_eq!(metrics.offset_from_bottom, 40);
+        assert_eq!(metrics.max_offset_from_bottom, 40);
+    }
 }
 
 fn classify_io(err: std::io::Error) -> HerdrError {

@@ -5,7 +5,7 @@ use futures_util::{SinkExt, StreamExt};
 use serde_json::{json, Value};
 use tokio::sync::mpsc;
 
-use crate::herdr::HerdrClient;
+use crate::herdr::{scroll_metrics_message, HerdrClient};
 use crate::keys::{is_terminal_key, map_key, ClientInput, KeyAction};
 use crate::layout::{is_pane_id, HerdrSource};
 use crate::session::{PaneView, SessionLink};
@@ -307,6 +307,7 @@ async fn poll_loop(link: SessionLink, pane_id: String, tx: mpsc::Sender<String>)
     let mut ticker = tokio::time::interval(Duration::from_millis(150));
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut last_meta = String::new();
+    let mut last_scroll = String::new();
 
     loop {
         ticker.tick().await;
@@ -325,6 +326,23 @@ async fn poll_loop(link: SessionLink, pane_id: String, tx: mpsc::Sender<String>)
                 .is_err()
             {
                 return;
+            }
+        }
+        let reading = tokio::time::timeout(
+            Duration::from_millis(400),
+            link.runtime.client().scroll_metrics(&pane_id),
+        )
+        .await;
+        if let Ok(Ok(Some(metrics))) = reading {
+            let signature = format!(
+                "{}:{}:{}",
+                metrics.offset_from_bottom, metrics.max_offset_from_bottom, metrics.viewport_rows
+            );
+            if signature != last_scroll {
+                last_scroll = signature;
+                if tx.send(scroll_metrics_message(metrics)).await.is_err() {
+                    return;
+                }
             }
         }
     }
