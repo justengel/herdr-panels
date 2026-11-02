@@ -11,6 +11,8 @@
   "permissions": [
     "core:default",
     "allow-place-browser",
+    "allow-adopt-browser",
+    "allow-snapshot-browser",
     "allow-close-browser",
     "allow-eval-browser",
     "allow-set-browser-select",

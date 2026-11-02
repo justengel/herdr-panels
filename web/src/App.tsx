@@ -22,8 +22,12 @@ import {
   freshPanelId,
   listPanels,
   mapPanel,
+  groupOnBar,
   movePanel,
+  moveTab,
   reopenPanel,
+  setPanelIcon,
+  toggleCollapsed,
   normalizeLayout,
   setGridTracks,
   setPanel,
@@ -42,9 +46,9 @@ import { UnlockDialog } from "./components/UnlockDialog";
 import { ElementSelect } from "./components/ElementSelect";
 import { desktopHost } from "./desktopBrowser";
 import { DeskKeyboard, KeyedPanelProvider } from "./deskKeyboard";
-import { leaveVisitPanel, openVisit, reuseVisit, type OpenedVisit, type VisitWeights } from "./borrowPanel";
+import { deskFillRequest, leaveVisitPanel, openVisit, reuseVisit, type OpenedVisit, type VisitWeights } from "./borrowPanel";
 import { BorrowKeeper, type KeptPanel } from "./borrowKeep";
-import { BrowserRoleProvider, BrowserVisitProvider } from "./browserPlace";
+import { BrowserRoleProvider, BrowserVisitProvider, StayFillProvider } from "./browserPlace";
 import { runBrowserDrive } from "./browserDrive";
 import { layoutForFocusedPane, layoutForPaneFocus, panelForPane, panelRefs } from "./deskKeys";
 import { installDisplayZoom } from "./displayZoom";
@@ -1019,6 +1023,11 @@ export function App() {
     setNotice(`Added to ${findPanel(layout!.root, chatId)?.title || "chat"}`);
   }
 
+  const liveFillId =
+    visit?.single && visit.panelIds[0] && visit.spaceIds[visit.panelIds[0]] === (focusedSpaceId ?? "")
+      ? visit.panelIds[0]
+      : null;
+
   return (
     <DesignProvider value={designState}>
       <PanelActionsProvider
@@ -1036,6 +1045,8 @@ export function App() {
           use: (id, type, pluginId) => edit(assignContent(layout.root, id, panelChoice(type, pluginId))),
           edge: (id, edge) => edit(setTabEdge(layout.root, id, edge)),
           place: (sourceId, targetId, place) => edit(movePanel(layout.root, sourceId, targetId, place)),
+          group: (sourceId, targetId) => edit(groupOnBar(layout.root, sourceId, targetId)),
+          dropTab: (sourceId, tabId, targetId, place) => edit(moveTab(layout.root, sourceId, tabId, targetId, place)),
           spawn: (id, direction, panel, title) => {
             const doc = layoutRef.current;
             if (!doc) return;
@@ -1043,13 +1054,15 @@ export function App() {
             edit(splitPanel(doc.root, id, direction, { type: "panel", id: panelId, title: title || null, panel }));
           },
           rename: (id, title) => edit(mapPanel(layout.root, id, (panel) => ({ ...panel, title: title || null }))),
+          icon: (id, icon) => edit(setPanelIcon(layout.root, id, icon)),
+          collapse: (id) => edit(toggleCollapsed(layout.root, id)),
           fill: (id) => {
             if (visit?.single && visit.panelIds[0] === id) {
               setVisit(null);
               setKept([]);
               return;
             }
-            const result = visitRef.current([{ panelId: id }]);
+            const result = visitRef.current([deskFillRequest(id, focusedSpaceId)]);
             if ("error" in result) notify(result.error);
           },
           leave: releaseVisit,
@@ -1102,7 +1115,7 @@ export function App() {
               setKept([]);
               return;
             }
-            const result = visitRef.current([{ panelId: id }]);
+            const result = visitRef.current([deskFillRequest(id, focusedSpaceId)]);
             if ("error" in result) notify(result.error);
           }}
           onSpace={switchSpace}
@@ -1192,7 +1205,8 @@ export function App() {
             }}
           >
           <BrowserVisitProvider ids={visit ? new Set(visit.panelIds) : null} keptIds={new Set(kept.map((item) => item.node.id))}>
-          <div className={visit ? "desk-layer desk-held" : "desk-layer"}>
+          <StayFillProvider id={liveFillId}>
+          <div className={liveFillId ? "desk-layer is-one" : visit ? "desk-layer desk-held" : "desk-layer"}>
           <BrowserRoleProvider role="desk">
           <LayoutView
             node={root}
@@ -1216,7 +1230,7 @@ export function App() {
           />
           </BrowserRoleProvider>
           </div>
-          {visit ? (
+          {visit && !liveFillId ? (
             <BrowserRoleProvider role="visit">
             <div className="borrow-visit">
               {visit.single ? null : (
@@ -1289,6 +1303,7 @@ export function App() {
               />
             </BrowserRoleProvider>
           ) : null}
+          </StayFillProvider>
           </BrowserVisitProvider>
           </DeskProvider>
         </main>

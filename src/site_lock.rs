@@ -8,7 +8,7 @@ use std::path::Path;
 use psl::{List, Psl};
 
 use crate::desk::DeskDocument;
-use crate::layout::{LayoutNode, PanelConfig};
+use crate::layout::LayoutNode;
 use crate::layout_ops::list_panels;
 use crate::panel_lock;
 
@@ -63,24 +63,23 @@ fn collect(
     found: &mut Vec<Hold>,
 ) {
     for panel in list_panels(root) {
-        let PanelConfig::Iframe { url, .. } = &panel.panel else {
-            continue;
-        };
-        let Some(site) = site_of(url) else {
-            continue;
-        };
-        let held = match locked {
-            None => true,
-            Some(list) => list.iter().any(|(space, id)| {
-                id == &panel.id
-                    && (space == space_key || crate::desk::space_key(space) == space_key)
-            }),
-        };
-        if held {
-            found.push(Hold {
-                panel_id: panel.id.clone(),
-                site,
-            });
+        for url in panel.panel.browser_urls() {
+            let Some(site) = site_of(url) else {
+                continue;
+            };
+            let held = match locked {
+                None => true,
+                Some(list) => list.iter().any(|(space, id)| {
+                    id == &panel.id
+                        && (space == space_key || crate::desk::space_key(space) == space_key)
+                }),
+            };
+            if held {
+                found.push(Hold {
+                    panel_id: panel.id.clone(),
+                    site,
+                });
+            }
         }
     }
 }
@@ -164,6 +163,7 @@ mod tests {
                 address_bar: None,
             },
             collapsed: false,
+            icon: None,
         }
     }
 
@@ -259,6 +259,39 @@ mod tests {
             "panel-9",
             "https://mail.google.com/"
         ));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_locked_tab_group_holds_the_browser_inside_it() {
+        let dir = std::env::temp_dir().join(format!("herdr-site-lock-tab-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("desks")).unwrap();
+        let root: LayoutNode = serde_json::from_str(
+            r#"{
+              "type": "panel",
+              "id": "panel-2",
+              "panel": {
+                "type": "tabs",
+                "active": "tab-1",
+                "tabs": [{
+                  "id": "tab-1",
+                  "title": "Mail",
+                  "panel": {"type": "iframe", "url": "https://mail.google.com/mail/u/0/"}
+                }]
+              }
+            }"#,
+        )
+        .unwrap();
+        let mut desk = DeskDocument::default();
+        let mut spaces = BTreeMap::new();
+        spaces.insert("wj".into(), root);
+        desk.spaces = spaces;
+        panel_lock::set_locked(&dir, "default", "wJ", "panel-2", None, true).unwrap();
+        let held = holds(&dir, "default", &desk);
+        assert!(blocked("https://www.google.com/", &held));
+        assert!(navigation_allowed("panel-2", "https://mail.google.com/", &held));
+        assert!(!navigation_allowed("panel-9", "https://mail.google.com/", &held));
         let _ = fs::remove_dir_all(&dir);
     }
 }

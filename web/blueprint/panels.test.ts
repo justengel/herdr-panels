@@ -20,7 +20,7 @@ describe("a panel becomes a tab group only while it has more than one tab", () =
       title: "Notes",
       panel: { type: "markdown", path: "notes/welcome.md" },
     });
-    expect(panel.panel.tabs[1]).toMatchObject({ title: "New tab", panel: { type: "iframe", url: "" } });
+    expect(panel.panel.tabs[1]).toMatchObject({ title: "", panel: { type: "iframe", url: "" } });
   });
 
   it("stays a group after one of three tabs closes", () => {

@@ -254,6 +254,33 @@ button.status:hover:not(:disabled) {
   flex-direction: column;
 }
 
+/* One maximized panel keeps its own contents and grows into the workspace. */
+.desk-layer.is-one .gutter,
+.desk-layer.is-one .grid-gutter { display: none !important; }
+.desk-layer.is-one .split-pane,
+.desk-layer.is-one .grid > div { display: none !important; }
+.desk-layer.is-one .split,
+.desk-layer.is-one .grid {
+  display: flex !important;
+  width: 100%;
+  height: 100%;
+}
+.desk-layer.is-one .split-pane:has(.panel.is-filled),
+.desk-layer.is-one .grid > div:has(.panel.is-filled) {
+  display: flex !important;
+  flex: 1 1 auto !important;
+  width: 100% !important;
+  height: 100% !important;
+}
+.panel.is-filled {
+  width: 100% !important;
+  height: 100% !important;
+  flex: 1 1 auto !important;
+  align-self: stretch !important;
+  margin: 0 !important;
+}
+.panel.is-filled.is-collapsed > .panel-body { display: block; }
+
 .borrow-visit {
   position: absolute;
   inset: 0;
@@ -443,7 +470,7 @@ button.status:hover:not(:disabled) {
 .panel-header input,
 .panel-header select { cursor: pointer; }
 
-.grip, .panel-close, .panel-expand, .panel-lock, .tab-gear-button {
+.grip, .panel-close, .panel-expand, .panel-collapse, .panel-lock, .tab-gear-button {
   flex: 0 0 auto;
   width: 22px;
   height: 22px;
@@ -455,8 +482,62 @@ button.status:hover:not(:disabled) {
 
 .grip { cursor: grab; letter-spacing: -0.15em; }
 .grip::before { content: "⋮⋮"; font-size: 12px; }
-.grip:hover, .panel-close:hover, .panel-expand:hover, .panel-lock:hover, .tab-gear-button:hover { color: var(--text); }
+.grip:hover, .panel-close:hover, .panel-expand:hover, .panel-collapse:hover, .panel-lock:hover, .tab-gear-button:hover { color: var(--text); }
 .panel-lock.is-locked { color: var(--accent); }
+.panel-collapse { display: grid; place-items: center; }
+.panel-collapse .chev {
+  width: 16px;
+  height: 16px;
+  display: block;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.75;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+.panel.edge-left, .panel.edge-right { flex-direction: row; }
+.panel.edge-right { flex-direction: row-reverse; }
+.panel.edge-bottom { flex-direction: column-reverse; }
+.panel.edge-left > .panel-header,
+.panel.edge-right > .panel-header {
+  width: 168px;
+  height: auto;
+  flex: 0 0 168px;
+  align-self: stretch;
+  flex-direction: column;
+  align-items: stretch;
+  border-bottom: 0;
+  padding: 4px;
+  overflow: hidden;
+}
+.panel.edge-left > .panel-header { border-right: 1px solid var(--line); }
+.panel.edge-right > .panel-header { border-left: 1px solid var(--line); }
+.panel.edge-left > .panel-header.is-rail,
+.panel.edge-right > .panel-header.is-rail {
+  width: 42px;
+  flex-basis: 42px;
+}
+.panel.edge-left > .panel-header.is-rail.is-digits,
+.panel.edge-right > .panel-header.is-rail.is-digits {
+  width: 36px;
+  flex-basis: 36px;
+}
+.panel.edge-bottom > .panel-header { border-bottom: 0; border-top: 1px solid var(--line); }
+.panel.edge-left .panel-actions,
+.panel.edge-right .panel-actions {
+  flex-direction: column;
+  margin-left: 0;
+}
+.panel.is-collapsed > .panel-body { display: none; }
+.panel.is-collapsed { flex: 0 0 auto; }
+.panel.is-collapsed.edge-top { width: 100%; height: auto; align-self: flex-start; }
+.panel.is-collapsed.edge-bottom { width: 100%; height: auto; align-self: flex-end; }
+.panel.is-collapsed.edge-left,
+.panel.is-collapsed.edge-right { height: 100%; width: auto; align-self: stretch; }
+.panel.is-collapsed.edge-right { margin-left: auto; }
 body.panel-dragging, body.panel-dragging * { cursor: grabbing !important; user-select: none; }
 .panel.is-drag-source { opacity: 0.45; }
 
@@ -560,6 +641,109 @@ body.panel-dragging, body.panel-dragging * { cursor: grabbing !important; user-s
   padding: 6px 8px 8px;
   color: var(--muted);
   font-size: 12px;
+}
+
+.menu-identity {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  padding: 6px 8px 8px;
+}
+.menu-identity .menu-name {
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+}
+.icon-field {
+  flex: 0 0 auto;
+}
+.panel-menu button.icon-box {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--text);
+}
+.panel-menu button.icon-box[aria-expanded="true"] {
+  border-color: var(--accent);
+}
+.icon-empty {
+  width: 16px;
+  height: 16px;
+  border: 1px dashed var(--line);
+  border-radius: 3px;
+}
+.icon-flyout {
+  width: 232px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  overflow: auto;
+}
+.icon-flyout input {
+  width: 100%;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 4px 6px;
+  color: var(--text);
+  font-size: 12px;
+}
+.icon-grid {
+  display: grid;
+  grid-template-columns: repeat(6, 32px);
+  gap: 4px;
+  max-height: 168px;
+  overflow: auto;
+}
+.icon-flyout .icon-grid button {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text);
+}
+.icon-flyout .icon-grid button.on,
+.icon-flyout .icon-grid button:hover {
+  background: color-mix(in srgb, var(--accent) 28%, transparent);
+}
+.icon-flyout > button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  padding: 6px 8px;
+  color: var(--text);
+}
+.icon-flyout > button:hover { background: #222833; }
+.icon-flyout > button:disabled { opacity: 0.4; }
+.tab-mark {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.tab-mark.is-file { object-fit: contain; stroke: none; }
+.tab-mark.is-text {
+  width: auto;
+  font-size: 13px;
+  line-height: 16px;
+  stroke: none;
 }
 
 .menu-name input, .menu-contents input, .menu-contents select {
@@ -1833,6 +2017,18 @@ body.space-dragging, body.space-dragging * { cursor: grabbing !important; user-s
   border-right: 1px solid var(--line);
 }
 
+.tab-strip.in-bar {
+  flex: 1 1 auto;
+  background: transparent;
+  border: 0;
+  min-width: 0;
+}
+.tab-strip.in-bar.vertical {
+  width: auto;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
 .tab-group.right .tab-strip.vertical {
   border-right: 0;
   border-left: 1px solid var(--line);
@@ -1858,6 +2054,33 @@ body.space-dragging, body.space-dragging * { cursor: grabbing !important; user-s
 .tab-strip.vertical.drop-end .tab:last-of-type { box-shadow: inset 0 -2px 0 var(--accent); }
 
 .tab-strip.vertical .tab { max-width: none; }
+.tab.icon-only {
+  justify-content: center;
+  padding: 0 6px;
+}
+/* A named side tab keeps the icon in a fixed column and the name in the leftover space. */
+.tab-strip.vertical .tab {
+  height: 34px;
+  padding: 0 6px 0 8px;
+  gap: 8px;
+}
+.tab-strip.vertical .tab-mark {
+  width: 20px;
+  height: 20px;
+}
+.tab-strip.vertical .tab-label {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.panel-header.is-rail .tab {
+  justify-content: center;
+  padding: 0;
+  gap: 0;
+}
+.panel-header.is-rail .tab-label {
+  flex: 0 0 auto;
+  text-align: center;
+}
 
 .tab.on {
   color: var(--text);
@@ -1894,8 +2117,15 @@ body.space-dragging, body.space-dragging * { cursor: grabbing !important; user-s
 
 .tab-x:hover, .tab-add:hover { color: var(--text); }
 
+.panel-scale:has(> .tab-body) {
+  display: flex;
+  flex-direction: column;
+}
+
 .tab-body {
   flex: 1;
+  width: 100%;
+  height: 100%;
   min-width: 0;
   min-height: 0;
   display: flex;

@@ -1,6 +1,8 @@
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
 mod browser;
+#[cfg(target_os = "linux")]
+mod linux_snapshot;
 
 use std::net::{SocketAddr, TcpStream};
 use std::time::Duration;

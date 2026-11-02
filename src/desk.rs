@@ -237,6 +237,7 @@ fn named_panel(id: &str, title: &str, panel: PanelConfig) -> LayoutNode {
         },
         panel,
         collapsed: false,
+        icon: None,
     }
 }
 
@@ -746,6 +747,7 @@ mod tests {
                 scope: None,
             },
             collapsed: false,
+        icon: None,
         }
     }
 
@@ -848,6 +850,7 @@ mod tests {
                 address_bar: None,
             },
             collapsed: false,
+        icon: None,
         }
     }
 
@@ -929,6 +932,7 @@ mod tests {
                 address_bar: None,
             },
             collapsed: false,
+        icon: None,
         };
         let spaces = [VisitSpace {
             id: "w1",
@@ -957,6 +961,7 @@ mod tests {
                 raw: false,
             },
             collapsed: false,
+        icon: None,
         };
         let google = iframe("panel-1", "google", "https://google.com");
         let spaces = [

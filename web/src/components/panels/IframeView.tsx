@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { api, frameSrc } from "../../api";
 import {
+  adoptBrowser,
   browserBlocked,
+  closeBrowser,
   browserBounds,
   browserSlotKey,
   desktopHost,
@@ -11,7 +13,16 @@ import {
   placeBrowser,
 } from "../../desktopBrowser";
 import { panelZoom, subscribeZoom } from "../../displayZoom";
-import { browserLeader, dropBrowser, holdBrowser, useBrowserRole, useKeptIds, useVisitIds } from "../../browserPlace";
+import {
+  browserLeader,
+  claimMovingBrowser,
+  dropBrowser,
+  holdBrowser,
+  useBrowserRole,
+  useKeptIds,
+  useStayFill,
+  useVisitIds,
+} from "../../browserPlace";
 
 interface Props {
   url: string;
@@ -36,7 +47,8 @@ function EmbeddedPage({ panelId, url, suspended }: { panelId: string; url: strin
   const ids = useVisitIds();
   const keptIds = useKeptIds();
   const role = useBrowserRole();
-  const place = browserLeader(role, ids, keptIds, panelId);
+  const stayId = useStayFill();
+  const place = browserLeader(role, ids, keptIds, panelId, stayId);
   const leaderRef = useRef(place.leader);
   const hideRef = useRef(place.hide);
   leaderRef.current = place.leader;
@@ -50,9 +62,14 @@ function EmbeddedPage({ panelId, url, suspended }: { panelId: string; url: strin
 
   useEffect(() => {
     const label = `browser-${panelId}`;
-    const generation = holdBrowser(label);
+    // A drop onto a tab changes this label. Claim the page that is closing so the
+    // native webview moves with it. Opening a second one leaves the tab blank, and
+    // the address-bar reload only moves that blank view unless it is asked to load again.
+    const { generation, reload } = holdBrowser(label);
+    const moved = claimMovingBrowser(url, label);
     let stopped = false;
     let frame = 0;
+    let refresh = reload;
     const tick = () => {
       frame = requestAnimationFrame(tick);
       const node = hole.current;
@@ -63,9 +80,11 @@ function EmbeddedPage({ panelId, url, suspended }: { panelId: string; url: strin
       );
       const cuts = bounds ? menuCuts(bounds, menuObstacles()) : [];
       const key = browserSlotKey(bounds, cuts);
-      if (key === lastRef.current) return;
+      const again = Boolean(bounds && refresh);
+      if (key === lastRef.current && !again) return;
       lastRef.current = key;
-      void placeBrowser(label, url, bounds, generation, cuts).then(
+      if (again) refresh = false;
+      void placeBrowser(label, url, bounds, generation, cuts, again).then(
         () => {
           if (stopped) return;
           setNote(bounds ? "" : "Hidden while the desk is using this area.");
@@ -75,7 +94,19 @@ function EmbeddedPage({ panelId, url, suspended }: { panelId: string; url: strin
         },
       );
     };
-    frame = requestAnimationFrame(tick);
+    const begin = async () => {
+      if (moved) {
+        try {
+          await adoptBrowser(moved.from, label, generation);
+        } catch {
+          void closeBrowser(moved.from, moved.generation);
+        }
+      }
+      if (!stopped) {
+        frame = requestAnimationFrame(tick);
+        pushZoom();
+      }
+    };
     const pushZoom = () => {
       const owner = hole.current?.closest("[data-panel-id]")?.getAttribute("data-panel-id") ?? panelId;
       void desktopHost()
@@ -84,13 +115,13 @@ function EmbeddedPage({ panelId, url, suspended }: { panelId: string; url: strin
           console.error(err);
         });
     };
-    pushZoom();
+    void begin();
     const unsubscribe = subscribeZoom(pushZoom);
     return () => {
       stopped = true;
       unsubscribe();
       cancelAnimationFrame(frame);
-      dropBrowser(label, generation);
+      dropBrowser(label, generation, url);
     };
   }, [panelId, url]);
 

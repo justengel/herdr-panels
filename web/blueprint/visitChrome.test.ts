@@ -11,15 +11,19 @@ const actions: PanelActions = {
   use: () => undefined,
   edge: () => undefined,
   place: () => undefined,
+  group: () => undefined,
+  dropTab: () => undefined,
   spawn: () => undefined,
   rename: () => undefined,
+  icon: () => undefined,
+  collapse: () => undefined,
   fill: () => undefined,
   leave: () => undefined,
   filledId: "google",
 };
 
 describe("the panel lock control", () => {
-  it("puts an unlocked padlock before settings, with a tooltip", () => {
+  it("leaves the padlock off the bar until the panel is locked", () => {
     const html = renderToStaticMarkup(
       createElement(
         PanelActionsProvider,
@@ -36,10 +40,11 @@ describe("the panel lock control", () => {
         ),
       ),
     );
-    expect(html).toContain('aria-label="Lock"');
-    expect(html).toContain("Plugins and agents cannot read it or drive it");
-    expect(html.indexOf('aria-label="Lock"')).toBeLessThan(html.indexOf('aria-label="Panel settings"'));
+    expect(html).toContain('aria-label="Collapse panel"');
+    expect(html).not.toContain('aria-label="Lock"');
+    expect(html).not.toContain('aria-label="Unlock"');
     expect(html).not.toContain("Lock panel");
+    expect(html).toContain('aria-label="Panel settings"');
   });
 });
 
@@ -71,6 +76,8 @@ describe("a borrowed panel", () => {
     expect(html).toContain('aria-label="No longer visit google"');
     expect(html).toContain("No longer visit this panel");
     expect(html).not.toContain("Close google");
+    expect(html).not.toContain("Collapse panel");
+    expect(html).not.toContain("Expand panel");
     expect(html).not.toContain(">Back<");
     expect(html.indexOf("Show the whole desk")).toBeLessThan(html.indexOf("No longer visit google"));
   });

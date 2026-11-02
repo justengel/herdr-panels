@@ -138,6 +138,14 @@ function gridTracks(
   return { columns: nextColumns, rows: nextRows };
 }
 
+/** Maximize the panel on this desk. Naming the space keeps another space's copy of the same id. */
+export function deskFillRequest(
+  panelId: string,
+  spaceId: string | null | undefined,
+): { panelId: string; spaceId?: string } {
+  return spaceId ? { panelId, spaceId } : { panelId };
+}
+
 /** Resolve every panel, then place them. One failure returns only the error. */
 export function openVisit(
   spaces: readonly VisitSpace[],

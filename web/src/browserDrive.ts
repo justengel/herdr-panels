@@ -1,3 +1,4 @@
+import { paintNativeBrowsers } from "./browserShot";
 import { desktopHost } from "./desktopBrowser";
 import { settleComputedColors } from "./cssColor";
 
@@ -184,6 +185,8 @@ async function capture(element: HTMLElement): Promise<Record<string, unknown>> {
       useCORS: true,
       onclone: (doc: Document) => settleComputedColors(doc),
     });
+    // The page in a browser panel is a native webview. See paintNativeBrowsers.
+    await paintNativeBrowsers(canvas, rect);
     const url = canvas.toDataURL("image/png");
     const comma = url.indexOf(",");
     const png = url.startsWith("data:image/png") && comma >= 0 ? url.slice(comma + 1) : "";

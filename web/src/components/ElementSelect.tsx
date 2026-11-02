@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
 import { api } from "../api";
+import { paintNativeBrowsers } from "../browserShot";
 import { settleComputedColors } from "../cssColor";
 import { desktopHost } from "../desktopBrowser";
 import { intersects, shiftRect, toFrame, type LocalRect } from "../frameSelect";
@@ -782,6 +783,7 @@ async function rasterize(element: HTMLElement): Promise<Blob> {
     const { default: html2canvas } = await import("html2canvas");
     const canvas = await html2canvas(element, shotOptions(backgroundOf(element)));
     paintCanvases(canvas, element, rect);
+    await paintNativeBrowsers(canvas, rect);
     return await blobFrom(canvas);
   } finally {
     document.body.classList.remove("is-capturing");
@@ -815,6 +817,7 @@ async function rasterizeRegion(elements: HTMLElement[]): Promise<Blob> {
       cropped.height,
     );
     paintCanvases(cropped, root, bounds);
+    await paintNativeBrowsers(cropped, bounds);
     return await blobFrom(cropped);
   } finally {
     document.body.classList.remove("is-capturing");

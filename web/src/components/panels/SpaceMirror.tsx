@@ -239,7 +239,7 @@ export function SpaceMirror({
             style={cellBox(pane, visible)}
             onPointerDown={() => onFocusPane(pane.paneId)}
           >
-            <HerdrTerminal paneId={pane.paneId} />
+            <HerdrTerminal paneId={pane.paneId} home="panes" />
           </div>
         ))}
       </div>

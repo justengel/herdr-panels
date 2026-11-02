@@ -18,6 +18,7 @@ import {
   type GridCell,
   type SelectionLine,
 } from "../../terminalEdit";
+import { noteTerminalDriver, type TerminalHome } from "../../terminalExit";
 import {
   applyScroll,
   inputScroll,
@@ -46,6 +47,8 @@ interface Props {
   paneId: string | null;
   source?: "visible" | "recent" | null;
   lines?: number | null;
+  /** Which desk surface this view is. Exit follows the one that last typed. */
+  home?: TerminalHome;
   onGone?: () => void;
 }
 
@@ -106,7 +109,7 @@ interface ScrollDrag {
   lastTarget: number;
 }
 
-export function HerdrTerminal({ paneId, source, lines, onGone }: Props) {
+export function HerdrTerminal({ paneId, source, lines, home, onGone }: Props) {
   const host = useHost();
   const shellRef = useRef<HTMLDivElement>(null);
   const stageRef = useRef<HTMLDivElement>(null);
@@ -561,6 +564,7 @@ export function HerdrTerminal({ paneId, source, lines, onGone }: Props) {
           if (meta.present) seenRef.current = true;
           if (meta.present === false && meta.connected && seenRef.current && !goneRef.current) {
             goneRef.current = true;
+            setStatus("This terminal has exited");
             goneHandler.current?.();
             return;
           }
@@ -625,6 +629,8 @@ export function HerdrTerminal({ paneId, source, lines, onGone }: Props) {
   }, []);
 
   function send(payload: unknown) {
+    const kind = payload && typeof payload === "object" && "type" in payload ? (payload as { type?: string }).type : "";
+    if (paneId && home && (kind === "text" || kind === "key")) noteTerminalDriver(paneId, home);
     const socket = socketRef.current;
     if (socket && socket.readyState === WebSocket.OPEN) {
       socket.send(JSON.stringify(payload));

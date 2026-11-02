@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use herdr_panels::external_link::external_http_url;
@@ -22,6 +22,16 @@ struct Slot {
     shown: bool,
     /// The native window has holes cut for a menu. Cleared when the menu closes.
     clipped: bool,
+    /// Site lock reads this. Adopting the page into a tab updates it, because the
+    /// navigation callback was created with the previous panel and cannot be replaced.
+    panel_id: Arc<Mutex<String>>,
+    /// The newest place. An older one still in flight must not put the old size back.
+    seq: u64,
+}
+
+/// `0` is an unsequenced place and always applies. A smaller number is stale.
+fn place_is_current(applied: u64, next: u64) -> bool {
+    next == 0 || next >= applied
 }
 
 #[derive(Clone, Copy, serde::Deserialize)]
@@ -122,7 +132,9 @@ fn window_px(value: f64, limit: i32, ceil: bool) -> i32 {
 
 fn select_boot() -> String {
     let mut script = String::from(FRAME_SELECT);
-    script.push_str("\nwindow.__hwpInstallSelect({draw:true,send:function(){}});\n");
+    // Pictures in the page (the Google logo) are not text. The select script asks this
+    // process for a snapshot of the webview. See `answer_snap`.
+    script.push_str("\nwindow.__hwpNativeSnap=true;\nwindow.__hwpInstallSelect({draw:true,send:function(){}});\n");
     script
 }
 
@@ -133,12 +145,7 @@ fn select_on() -> String {
 }
 
 pub fn browser_target(label: &str, url: &str) -> Result<Url, String> {
-    if !label.starts_with("browser-")
-        || label.len() > "browser-".len() + 49
-        || !label
-            .chars()
-            .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')
-    {
+    if !valid_browser_label(label) {
         return Err("browser label is invalid".into());
     }
     let parsed = Url::parse(url).map_err(|_| format!("browser url is invalid: {url}"))?;
@@ -175,7 +182,319 @@ fn place_view(view: &Webview, x: f64, y: f64, width: f64, height: f64, shown: &m
         view.show().map_err(|err| err.to_string())?;
         *shown = true;
     }
+    // A webview created while the desk is reflowing (a drop onto a tab) stays blank
+    // until the parent is told it moved. Do this on every place, not only the first.
+    wake_browser(view);
     Ok(())
+}
+
+/// The native page does not repaint when its parent layout changes unless we ask.
+fn wake_browser(view: &Webview) {
+    #[cfg(windows)]
+    let _ = view.with_webview(|platform| unsafe {
+        let _ = platform.controller().NotifyParentWindowPositionChanged();
+    });
+    #[cfg(not(windows))]
+    let _ = view;
+}
+
+async fn snapshot_webview(view: &Webview, width: f64, height: f64) -> Result<String, String> {
+    #[cfg(windows)]
+    {
+        let _ = (width, height);
+        return snapshot_windows(view);
+    }
+    #[cfg(target_os = "linux")]
+    {
+        return snapshot_linux(view, width, height).await;
+    }
+    #[cfg(not(any(windows, target_os = "linux")))]
+    {
+        let _ = (view, width, height);
+        Err("this window cannot snapshot a browser".into())
+    }
+}
+
+#[cfg(windows)]
+fn snapshot_windows(view: &Webview) -> Result<String, String> {
+    let hwnd = browser_hwnd_of(view)?;
+    // The caller is a command thread, so the UI thread can answer the paint.
+    unsafe { webview_png(hwnd, None) }
+}
+
+#[derive(serde::Deserialize, Clone, Copy)]
+struct SnapRequest {
+    x: f64,
+    y: f64,
+    w: f64,
+    h: f64,
+    /// Viewport width in CSS pixels. The printed window is in physical pixels.
+    vw: f64,
+}
+
+/// A page asked for its own pixels by setting the title to `hwp-snap:` plus the selection.
+///
+/// The Google logo is a picture. Drawing the element's HTML keeps the page background and
+/// drops the picture. This returns a crop of the webview. Windows prints that window.
+/// Linux asks WebKit for the same crop. Do not remove it: a normal panel and a tab both
+/// screenshot as the empty panel without it.
+///
+/// The Windows print must not run on the UI thread. `PrintWindow` waits for the page to
+/// paint, and WebView2 paints on that same thread. Waiting there froze the window until
+/// Windows closed it.
+fn answer_snap(view: &Webview, title: &str) {
+    #[cfg(windows)]
+    windows_answer_snap(view, title);
+    #[cfg(target_os = "linux")]
+    crate::linux_snapshot::request(view, title);
+    #[cfg(not(any(windows, target_os = "linux")))]
+    let _ = (view, title);
+}
+
+#[cfg(windows)]
+fn windows_answer_snap(view: &Webview, title: &str) {
+    let Some(raw) = title.strip_prefix("hwp-snap:") else {
+        return;
+    };
+    let Ok(request) = serde_json::from_str::<SnapRequest>(raw) else {
+        return;
+    };
+    let view = view.clone();
+    std::thread::spawn(move || {
+        let outcome = browser_hwnd_of(&view).and_then(|hwnd| unsafe { webview_png(hwnd, Some(request)) });
+        let _ = view.eval(&snap_reply(outcome));
+    });
+}
+
+#[cfg(windows)]
+fn browser_hwnd_of(view: &Webview) -> Result<windows::Win32::Foundation::HWND, String> {
+    use windows::Win32::Foundation::HWND;
+    let (tx, rx) = std::sync::mpsc::channel();
+    view.with_webview(move |platform| {
+        let _ = tx.send(read_browser_hwnd(&platform).map(|hwnd| hwnd.0 as isize));
+    })
+    .map_err(|err| err.to_string())?;
+    let raw = rx
+        .recv_timeout(Duration::from_secs(2))
+        .map_err(|_| "the snapshot timed out".to_string())??;
+    Ok(HWND(raw as *mut std::ffi::c_void))
+}
+
+#[cfg(windows)]
+fn read_browser_hwnd(platform: &tauri::webview::PlatformWebview) -> Result<windows::Win32::Foundation::HWND, String> {
+    use windows::Win32::Foundation::HWND;
+    let mut hwnd = HWND(std::ptr::null_mut());
+    unsafe { platform.controller().ParentWindow(&mut hwnd) }.map_err(|err| err.to_string())?;
+    if hwnd.0.is_null() {
+        return Err("the browser window is missing".into());
+    }
+    // The WRY container clips its children, so printing it is the empty panel.
+    Ok(largest_child(hwnd))
+}
+
+#[cfg(windows)]
+fn snap_reply(outcome: Result<String, String>) -> String {
+    match outcome {
+        Ok(png) => format!("window.__hwpSnapshotDone&&window.__hwpSnapshotDone(true,\"{png}\")"),
+        Err(err) => format!(
+            "window.__hwpSnapshotDone&&window.__hwpSnapshotDone(false,{})",
+            serde_json::to_string(&err).unwrap_or_else(|_| "\"snapshot failed\"".into())
+        ),
+    }
+}
+
+#[cfg(windows)]
+unsafe fn webview_png(hwnd: windows::Win32::Foundation::HWND, crop: Option<SnapRequest>) -> Result<String, String> {
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::Graphics::Gdi::{
+        CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject, GetDC, GetDIBits,
+        ReleaseDC, SelectObject, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS, HDC, HGDIOBJ,
+    };
+    use windows::Win32::UI::WindowsAndMessaging::GetClientRect;
+
+    // windows 0.62 does not bind PrintWindow. PW_RENDERFULLCONTENT is 0x2. Without that flag
+    // WebView2 prints a black window, and the screenshot is the empty panel behind the page.
+    // Call this off the UI thread. See `windows_answer_snap`.
+    #[link(name = "user32")]
+    extern "system" {
+        fn PrintWindow(hwnd: HWND, hdc_blt: HDC, flags: u32) -> i32;
+    }
+
+    let mut rect = windows::Win32::Foundation::RECT::default();
+    if GetClientRect(hwnd, &mut rect).is_err() {
+        return Err("the browser window has no size".into());
+    }
+    let width = rect.right.max(1);
+    let height = rect.bottom.max(1);
+    let screen = GetDC(Some(hwnd));
+    if screen.is_invalid() {
+        return Err("the browser window has no drawing context".into());
+    }
+    let memory = CreateCompatibleDC(Some(screen));
+    let bitmap = CreateCompatibleBitmap(screen, width, height);
+    let previous = SelectObject(memory, HGDIOBJ(bitmap.0));
+    let printed = PrintWindow(hwnd, memory, 0x0000_0002);
+    let mut info = BITMAPINFO {
+        bmiHeader: BITMAPINFOHEADER {
+            biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+            biWidth: width,
+            biHeight: -height,
+            biPlanes: 1,
+            biBitCount: 32,
+            biCompression: BI_RGB.0,
+            biSizeImage: 0,
+            biXPelsPerMeter: 0,
+            biYPelsPerMeter: 0,
+            biClrUsed: 0,
+            biClrImportant: 0,
+        },
+        bmiColors: [windows::Win32::Graphics::Gdi::RGBQUAD::default()],
+    };
+    let mut pixels = vec![0u8; (width as usize) * (height as usize) * 4];
+    let rows = GetDIBits(
+        memory,
+        bitmap,
+        0,
+        height as u32,
+        Some(pixels.as_mut_ptr().cast()),
+        &mut info,
+        DIB_RGB_COLORS,
+    );
+    SelectObject(memory, previous);
+    let _ = DeleteObject(HGDIOBJ(bitmap.0));
+    let _ = DeleteDC(memory);
+    let _ = ReleaseDC(Some(hwnd), screen);
+    if printed == 0 || rows == 0 {
+        return Err("the browser window could not be read".into());
+    }
+    for chunk in pixels.chunks_exact_mut(4) {
+        chunk.swap(0, 2);
+        chunk[3] = 255;
+    }
+    let (pixels, width, height) = match crop {
+        Some(request) => crop_rgba(&pixels, width, height, request)?,
+        None => (pixels, width as u32, height as u32),
+    };
+    let mut png = Vec::new();
+    let mut encoder = png::Encoder::new(&mut png, width, height);
+    encoder.set_color(png::ColorType::Rgba);
+    encoder.set_depth(png::BitDepth::Eight);
+    let mut writer = encoder.write_header().map_err(|err| err.to_string())?;
+    writer.write_image_data(&pixels).map_err(|err| err.to_string())?;
+    drop(writer);
+    Ok(base64_encode(&png))
+}
+
+#[cfg(windows)]
+fn client_area(hwnd: windows::Win32::Foundation::HWND) -> i32 {
+    use windows::Win32::UI::WindowsAndMessaging::GetClientRect;
+    let mut rect = windows::Win32::Foundation::RECT::default();
+    if unsafe { GetClientRect(hwnd, &mut rect) }.is_err() {
+        return 0;
+    }
+    rect.right.saturating_mul(rect.bottom).max(0)
+}
+
+/// The WebView2 window inside the WRY container. Printing the container is empty.
+#[cfg(windows)]
+fn largest_child(root: windows::Win32::Foundation::HWND) -> windows::Win32::Foundation::HWND {
+    use windows::Win32::UI::WindowsAndMessaging::{GetWindow, GW_CHILD, GW_HWNDNEXT};
+    let mut best = root;
+    let mut best_area = client_area(root);
+    let mut pending = vec![root];
+    let mut seen = 0;
+    while let Some(parent) = pending.pop() {
+        let mut next = unsafe { GetWindow(parent, GW_CHILD) }.ok();
+        while let Some(hwnd) = next {
+            seen += 1;
+            if seen > 64 || hwnd.is_invalid() {
+                break;
+            }
+            let area = client_area(hwnd);
+            if area > best_area {
+                best_area = area;
+                best = hwnd;
+            }
+            pending.push(hwnd);
+            next = unsafe { GetWindow(hwnd, GW_HWNDNEXT) }.ok();
+        }
+    }
+    best
+}
+
+#[cfg(windows)]
+fn crop_rgba(pixels: &[u8], width: i32, height: i32, request: SnapRequest) -> Result<(Vec<u8>, u32, u32), String> {
+    if width < 1 || height < 1 {
+        return Err("the browser window has no size".into());
+    }
+    let scale = f64::from(width) / request.vw.max(1.0);
+    if !scale.is_finite() || scale <= 0.0 {
+        return Err("the snapshot scale is invalid".into());
+    }
+    let x = (request.x * scale).round().clamp(0.0, f64::from(width - 1)) as i32;
+    let y = (request.y * scale).round().clamp(0.0, f64::from(height - 1)) as i32;
+    let w = ((request.w * scale).round().max(1.0) as i32).min(width - x);
+    let h = ((request.h * scale).round().max(1.0) as i32).min(height - y);
+    if w < 1 || h < 1 {
+        return Err("the snapshot crop is empty".into());
+    }
+    let mut out = Vec::with_capacity((w as usize) * (h as usize) * 4);
+    for row in y..(y + h) {
+        let start = ((row as usize) * (width as usize) + (x as usize)) * 4;
+        let end = start + (w as usize) * 4;
+        out.extend_from_slice(&pixels[start..end]);
+    }
+    Ok((out, w as u32, h as u32))
+}
+
+#[cfg(target_os = "linux")]
+async fn snapshot_linux(view: &Webview, width: f64, height: f64) -> Result<String, String> {
+    let (send, receive) = tokio::sync::oneshot::channel();
+    let request = crate::linux_snapshot::Request {
+        x: 0.0,
+        y: 0.0,
+        w: width,
+        h: height,
+        vw: width,
+    };
+    crate::linux_snapshot::capture(view, request, move |outcome| {
+        let _ = send.send(outcome);
+    });
+    match tokio::time::timeout(Duration::from_secs(8), receive).await {
+        Ok(Ok(outcome)) => outcome,
+        Ok(Err(_)) => Err("the snapshot was cancelled".into()),
+        Err(_) => Err("the snapshot timed out".into()),
+    }
+}
+
+#[cfg(windows)]
+fn base64_encode(bytes: &[u8]) -> String {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::new();
+    let mut index = 0;
+    while index + 3 <= bytes.len() {
+        let value = ((bytes[index] as u32) << 16) | ((bytes[index + 1] as u32) << 8) | bytes[index + 2] as u32;
+        out.push(TABLE[((value >> 18) & 63) as usize] as char);
+        out.push(TABLE[((value >> 12) & 63) as usize] as char);
+        out.push(TABLE[((value >> 6) & 63) as usize] as char);
+        out.push(TABLE[(value & 63) as usize] as char);
+        index += 3;
+    }
+    let rest = bytes.len() - index;
+    if rest == 1 {
+        let value = (bytes[index] as u32) << 16;
+        out.push(TABLE[((value >> 18) & 63) as usize] as char);
+        out.push(TABLE[((value >> 12) & 63) as usize] as char);
+        out.push('=');
+        out.push('=');
+    } else if rest == 2 {
+        let value = ((bytes[index] as u32) << 16) | ((bytes[index + 1] as u32) << 8);
+        out.push(TABLE[((value >> 18) & 63) as usize] as char);
+        out.push(TABLE[((value >> 12) & 63) as usize] as char);
+        out.push(TABLE[((value >> 6) & 63) as usize] as char);
+        out.push('=');
+    }
+    out
 }
 
 /// Cut menu rectangles out of the native browser window. Resizing the window would reflow the site.
@@ -247,8 +566,11 @@ async fn place_browser(
     locked: bool,
     space: String,
     cuts: Vec<CssBox>,
+    reload: bool,
+    seq: Option<u64>,
 ) -> Result<(), String> {
     let _ = (locked, space);
+    let seq = seq.unwrap_or(0);
     let parsed = browser_target(&label, &url)?;
     finite_box(x, y, width, height)?;
     let page = CssBox { x, y, width, height };
@@ -258,11 +580,16 @@ async fn place_browser(
     let target = parsed.as_str().to_string();
     let mut guard = host.slots.lock().map_err(|_| "browser host is locked".to_string())?;
     if let Some(slot) = guard.get_mut(&label) {
-        if generation < slot.generation {
+        if generation < slot.generation || !place_is_current(slot.seq, seq) {
             return Ok(());
         }
         slot.generation = generation;
-        if slot.url != target {
+        if seq > 0 {
+            slot.seq = seq;
+        }
+        // A reload, or a page that never landed, has to navigate again. Moving the
+        // window is not enough: the address-bar reload used to leave a blank webview.
+        if slot.url != target || reload {
             slot.view.navigate(parsed).map_err(|err| err.to_string())?;
             slot.url = target;
         }
@@ -280,20 +607,25 @@ async fn place_browser(
         .ok_or_else(|| "the desktop window is not open".to_string())?;
     let boot = select_boot();
     let opener = app.clone();
-    let panel_id = label
-        .strip_prefix("browser-")
-        .unwrap_or("")
-        .to_string();
+    let panel_id = Arc::new(Mutex::new(
+        panel_id_from_browser(&label).unwrap_or("").to_string(),
+    ));
+    let navigation_panel = Arc::clone(&panel_id);
     let builder = tauri::webview::WebviewBuilder::new(&label, tauri::WebviewUrl::External(parsed.clone()))
         .initialization_script(boot)
         .on_navigation(move |url| {
+            let id = navigation_panel
+                .lock()
+                .map(|id| id.clone())
+                .unwrap_or_default();
             browser_panel_link(url.as_str()) == LinkNavigation::Stay
-                && navigation_permitted(&panel_id, url.as_str())
+                && navigation_permitted(&id, url.as_str())
         })
         .on_new_window(move |url, _features| {
             respond_to_new_window(&opener, &url);
             NewWindowResponse::Deny
         })
+        .on_document_title_changed(|view, title| answer_snap(&view, &title))
         .on_page_load(|webview, payload| {
             if payload.event() != PageLoadEvent::Finished {
                 return;
@@ -339,6 +671,8 @@ async fn place_browser(
             generation,
             shown: true,
             clipped,
+            panel_id,
+            seq,
         },
     );
     Ok(())
@@ -380,6 +714,81 @@ async fn set_browser_zoom(host: State<'_, BrowserHost>, label: String, scale: f6
             .map_err(|err| err.to_string())?;
     }
     Ok(())
+}
+
+/// Move a live browser webview onto a new label.
+///
+/// Dropping a browser panel onto a tab used to close `browser-{panel}` and open
+/// `browser-{panel}:{tab}`. The new webview came up blank, and the address-bar reload
+/// only moved that blank view. Keeping the same webview keeps the page.
+#[tauri::command]
+async fn adopt_browser(
+    host: State<'_, BrowserHost>,
+    from: String,
+    to: String,
+    generation: u64,
+) -> Result<(), String> {
+    if !valid_browser_label(&from) || !valid_browser_label(&to) {
+        return Err("browser label is invalid".into());
+    }
+    let mut guard = host.slots.lock().map_err(|_| "browser host is locked".to_string())?;
+    if from == to {
+        if let Some(slot) = guard.get_mut(&from) {
+            if generation >= slot.generation {
+                slot.generation = generation;
+            }
+        }
+        return Ok(());
+    }
+    let Some(mut slot) = guard.remove(&from) else {
+        return Ok(());
+    };
+    if generation >= slot.generation {
+        slot.generation = generation;
+    }
+    if let Some(next) = panel_id_from_browser(&to) {
+        if let Ok(mut id) = slot.panel_id.lock() {
+            *id = next.to_string();
+        }
+    }
+    if let Some(existing) = guard.remove(&to) {
+        let _ = existing.view.close();
+    }
+    #[cfg(windows)]
+    browser_wheel::rename_browser(&from, &to);
+    guard.insert(to, slot);
+    Ok(())
+}
+
+/// Pixels of one browser webview, as a base64 PNG.
+///
+/// html2canvas paints the empty hole behind this webview, so a screenshot of Google is
+/// the panel background unless the desktop window returns the webview's own image.
+/// Windows prints that window. Linux snapshots it through WebKit. Do not drop this:
+/// a normal panel and a tab both depend on it.
+#[tauri::command]
+async fn snapshot_browser(
+    host: State<'_, BrowserHost>,
+    label: String,
+    width: f64,
+    height: f64,
+) -> Result<String, String> {
+    if !valid_browser_label(&label) {
+        return Err("browser label is invalid".into());
+    }
+    finite_box(0.0, 0.0, width, height)?;
+    if width < 2.0 || height < 2.0 {
+        return Err("browser snapshot is empty".into());
+    }
+    let view = {
+        let guard = host.slots.lock().map_err(|_| "browser host is locked".to_string())?;
+        guard
+            .get(&label)
+            .ok_or_else(|| "that browser panel is not open".to_string())?
+            .view
+            .clone()
+    };
+    snapshot_webview(&view, width, height).await
 }
 
 #[tauri::command]
@@ -431,12 +840,7 @@ fn set_desk_prefix(ctrl: bool, alt: bool, shift: bool, meta: bool, key: String) 
 /// Run one host-built script in a child webview. The page cannot call this.
 #[tauri::command]
 async fn eval_browser(host: State<'_, BrowserHost>, label: String, script: String) -> Result<(), String> {
-    if !label.starts_with("browser-")
-        || label.len() > "browser-".len() + 49
-        || !label
-            .chars()
-            .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')
-    {
+    if !valid_browser_label(&label) {
         return Err("browser label is invalid".into());
     }
     let script = script.trim();
@@ -683,6 +1087,8 @@ pub fn run() {
         .manage(host())
         .invoke_handler(tauri::generate_handler![
             place_browser,
+            adopt_browser,
+            snapshot_browser,
             close_browser,
             eval_browser,
             set_browser_select,
@@ -816,12 +1222,33 @@ pub struct KeySnap {
     pub up: bool,
 }
 
+/// A tab page is `browser-{panel}:{tab}`. The label keeps the tab, and the panel id does not.
+fn valid_browser_label(label: &str) -> bool {
+    let Some(id) = label.strip_prefix("browser-") else {
+        return false;
+    };
+    if id.is_empty() || id.len() > 49 || id.starts_with(':') || id.ends_with(':') {
+        return false;
+    }
+    let mut colon = false;
+    id.chars().all(|ch| {
+        if ch == ':' {
+            if colon {
+                return false;
+            }
+            colon = true;
+            return true;
+        }
+        ch.is_ascii_alphanumeric() || ch == '-' || ch == '_'
+    })
+}
+
 pub fn panel_id_from_browser(label: &str) -> Option<&str> {
     let id = label.strip_prefix("browser-")?;
-    if id.is_empty() || !id.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_') {
+    if !valid_browser_label(label) {
         return None;
     }
-    Some(id)
+    id.split(':').next().filter(|part| !part.is_empty())
 }
 
 pub fn key_from_vk(vk: u16) -> (String, String) {
@@ -1220,6 +1647,15 @@ mod browser_wheel {
         browsers.retain(|(_, known)| known != label);
     }
 
+    pub fn rename_browser(from: &str, to: &str) {
+        let mut browsers = BROWSERS.lock().unwrap_or_else(|err| err.into_inner());
+        for (_, name) in browsers.iter_mut() {
+            if name == from {
+                *name = to.to_string();
+            }
+        }
+    }
+
     pub fn set_zoom(scale: f64) {
         if let Ok(mut zoom) = ZOOM.lock() {
             *zoom = scale;
@@ -1433,6 +1869,15 @@ mod tests {
     }
 
     #[test]
+    fn an_older_place_does_not_replace_a_newer_one() {
+        assert!(place_is_current(0, 1));
+        assert!(place_is_current(4, 4));
+        assert!(place_is_current(4, 5));
+        assert!(!place_is_current(5, 4));
+        assert!(place_is_current(5, 0));
+    }
+
+    #[test]
     fn browser_panels_are_placed_in_window_pixels() {
         assert_eq!(scale_bounds(10.0, 20.0, 100.0, 50.0, 1.0), (10.0, 20.0, 100.0, 50.0));
         assert_eq!(scale_bounds(10.0, 20.0, 100.0, 50.0, 1.5), (15.0, 30.0, 150.0, 75.0));
@@ -1444,6 +1889,8 @@ mod tests {
         let url = browser_target("browser-panel-5", "https://example.com/docs").unwrap();
         assert_eq!(url.scheme(), "https");
         assert!(browser_target("browser-notes", "http://127.0.0.1:8080/app").is_ok());
+        assert!(browser_target("browser-panel-3:tab-2", "https://www.google.com/").is_ok());
+        assert!(browser_target("browser-panel-3:tab-2:extra", "https://example.com").is_err());
     }
 
     #[test]
@@ -1536,6 +1983,8 @@ mod tests {
         assert_eq!(css_from_client(200, 100, 192, 1.0), Some((100.0, 50.0)));
         assert_eq!(css_from_client(200, 100, 96, 2.0), Some((100.0, 50.0)));
         assert_eq!(panel_id_from_browser("browser-panel-1"), Some("panel-1"));
+        assert_eq!(panel_id_from_browser("browser-panel-1:tab-2"), Some("panel-1"));
+        assert_eq!(panel_id_from_browser("browser-panel-1:tab-2:nope"), None);
         assert_eq!(panel_id_from_browser("main"), None);
     }
 

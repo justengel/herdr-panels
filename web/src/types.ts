@@ -48,6 +48,8 @@ export interface PanelNode {
   type: "panel";
   id: string;
   title?: string | null;
+  /** Preset id, or `file:` plus a path. Kept when a tab is dragged out of a group. */
+  icon?: string | null;
   panel: PanelConfig;
   collapsed?: boolean;
 }
@@ -150,6 +152,10 @@ export interface TabsPanel {
   type: "tabs";
   edge: TabEdge;
   active: string;
+  /** Absent means the stored names are drawn on the tabs. */
+  showNames?: boolean;
+  /** Absent means a tab's icon is drawn. Both off shows the tab number, so `tab-1` reads `1`. */
+  showIcons?: boolean;
   tabs: PanelTab[];
 }
 

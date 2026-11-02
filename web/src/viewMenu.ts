@@ -50,6 +50,8 @@ export interface MenuContext {
   panes?: MenuPane[];
   workspaceId?: string | null;
   workspaceRoot?: string | null;
+  /** When the menu was opened on a tab, change that tab. */
+  tabId?: string | null;
 }
 
 const VIEW_PLUGIN_INLINE_MAX = 2;
@@ -361,15 +363,18 @@ export function showViewer(
   panel: PanelConfig,
   choice: string,
   plugins: MenuPlugin[],
-  ctx: Pick<MenuContext, "workspaceRoot"> = {},
+  ctx: Pick<MenuContext, "workspaceRoot" | "tabId"> = {},
 ): PanelConfig {
   if (panel.type === "tabs") {
     const active = panel.tabs.find((tab) => tab.id === panel.active) ?? panel.tabs[0];
-    if (!active) return panel;
+    const target = (ctx.tabId && panel.tabs.find((tab) => tab.id === ctx.tabId)) || active;
+    if (!target) return panel;
     return {
       ...panel,
       tabs: panel.tabs.map((tab) =>
-        tab.id === active.id ? { ...tab, panel: showViewer(tab.panel, choice, plugins, ctx) } : tab,
+        tab.id === target.id
+          ? { ...tab, panel: showViewer(tab.panel, choice, plugins, { workspaceRoot: ctx.workspaceRoot }) }
+          : tab,
       ),
     };
   }

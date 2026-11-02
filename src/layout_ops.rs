@@ -5,6 +5,7 @@ pub struct PanelInfo {
     pub title: Option<String>,
     pub panel: PanelConfig,
     pub collapsed: bool,
+    pub icon: Option<String>,
 }
 
 pub fn list_panels(node: &LayoutNode) -> Vec<PanelInfo> {
@@ -204,6 +205,7 @@ pub fn open_panel_with_id(
         title,
         panel,
         collapsed: false,
+        icon: None,
     };
     let next = split_panel(node, anchor_id, direction, created)?;
     Ok((next, id))
@@ -339,11 +341,13 @@ fn walk(node: &LayoutNode, panels: &mut Vec<PanelInfo>) {
             title,
             panel,
             collapsed,
+            icon,
         } => panels.push(PanelInfo {
             id: id.clone(),
             title: title.clone(),
             panel: panel.clone(),
             collapsed: *collapsed,
+            icon: icon.clone(),
         }),
         LayoutNode::Split { first, second, .. } => {
             walk(first, panels);
@@ -371,6 +375,7 @@ fn cell_node(cell: &GridCell) -> LayoutNode {
             scope: None,
         }),
         collapsed: false,
+        icon: None,
     }
 }
 
@@ -403,6 +408,7 @@ fn try_split(
             title,
             panel,
             collapsed,
+            icon,
         } if panel_id == id => Ok(LayoutNode::Split {
             direction,
             ratio: 0.5,
@@ -411,6 +417,7 @@ fn try_split(
                 title,
                 panel,
                 collapsed,
+                icon,
             }),
             second: Box::new(created),
         }),
@@ -419,12 +426,14 @@ fn try_split(
             title,
             panel,
             collapsed,
+            icon,
         } => Err(Box::new(SplitMiss {
             node: LayoutNode::Panel {
                 id,
                 title,
                 panel,
                 collapsed,
+                icon,
             },
             created,
         })),
@@ -523,11 +532,13 @@ fn close_rec(node: LayoutNode, id: &str) -> Close {
             title,
             panel,
             collapsed,
+            icon,
         } => Close::Same(LayoutNode::Panel {
             id,
             title,
             panel,
             collapsed,
+            icon,
         }),
         LayoutNode::Split {
             direction,
@@ -637,12 +648,14 @@ fn update_rec(
             title: current_title,
             panel: current_panel,
             collapsed,
+            icon,
         } if panel_id == id => (
             LayoutNode::Panel {
                 id: panel_id,
                 title: title.unwrap_or(current_title),
                 panel: panel.unwrap_or(current_panel),
                 collapsed,
+                icon,
             },
             true,
         ),
@@ -651,12 +664,14 @@ fn update_rec(
             title,
             panel,
             collapsed,
+            icon,
         } => (
             LayoutNode::Panel {
                 id,
                 title,
                 panel,
                 collapsed,
+                icon,
             },
             false,
         ),
@@ -730,12 +745,14 @@ fn resize_rec(node: LayoutNode, id: &str, share: f64) -> (LayoutNode, bool) {
             title,
             panel,
             collapsed,
+            icon,
         } => (
             LayoutNode::Panel {
                 id,
                 title,
                 panel,
                 collapsed,
+                icon,
             },
             false,
         ),
@@ -1093,6 +1110,7 @@ pub fn move_panel(
             title: source.title.clone(),
             panel: source.panel.clone(),
             collapsed: source.collapsed,
+            icon: source.icon.clone(),
         }
     };
     match place {
@@ -1116,6 +1134,7 @@ fn copy_info(info: &PanelInfo) -> PanelInfo {
         title: info.title.clone(),
         panel: info.panel.clone(),
         collapsed: info.collapsed,
+        icon: info.icon.clone(),
     }
 }
 
@@ -1126,6 +1145,7 @@ fn replace_two(node: LayoutNode, source: &PanelInfo, target: &PanelInfo) -> Layo
             title,
             panel,
             collapsed,
+            icon,
         } => {
             let info = if id == source.id {
                 Some(target)
@@ -1140,12 +1160,14 @@ fn replace_two(node: LayoutNode, source: &PanelInfo, target: &PanelInfo) -> Layo
                     title: info.title.clone(),
                     panel: info.panel.clone(),
                     collapsed: info.collapsed,
+                    icon: info.icon.clone(),
                 },
                 None => LayoutNode::Panel {
                     id,
                     title,
                     panel,
                     collapsed,
+                    icon,
                 },
             }
         }
@@ -1304,6 +1326,7 @@ mod tests {
                 scope: Some(HerdrScope::Pane),
             },
             collapsed: false,
+        icon: None,
         };
         let html = PanelConfig::Html {
             path: Some("notes/board.html".into()),
@@ -1349,6 +1372,7 @@ mod tests {
                 control: true,
             },
             collapsed: false,
+        icon: None,
         };
         assert!(
             matches!(
@@ -1426,6 +1450,7 @@ mod tests {
             title: Some("Chat".into()),
             panel: PanelConfig::Chat { pane_id: None },
             collapsed: false,
+        icon: None,
         };
         let split = split_panel(sample(), "notes", Direction::Column, created).unwrap();
         assert!(contains(&split, "chat"));
@@ -1528,6 +1553,7 @@ mod tests {
                 address_bar: None,
             },
             collapsed: false,
+        icon: None,
         };
         assert_eq!(stored_name(Some("Panes")), None);
         assert_eq!(stored_name(Some("Notes")).as_deref(), Some("Notes"));
@@ -1549,6 +1575,7 @@ mod tests {
                 scope: None,
             },
             collapsed: false,
+        icon: None,
         };
         let root = LayoutNode::Split {
             direction: Direction::Row,
@@ -1567,6 +1594,7 @@ mod tests {
                 address_bar: None,
             },
             collapsed: false,
+        icon: None,
         };
         let crowded = LayoutNode::Split {
             direction: Direction::Row,

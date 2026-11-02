@@ -1181,6 +1181,7 @@ mod tests {
             id: "panel-1".into(),
             title: None,
             collapsed: false,
+        icon: None,
             panel: PanelConfig::Markdown {
                 path: "CLAUDE.md".into(),
                 address_bar: None,
@@ -1356,6 +1357,7 @@ mod tests {
             id: id.into(),
             title: Some("CLAUDE.md".into()),
             collapsed: false,
+        icon: None,
             panel: PanelConfig::Markdown {
                 path: "CLAUDE.md".into(),
                 address_bar: None,
@@ -1369,6 +1371,7 @@ mod tests {
             id: id.into(),
             title: None,
             collapsed: false,
+        icon: None,
             panel: PanelConfig::Plugin {
                 plugin: plugin.into(),
                 config: serde_json::Value::Null,
@@ -1397,6 +1400,7 @@ mod tests {
                 id: "report".into(),
                 title: None,
                 collapsed: false,
+        icon: None,
                 panel: PanelConfig::Plugin {
                     plugin: "checkin-report".into(),
                     config: serde_json::Value::Null,

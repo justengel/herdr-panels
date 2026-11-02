@@ -7,10 +7,16 @@ export interface StripDrag {
 }
 
 /** Drag a horizontal or vertical strip. Tabs carry `data-reorder-id`. */
-export function useStripDrag(axis: "x" | "y", onDrop: (draggedId: string, beforeId: string | null) => void) {
+export function useStripDrag(
+  axis: "x" | "y",
+  onDrop: (draggedId: string, beforeId: string | null) => void,
+  onLeave?: (draggedId: string, event: PointerEvent) => void,
+) {
   const listRef = useRef<HTMLDivElement>(null);
   const dropRef = useRef(onDrop);
+  const leaveRef = useRef(onLeave);
   dropRef.current = onDrop;
+  leaveRef.current = onLeave;
   const gesture = useRef<{ id: string; point: number; dragging: boolean } | null>(null);
   const skipClick = useRef<string | null>(null);
   const stopRef = useRef<(() => void) | null>(null);
@@ -46,6 +52,15 @@ export function useStripDrag(axis: "x" | "y", onDrop: (draggedId: string, before
       const point = pointOf(ev);
       if (!start.dragging && Math.abs(point - start.point) < 5) return;
       start.dragging = true;
+      if (leaveRef.current && outsideStrip(ev)) {
+        const leave = leaveRef.current;
+        skipClick.current = start.id;
+        gesture.current = null;
+        setDrag(null);
+        detach();
+        leave(start.id, ev);
+        return;
+      }
       const beforeId = measure(point, start.id);
       setDrag((current) =>
         current?.id === start.id && current.beforeId === beforeId ? current : { id: start.id, beforeId },
@@ -79,6 +94,18 @@ export function useStripDrag(axis: "x" | "y", onDrop: (draggedId: string, before
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", end);
     window.addEventListener("pointercancel", cancel);
+  }
+
+  function outsideStrip(event: PointerEvent): boolean {
+    const box = listRef.current?.getBoundingClientRect();
+    if (!box) return false;
+    const slop = 16;
+    return (
+      event.clientX < box.left - slop ||
+      event.clientX > box.right + slop ||
+      event.clientY < box.top - slop ||
+      event.clientY > box.bottom + slop
+    );
   }
 
   function swallowClick(id: string): boolean {

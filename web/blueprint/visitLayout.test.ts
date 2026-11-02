@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { leaveVisitPanel, openVisit, reuseVisit, type VisitSpace } from "../src/borrowPanel";
+import { deskFillRequest, leaveVisitPanel, openVisit, reuseVisit, type VisitSpace } from "../src/borrowPanel";
 import type { LayoutNode } from "../src/types";
 
 function space(id: string, label: string, root: LayoutNode, current = false): VisitSpace {
@@ -16,6 +16,36 @@ const spaces: VisitSpace[] = [
   space("wG", "garden", panel("agents", "Agents")),
   space("wK", "kitchen", panel("files", "Files")),
 ];
+
+describe("maximizing a panel", () => {
+  it("keeps the copy on this space when another space reused the id", () => {
+    const here: LayoutNode = {
+      type: "panel",
+      id: "panel-1",
+      title: "google",
+      panel: { type: "iframe", url: "https://google.com" },
+    };
+    const there: LayoutNode = {
+      type: "panel",
+      id: "panel-1",
+      title: "Files",
+      panel: { type: "plugin", plugin: "files" },
+    };
+    const opened = openVisit(
+      [space("wJ", "herdr-panels", here, true), space("wH", "my_sixth_grimoire", there)],
+      [deskFillRequest("panel-1", "wJ")],
+    );
+    expect(opened).toMatchObject({
+      single: true,
+      panelIds: ["panel-1"],
+      spaceIds: { "panel-1": "wJ" },
+    });
+    if (!("node" in opened) || opened.node.type !== "panel" || opened.node.panel.type !== "iframe") {
+      throw new Error("expected the browser on this space");
+    }
+    expect(opened.node.panel.url).toBe("https://google.com");
+  });
+});
 
 describe("a visit of several panels", () => {
   it("sits two panels side by side and leaves their spaces unchanged", () => {

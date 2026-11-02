@@ -1,6 +1,10 @@
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import type { PanelConfig, TabEdge } from "../types";
+import type { PanelConfig, TabEdge, TabsPanel } from "../types";
+import { chevronTurn, iconRail, railBasis, tabFace } from "../tabFace";
+import { IconField } from "./IconField";
+import { TabMark } from "./TabMark";
+import { TabStrip } from "./TabStrip";
 import type { MenuEntry } from "../viewMenu";
 import { fitFlyout, useKeepMenuOnScreen, type FlyoutBox } from "../menuPlace";
 import { useKeyedPanel } from "../deskKeyboard";
@@ -16,6 +20,8 @@ interface Props {
   name?: string;
   kind: string;
   panelType: PanelConfig["type"];
+  /** Type the open menu is about. A tab menu uses that tab, not the active one. */
+  menuType?: PanelConfig["type"];
   pluginId?: string;
   badge?: string;
   badgeClass?: string;
@@ -30,8 +36,13 @@ interface Props {
   className?: string;
   panelId?: string;
   plain?: boolean;
-  tabbed?: boolean;
   tabEdge?: TabEdge;
+  tabs?: TabsPanel;
+  onTabs?: (next: TabsPanel) => void;
+  onCloseTab?: (tabId: string) => void;
+  onMenuTarget?: (tabId: string | null) => void;
+  collapsed?: boolean;
+  icon?: string | null;
   addressBar?: boolean;
   onAddressBar?: (show: boolean) => void;
   entries?: MenuEntry[];
@@ -103,6 +114,7 @@ export function PanelChrome({
   name,
   kind,
   panelType,
+  menuType,
   badge,
   badgeClass,
   subtitle,
@@ -114,8 +126,13 @@ export function PanelChrome({
   className,
   panelId,
   plain = false,
-  tabbed = false,
   tabEdge = "top",
+  tabs,
+  onTabs,
+  onCloseTab,
+  onMenuTarget,
+  collapsed = false,
+  icon,
   addressBar = false,
   onAddressBar,
   entries = [],
@@ -134,6 +151,7 @@ export function PanelChrome({
   const panelActions = usePanelActions();
   const drag = usePanelDrag();
   const keyed = useKeyedPanel();
+  const [menuTabId, setMenuTabId] = useState<string | null>(null);
   const [menu, setMenu] = useState<{ left?: number; right?: number; top: number } | null>(null);
   const [locked, setLocked] = useState(false);
   const desk = useDesk();
@@ -271,8 +289,17 @@ export function PanelChrome({
     );
   }, [flyout]);
   const dragging = Boolean(panelId && drag.draggingId === panelId);
+  const edge = tabs?.edge ?? tabEdge;
+  const showNames = tabs?.showNames !== false;
+  const showIcons = tabs?.showIcons !== false;
+  const rail = Boolean(tabs && iconRail(edge, tabs.tabs, showNames, showIcons));
+  const digitRail = rail && tabs != null && railBasis(edge, tabs.tabs, showNames, showIcons) === 36;
+  const menuTab = tabs?.tabs.find((tab) => tab.id === menuTabId) ?? null;
+  const barMenu = Boolean(tabs && onTabs && !menuTab);
   const classes = [
     "panel",
+    `edge-${edge}`,
+    collapsed ? "is-collapsed" : "",
     className,
     plain ? "is-plain" : "",
     dragging ? "is-drag-source" : "",
@@ -286,11 +313,14 @@ export function PanelChrome({
   const paneEntries = entries.filter((entry) => entry.section === "panes");
   const paneMenuLabel = deskEntries.find((entry) => entry.id === "terminals")?.label || "Terminals";
   const moreViewEntries = entries.filter((entry) => entry.section === "views");
-  const showAddress = Boolean(onAddressBar) && panelType !== "herdr" && panelType !== "files" && panelType !== "agents";
+  const subjectType = menuType ?? panelType;
+  const showAddress = Boolean(onAddressBar) && subjectType !== "herdr" && subjectType !== "files" && subjectType !== "agents";
 
   function dismissMenu() {
     clearFlyoutTimers();
     setMenu(null);
+    setMenuTabId(null);
+    onMenuTarget?.(null);
     setFlyout(null);
     setFlyoutBox(null);
     flyoutAnchor.current = null;
@@ -355,7 +385,7 @@ export function PanelChrome({
     action();
   }
 
-  function openMenu(event: React.MouseEvent) {
+  function openMenu(event: React.MouseEvent, tabId?: string) {
     if (!panelId) return;
     event.preventDefault();
     event.stopPropagation();
@@ -363,6 +393,8 @@ export function PanelChrome({
     setFlyout(null);
     setFlyoutBox(null);
     flyoutAnchor.current = null;
+    setMenuTabId(tabId ?? null);
+    onMenuTarget?.(tabId ?? null);
     setMenu({ left: event.clientX, top: event.clientY });
   }
 
@@ -373,6 +405,8 @@ export function PanelChrome({
       dismissMenu();
       return;
     }
+    setMenuTabId(null);
+    onMenuTarget?.(null);
     choseRef.current = false;
     const rect = gearRef.current?.getBoundingClientRect();
     if (!rect) return;
@@ -389,11 +423,56 @@ export function PanelChrome({
   function beginDrag(event: React.PointerEvent<HTMLElement>) {
     if (!panelId || event.button !== 0) return;
     const target = event.target;
-    if (target instanceof Element && target.closest("button, a, input, select, textarea, label") && !target.closest(".grip")) {
+    if (target instanceof Element && target.closest("button, a, input, select, textarea, label, .tab") && !target.closest(".grip")) {
       return;
     }
     drag.start(panelId, event);
   }
+
+  function closeFromBar(event: React.MouseEvent) {
+    event.stopPropagation();
+    if (!panelId) return;
+    if (tabs && tabs.tabs.length > 1) {
+      const active = tabs.tabs.some((tab) => tab.id === tabs.active) ? tabs.active : tabs.tabs[0]?.id;
+      if (active) onCloseTab?.(active);
+      return;
+    }
+    panelActions.close(panelId);
+  }
+
+  const activeTab = tabs?.tabs.find((tab) => tab.id === tabs.active) ?? tabs?.tabs[0];
+  const closeName = activeTab ? tabFace(activeTab, showNames, showIcons).label || activeTab.id : title;
+  const barTools = (
+    <>
+      <LockButton kind={panelType} locked={locked} onToggle={toggleLock} />
+      <button
+        ref={gearRef}
+        type="button"
+        className="panel-gear tab-gear-button"
+        aria-label="Panel settings"
+        aria-expanded={menu !== null}
+        title="Panel settings"
+        onClick={openGear}
+      >
+        <GearIcon />
+      </button>
+      <CollapseButton edge={edge} collapsed={collapsed} panelId={panelId} />
+      <FillButton panelId={panelId} title={title} />
+      {tabs && tabs.tabs.length > 1 && !leaveVisit ? (
+        <button
+          type="button"
+          className="panel-close"
+          aria-label={`Close ${closeName}`}
+          title="Close tab"
+          onClick={closeFromBar}
+        >
+          <CloseIcon />
+        </button>
+      ) : (
+        <EndButton panelId={panelId} title={title} canClose={canClose} leaveVisit={leaveVisit} />
+      )}
+    </>
+  );
 
   const menuStyle = menuBox
     ? { left: menuBox.left, top: menuBox.top, maxWidth: menuBox.maxWidth, maxHeight: menuBox.maxHeight }
@@ -407,6 +486,8 @@ export function PanelChrome({
       data-panel-id={panelId}
       data-type={panelType}
       data-kind={kind}
+      data-edge={edge}
+      data-collapsed={collapsed ? "true" : "false"}
       tabIndex={-1}
       onClick={(event) => {
         onClick?.(event);
@@ -414,7 +495,7 @@ export function PanelChrome({
       }}
     >
       {plain ? (
-        <div className="plain-actions">
+        <div className="plain-actions" data-panel-bar="">
           <button
             type="button"
             className="grip"
@@ -422,25 +503,14 @@ export function PanelChrome({
             title="Drag onto a side to place this panel, or the middle to swap"
             onPointerDown={beginDrag}
           />
-          {locked ? <LockButton kind={panelType} onToggle={toggleLock} /> : null}
-          <button
-            ref={gearRef}
-            type="button"
-            className="panel-gear tab-gear-button"
-            aria-label="Panel settings"
-            aria-expanded={menu !== null}
-            title="Panel settings"
-            onClick={openGear}
-          >
-            <GearIcon />
-          </button>
-          <FillButton panelId={panelId} title={title} />
-          <EndButton panelId={panelId} title={title} canClose={canClose} leaveVisit={leaveVisit} />
+          {barTools}
         </div>
       ) : (
         <header
-          className="panel-header"
-          onContextMenu={openMenu}
+          className={["panel-header", rail ? "is-rail" : "", digitRail ? "is-digits" : ""].filter(Boolean).join(" ")}
+          data-panel-bar=""
+          data-edge={edge}
+          onContextMenu={(event) => openMenu(event)}
           onPointerDown={beginDrag}
         >
           <button
@@ -449,30 +519,30 @@ export function PanelChrome({
             aria-label="Drag to rearrange"
             title="Drag the title bar onto a side to place this panel, or the middle to swap"
           />
-          <div className="panel-title">
-            <strong title={hint}>{title}</strong>
-            {subtitle ? <span className="subtitle">{subtitle}</span> : null}
-            {fromSpace ? <span className="subtitle">from {fromSpace}</span> : null}
-          </div>
-          {config}
+          {tabs && onTabs && onCloseTab ? (
+            <TabStrip
+              group={tabs}
+              onChange={onTabs}
+              onClose={onCloseTab}
+              onContextMenu={(tabId, event) => openMenu(event, tabId)}
+              onDragAway={(tabId, event) => {
+                if (panelId) drag.startTab(panelId, tabId, event);
+              }}
+            />
+          ) : (
+            <div className="panel-title">
+              {icon ? <TabMark icon={icon} /> : null}
+              <strong title={hint}>{title}</strong>
+              {subtitle ? <span className="subtitle">{subtitle}</span> : null}
+              {fromSpace ? <span className="subtitle">from {fromSpace}</span> : null}
+            </div>
+          )}
+          {tabs ? null : config}
           <div className="panel-actions">
-            {badge ? <span className={`badge ${badgeClass ?? ""}`}>{badge}</span> : null}
-            {viewer ? <span className="panel-type">{viewer}</span> : null}
-            {actions}
-            {locked ? <LockButton kind={panelType} onToggle={toggleLock} /> : null}
-            <button
-              ref={gearRef}
-              type="button"
-              className="panel-gear tab-gear-button"
-              aria-label="Panel settings"
-              aria-expanded={menu !== null}
-              title="Panel settings"
-              onClick={openGear}
-            >
-              <GearIcon />
-            </button>
-            <FillButton panelId={panelId} title={title} />
-            <EndButton panelId={panelId} title={title} canClose={canClose} leaveVisit={leaveVisit} />
+            {tabs ? null : badge ? <span className={`badge ${badgeClass ?? ""}`}>{badge}</span> : null}
+            {tabs ? null : viewer ? <span className="panel-type">{viewer}</span> : null}
+            {tabs ? null : actions}
+            {barTools}
           </div>
         </header>
       )}
@@ -496,7 +566,62 @@ export function PanelChrome({
                 ref={menuRef}
                 style={menuStyle}
               >
-                <NameField panelId={panelId} name={name ?? title} placeholder={name !== undefined && name !== title ? title : undefined} />
+                {barMenu ? null : (
+                <div className="menu-identity">
+                  <IconField
+                    icon={menuTab ? menuTab.icon : icon}
+                    onChange={(next) => {
+                      if (menuTab && tabs && onTabs) {
+                        onTabs({
+                          ...tabs,
+                          tabs: tabs.tabs.map((tab) => (tab.id === menuTab.id ? { ...tab, icon: next } : tab)),
+                        });
+                        return;
+                      }
+                      if (panelId) panelActions.icon(panelId, next);
+                    }}
+                  />
+                  <NameField
+                    panelId={panelId}
+                    name={menuTab ? menuTab.title : (name ?? title)}
+                    placeholder={
+                      menuTab && !menuTab.title.trim()
+                        ? menuTab.id
+                        : name !== undefined && name !== title
+                          ? title
+                          : undefined
+                    }
+                    onRename={
+                      menuTab && tabs && onTabs
+                        ? (value) =>
+                            onTabs({
+                              ...tabs,
+                              tabs: tabs.tabs.map((tab) => (tab.id === menuTab.id ? { ...tab, title: value } : tab)),
+                            })
+                        : undefined
+                    }
+                  />
+                </div>
+                )}
+                {barMenu && tabs && onTabs ? (
+                  <TabMenu
+                    names={showNames}
+                    icons={showIcons}
+                    edge={edge}
+                    onNames={(shown) => onTabs({ ...tabs, showNames: shown ? undefined : false })}
+                    onIcons={(shown) => onTabs({ ...tabs, showIcons: shown ? undefined : false })}
+                    onEdge={(next) => {
+                      if (panelId) run(() => panelActions.edge(panelId, next));
+                    }}
+                    onAdd={() => {
+                      if (panelId) run(() => panelActions.addTab(panelId));
+                    }}
+                    onClose={
+                      canClose && !leaveVisit ? () => run(() => panelActions.close(panelId)) : undefined
+                    }
+                  />
+                ) : (
+                  <>
                 {contents}
                 <div className="menu-rule" />
                 <div className="menu-label">Panel</div>
@@ -623,7 +748,7 @@ export function PanelChrome({
                   </>
                 ) : null}
 
-                {canClose && !leaveVisit ? (
+                {(menuTab && onCloseTab && ((tabs?.tabs.length ?? 0) > 1 || canClose) || (!menuTab && canClose)) && !leaveVisit ? (
                   <>
                     <div className="menu-rule menu-rule-strong" />
                     <button
@@ -631,13 +756,20 @@ export function PanelChrome({
                       role="menuitem"
                       className="menu-radio"
                       onMouseEnter={scheduleCloseFlyout}
-                      onClick={() => run(() => panelActions.close(panelId))}
+                      onClick={() =>
+                        run(() => {
+                          if (menuTab && onCloseTab) onCloseTab(menuTab.id);
+                          else panelActions.close(panelId);
+                        })
+                      }
                     >
                       <span className="menu-check" />
                       Close
                     </button>
                   </>
                 ) : null}
+                  </>
+                )}
 
                 {flyout === "options" ? (
                   <div
@@ -709,21 +841,6 @@ export function PanelChrome({
                       <span className="menu-check" />
                       Add tab
                     </button>
-                    {tabbed
-                      ? EDGES.map((item) => (
-                          <button
-                            key={item.edge}
-                            type="button"
-                            role="menuitemradio"
-                            className="menu-radio"
-                            aria-checked={tabEdge === item.edge}
-                            onClick={() => run(() => panelActions.edge(panelId, item.edge))}
-                          >
-                            <span className="menu-check">{tabEdge === item.edge ? "✓" : ""}</span>
-                            {item.label}
-                          </button>
-                        ))
-                      : null}
                   </div>
                 ) : null}
                 {flyout === "plugins" ? (
@@ -843,19 +960,21 @@ function lockTip(kind: PanelConfig["type"], locked: boolean): string {
 
 function LockButton({
   kind,
+  locked,
   onToggle,
 }: {
   kind: PanelConfig["type"];
+  locked: boolean;
   onToggle: () => void;
 }) {
-  const tip = lockTip(kind, true);
+  if (!locked) return null;
   return (
     <button
       type="button"
       className="panel-lock is-locked"
-      aria-pressed={true}
+      aria-pressed="true"
       aria-label="Unlock"
-      title={tip}
+      title={lockTip(kind, true)}
       onClick={(event) => {
         event.stopPropagation();
         onToggle();
@@ -884,6 +1003,37 @@ function GearIcon() {
         d="M6.61 3.35 6.99.87 9.01.87 9.39 3.35 10.3 3.73 12.32 2.24 13.76 3.68 12.27 5.7 12.65 6.61 15.13 6.99 15.13 9.01 12.65 9.39 12.27 10.3 13.76 12.32 12.32 13.76 10.3 12.27 9.39 12.65 9.01 15.13 6.99 15.13 6.61 12.65 5.7 12.27 3.68 13.76 2.24 12.32 3.73 10.3 3.35 9.39.87 9.01.87 6.99 3.35 6.61 3.73 5.7 2.24 3.68 3.68 2.24 5.7 3.73ZM8 5.65a2.35 2.35 0 1 1 0 4.7 2.35 2.35 0 1 1 0-4.7Z"
       />
     </svg>
+  );
+}
+
+function CollapseButton({
+  edge,
+  collapsed,
+  panelId,
+}: {
+  edge: TabEdge;
+  collapsed: boolean;
+  panelId?: string;
+}) {
+  const panelActions = usePanelActions();
+  // A panel that already fills the screen has nothing to collapse toward.
+  if (!panelId || panelActions.filledId === panelId) return null;
+  return (
+    <button
+      type="button"
+      className="panel-collapse"
+      aria-pressed={collapsed}
+      aria-label={collapsed ? "Expand panel" : "Collapse panel"}
+      title={collapsed ? "Expand panel" : "Collapse panel"}
+      onClick={(event) => {
+        event.stopPropagation();
+        panelActions.collapse(panelId);
+      }}
+    >
+      <svg className="chev" viewBox="0 0 16 16" style={{ transform: chevronTurn(edge, collapsed) }} aria-hidden="true">
+        <path d="M3.25 6.25 8 11 12.75 6.25" />
+      </svg>
+    </button>
   );
 }
 
@@ -992,19 +1142,99 @@ function CloseIcon() {
   );
 }
 
+function TabMenu({
+  names,
+  icons,
+  edge,
+  onNames,
+  onIcons,
+  onEdge,
+  onAdd,
+  onClose,
+}: {
+  names: boolean;
+  icons: boolean;
+  edge: TabEdge;
+  onNames: (shown: boolean) => void;
+  onIcons: (shown: boolean) => void;
+  onEdge: (edge: TabEdge) => void;
+  onAdd: () => void;
+  onClose?: () => void;
+}) {
+  return (
+    <>
+      <button type="button" role="menuitem" className="menu-radio" onClick={onAdd}>
+        <span className="menu-check" />
+        Add tab
+      </button>
+      <div className="menu-rule" />
+      <button
+        type="button"
+        role="menuitemcheckbox"
+        className="menu-radio"
+        aria-checked={icons}
+        onClick={() => onIcons(!icons)}
+      >
+        <span className="menu-check">{icons ? "✓" : ""}</span>
+        Show icons
+      </button>
+      <button
+        type="button"
+        role="menuitemcheckbox"
+        className="menu-radio"
+        aria-checked={names}
+        onClick={() => onNames(!names)}
+      >
+        <span className="menu-check">{names ? "✓" : ""}</span>
+        Show names
+      </button>
+      <div className="menu-rule" />
+      <div className="menu-label">Bar</div>
+      {EDGES.map((item) => (
+        <button
+          key={item.edge}
+          type="button"
+          role="menuitemradio"
+          className="menu-radio"
+          aria-checked={edge === item.edge}
+          onClick={() => onEdge(item.edge)}
+        >
+          <span className="menu-check">{edge === item.edge ? "✓" : ""}</span>
+          {item.label}
+        </button>
+      ))}
+      {onClose ? (
+        <>
+          <div className="menu-rule menu-rule-strong" />
+          <button type="button" role="menuitem" className="menu-radio" onClick={onClose}>
+            <span className="menu-check" />
+            Close
+          </button>
+        </>
+      ) : null}
+    </>
+  );
+}
+
 function NameField({
   panelId,
   name,
   placeholder,
+  onRename,
 }: {
   panelId: string;
   name: string;
   placeholder?: string;
+  onRename?: (title: string) => void;
 }) {
   const panelActions = usePanelActions();
   const [value, setValue] = useState(name);
   useEffect(() => setValue(name), [name]);
-  const save = () => panelActions?.rename(panelId, value.trim());
+  const save = () => {
+    const next = value.trim();
+    if (onRename) onRename(next);
+    else panelActions?.rename(panelId, next);
+  };
   return (
     <label className="menu-name">
       Name

@@ -1,5 +1,5 @@
 import { isDefaultPanelTitle, titleFromPanel } from "./openTitle";
-import type { GridCell, LayoutNode, PanelConfig, PanelNode, PanelTab, TabEdge } from "./types";
+import type { GridCell, LayoutNode, PanelConfig, PanelNode, PanelTab, TabEdge, TabsPanel } from "./types";
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
@@ -25,14 +25,19 @@ export function normalizeLayout(node: LayoutNode): LayoutNode {
   }
   if (node.type === "panel") {
     let title = node.title;
+    let icon = node.icon?.trim() || null;
     let panel = node.panel;
     if (panel.type === "tabs" && panel.tabs.length === 1) {
       const only = panel.tabs[0];
       panel = only.panel;
       if (only.title && !isDefaultPanelTitle(only.title)) title = only.title;
+      if (only.icon?.trim()) icon = only.icon.trim();
     }
     if (isDefaultPanelTitle(title)) title = null;
-    return { type: "panel", id: node.id, title: title ?? null, panel };
+    const next: PanelNode = { type: "panel", id: node.id, title: title ?? null, panel };
+    if (icon) next.icon = icon;
+    if (node.collapsed) next.collapsed = true;
+    return next;
   }
   return {
     ...node,
@@ -160,7 +165,7 @@ export function contentLabel(panel: PanelConfig): string {
 }
 
 export function blankTab(id: string): PanelTab {
-  return { id, title: "New tab", panel: { type: "iframe", url: "", proxy: false } };
+  return { id, title: "", panel: { type: "iframe", url: "", proxy: false } };
 }
 
 export function freshTabId(tabs: { id: string }[]): string {
@@ -193,17 +198,19 @@ export function closePanelTab(node: LayoutNode, panelId: string, tabId: string):
     }));
   }
   const only = remaining[0] ?? blankTab("tab-1");
-  const title = only.title && only.title !== "New tab" ? only.title : current.title;
-  return mapPanel(node, panelId, (panel) => ({
-    ...panel,
-    title: title ?? null,
-    panel: only.panel,
-  }));
+  return mapPanel(node, panelId, (panel) => panelFromTab(panel, only));
+}
+
+function panelFromTab(host: PanelNode, only: PanelTab): PanelNode {
+  const title = only.title && only.title !== "New tab" ? only.title : host.title;
+  const icon = only.icon?.trim() || null;
+  return { ...host, title: title ?? null, icon, panel: only.panel };
 }
 
 export function assignContent(node: LayoutNode, id: string, panel: PanelConfig, retitle = false): LayoutNode {
   const current = findPanel(node, id);
   if (!current) return node;
+  if (panel.type === "tabs") return mapPanel(node, id, (item) => ({ ...item, panel }));
   if (current.panel.type === "tabs") {
     const group = current.panel;
     const activeId = group.tabs.some((tab) => tab.id === group.active) ? group.active : group.tabs[0]?.id;
@@ -237,6 +244,7 @@ function withAddedTab(panel: PanelNode): PanelConfig {
     title: panel.title?.trim() || contentLabel(panel.panel),
     panel: panel.panel,
   };
+  if (panel.icon?.trim()) kept.icon = panel.icon.trim();
   const added = blankTab("tab-2");
   return { type: "tabs", edge: "top", active: added.id, tabs: [kept, added] };
 }
@@ -417,6 +425,150 @@ export function movePanel(
   const closed = closePanel(node, sourceId);
   if (!closed || !findPanel(closed, targetId)) return node;
   return insertBeside(closed, targetId, source, place);
+}
+
+const TAB_LIMIT = 24;
+
+export function writeTab(group: TabsPanel, tabId: string, panel: PanelConfig, retitle = false): TabsPanel {
+  const known = group.tabs.some((tab) => tab.id === tabId);
+  return {
+    ...group,
+    active: known ? tabId : group.active,
+    tabs: group.tabs.map((tab) => {
+      if (tab.id !== tabId) return tab;
+      const title = retitle ? contentLabel(panel) || tab.title : tab.title;
+      return { ...tab, panel, title };
+    }),
+  };
+}
+
+export function patchTab(
+  node: LayoutNode,
+  panelId: string,
+  tabId: string,
+  patch: { title?: string; icon?: string | null },
+): LayoutNode {
+  const current = findPanel(node, panelId);
+  if (!current || current.panel.type !== "tabs") return node;
+  return setPanel(node, panelId, {
+    ...current.panel,
+    tabs: current.panel.tabs.map((tab) => (tab.id === tabId ? { ...tab, ...patch } : tab)),
+  });
+}
+
+export function setPanelIcon(node: LayoutNode, id: string, icon: string | null): LayoutNode {
+  return mapPanel(node, id, (panel) => ({ ...panel, icon }));
+}
+
+export function toggleCollapsed(node: LayoutNode, id: string): LayoutNode {
+  return mapPanel(node, id, (panel) => ({ ...panel, collapsed: !panel.collapsed }));
+}
+
+/** Drop one panel onto another's bar. A dragged group is flattened into the target. */
+export function groupOnBar(node: LayoutNode, sourceId: string, targetId: string): LayoutNode {
+  if (sourceId === targetId) return node;
+  const source = findPanel(node, sourceId);
+  const target = findPanel(node, targetId);
+  if (!source || !target) return node;
+  const incoming = tabsFrom(source);
+  const existing = target.panel.type === "tabs" ? target.panel.tabs.map((tab) => ({ ...tab })) : tabsFrom(target);
+  if (existing.length + incoming.length > TAB_LIMIT) return node;
+  const closed = closePanel(node, sourceId);
+  if (!closed || !findPanel(closed, targetId)) return node;
+  const taken = new Set(existing.map((tab) => tab.id));
+  const added = incoming.map((tab) => {
+    const id = uniqueTabId(tab.id, taken);
+    taken.add(id);
+    return { ...tab, id };
+  });
+  const edge = target.panel.type === "tabs" ? target.panel.edge : "top";
+  return mapPanel(closed, targetId, (panel) => ({
+    ...panel,
+    panel: {
+      type: "tabs",
+      edge,
+      active: added[0]?.id ?? existing[0]?.id ?? "tab-1",
+      tabs: [...existing, ...added],
+    },
+  }));
+}
+
+/** Move one tab onto a bar or out beside another panel. A plain panel moves as a whole. */
+export function moveTab(
+  node: LayoutNode,
+  sourceId: string,
+  tabId: string,
+  targetId: string,
+  place: PanelPlace | "bar",
+): LayoutNode {
+  const source = findPanel(node, sourceId);
+  const target = findPanel(node, targetId);
+  if (!source || !target) return node;
+  if (sourceId === targetId && (place === "bar" || place === "center")) return node;
+  const whole = source.panel.type !== "tabs" || source.panel.tabs.length < 2;
+  if (place === "bar" && tabCount(target) + (whole ? tabCount(source) : 1) > TAB_LIMIT) return node;
+  const pulled = pullTab(node, sourceId, tabId);
+  if (!pulled) return node;
+  if (place === "bar") return groupOnBar(pulled.node, pulled.id, targetId);
+  return movePanel(pulled.node, pulled.id, targetId, place);
+}
+
+function tabCount(panel: PanelNode): number {
+  return panel.panel.type === "tabs" ? panel.panel.tabs.length : 1;
+}
+
+function tabsFrom(panel: PanelNode): PanelTab[] {
+  if (panel.panel.type === "tabs") {
+    return panel.panel.tabs.flatMap((tab) =>
+      tab.panel.type === "tabs" ? tab.panel.tabs.map((inner) => ({ ...inner })) : [{ ...tab }],
+    );
+  }
+  const given = (panel.title ?? "").trim();
+  const tab: PanelTab = {
+    id: "tab-1",
+    title: given && !isDefaultPanelTitle(given) ? given : contentLabel(panel.panel),
+    panel: panel.panel,
+  };
+  if (panel.icon?.trim()) tab.icon = panel.icon.trim();
+  return [tab];
+}
+
+function uniqueTabId(preferred: string, taken: Set<string>): string {
+  if (!taken.has(preferred)) return preferred;
+  let number = 1;
+  while (taken.has(`tab-${number}`)) number += 1;
+  return `tab-${number}`;
+}
+
+function pullTab(node: LayoutNode, sourceId: string, tabId: string): { node: LayoutNode; id: string } | null {
+  const source = findPanel(node, sourceId);
+  if (!source) return null;
+  if (source.panel.type !== "tabs" || source.panel.tabs.length < 2) return { node, id: sourceId };
+  const tab = source.panel.tabs.find((item) => item.id === tabId);
+  if (!tab) return null;
+  const remaining = source.panel.tabs.filter((item) => item.id !== tabId);
+  const group = source.panel;
+  const stripped =
+    remaining.length === 1
+      ? mapPanel(node, sourceId, (panel) => panelFromTab(panel, remaining[0]))
+      : mapPanel(node, sourceId, (panel) => ({
+          ...panel,
+          panel: {
+            ...group,
+            active: group.active === tabId ? remaining[remaining.length - 1].id : group.active,
+            tabs: remaining,
+          },
+        }));
+  const id = freshPanelId(stripped);
+  const title = tab.title.trim();
+  const created: PanelNode = {
+    type: "panel",
+    id,
+    title: title && title !== "New tab" ? title : null,
+    icon: tab.icon?.trim() || null,
+    panel: tab.panel,
+  };
+  return { node: insertBeside(stripped, sourceId, created, "right"), id };
 }
 
 function insertBeside(

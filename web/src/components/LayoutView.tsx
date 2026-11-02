@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import type { AgentView, Attachment, GridNode, LayoutNode, PaneView, PanelConfig, WorkspaceView } from "../types";
+import type { AgentView, Attachment, GridNode, LayoutNode, PaneView, PanelConfig, TabsPanel, WorkspaceView } from "../types";
 import { api } from "../api";
 import { baseName, samePath } from "../paths";
 import { openFileBeside, panelWhenUnresolved } from "../fileOpen";
@@ -12,13 +12,15 @@ import { climbExplorer, explorerRootFor, resolveWorkspacePath, workspaceDirector
 import { canPinPanel, findPin, pinApplies, upsertPin } from "../pins";
 import { spaceLayoutKey, unpinEverywhere, unpinHere } from "../spaceLayout";
 import { openTerminalPane, shellPanel, terminalPlacement } from "../openTerminal";
+import { claimPaneClose, followTerminalExit, terminalDriver } from "../terminalExit";
 import { cdCommand, terminalHereCwd } from "../terminalHere";
 import { useHost } from "../host";
-import { cellNode, listPanels } from "../layoutEdit";
+import { cellNode, listPanels, writeTab } from "../layoutEdit";
+import { collapseBasis, splitPaneFlex } from "../tabFace";
 import { useDesign } from "../design";
 import { useDesk } from "../desk";
 import { BorrowSlot } from "../borrowKeep";
-import { useBrowserRole, useKeptIds, useVisitIds } from "../browserPlace";
+import { useBrowserRole, useKeptIds, useStayFill, useVisitIds } from "../browserPlace";
 import { usePanelActions } from "../panelActions";
 import { PanelChrome } from "./PanelChrome";
 import { addressOf, DocumentFrame } from "./LocationBar";
@@ -108,19 +110,24 @@ export function LayoutView({
     root: tree,
   };
   if (node.type === "split") {
+    const firstBasis = collapseBasis(node.first, node.direction);
+    const secondBasis = collapseBasis(node.second, node.direction);
+    const locked = firstBasis != null || secondBasis != null;
     return (
       <div className={`split ${node.direction}`}>
-        <div className="split-pane" style={paneStyle(node.ratio)}>
+        <div className="split-pane" style={paneStyle(node.ratio, firstBasis, secondBasis)}>
           <LayoutView {...shared} node={node.first} path={join(path, "first")} />
         </div>
-        <div
-          className={`gutter ${node.direction}`}
-          role="separator"
-          aria-label="Resize panels"
-          aria-orientation={node.direction === "row" ? "vertical" : "horizontal"}
-          onPointerDown={(event) => startSplitDrag(event, node.direction, node.ratio, (ratio) => onRatio(path, ratio))}
-        />
-        <div className="split-pane" style={paneStyle(1 - node.ratio)}>
+        {locked ? null : (
+          <div
+            className={`gutter ${node.direction}`}
+            role="separator"
+            aria-label="Resize panels"
+            aria-orientation={node.direction === "row" ? "vertical" : "horizontal"}
+            onPointerDown={(event) => startSplitDrag(event, node.direction, node.ratio, (ratio) => onRatio(path, ratio))}
+          />
+        )}
+        <div className="split-pane" style={paneStyle(1 - node.ratio, secondBasis, firstBasis)}>
           <LayoutView {...shared} node={node.second} path={join(path, "second")} />
         </div>
       </div>
@@ -140,6 +147,8 @@ export function LayoutView({
       {...shared}
       id={node.id}
       title={node.title}
+      icon={node.icon}
+      collapsed={node.collapsed}
       panel={node.panel}
       pending={pending[node.id] ?? []}
       fromSpace={spaceCaption(node.id, fromSpace, origins, spaceIds, workspaces)}
@@ -258,6 +267,8 @@ function GridView({
 function PanelView(props: {
   id: string;
   title?: string | null;
+  icon?: string | null;
+  collapsed?: boolean;
   panel: PanelConfig;
   panes: PaneView[];
   workspaces: WorkspaceView[];
@@ -276,19 +287,22 @@ function PanelView(props: {
   openMenuToken?: number;
   root?: LayoutNode;
 }) {
-  const { id, title, panel, panes, workspaces, onPanel, onCloseTab, openMenuId, openMenuToken, root, fromSpace, borrowed, spaceIds } =
+  const { id, title, icon, collapsed, panel, panes, workspaces, onPanel, onCloseTab, openMenuId, openMenuToken, root, fromSpace, borrowed, spaceIds } =
     props;
   const design = useDesign();
   const host = useHost();
   const desk = useDesk();
   const panelActions = usePanelActions();
+  const [menuTabId, setMenuTabId] = useState<string | null>(null);
   const [opening, setOpening] = useState(false);
   const [pinning, setPinning] = useState(false);
   const [pinTick, setPinTick] = useState(0);
   const visitIds = useVisitIds();
   const keptIds = useKeptIds();
   const browserRole = useBrowserRole();
-  if (browserRole === "desk" && visitIds?.has(id) && !keptIds.has(id)) {
+  const stayId = useStayFill();
+  const stayed = stayId === id;
+  if (browserRole === "desk" && visitIds?.has(id) && !keptIds.has(id) && !stayed) {
     return <div className="desk-panel-held" />;
   }
   const selected = design.enabled && design.selectedId === id;
@@ -299,9 +313,14 @@ function PanelView(props: {
     design.selectPanel(id);
   };
   const content = activeContent(panel);
+  const viewed =
+    panel.type === "tabs" && menuTabId
+      ? (panel.tabs.find((tab) => tab.id === menuTabId)?.panel ?? content)
+      : content;
   const plugin = content.type === "plugin" ? desk.plugins.find((item) => item.id === content.plugin) : undefined;
-  const addressBar = supportsAddressBar(content)
-    ? hostAddressBarVisible(content, pluginAddressBar(plugin))
+  const menuPlugin = viewed.type === "plugin" ? desk.plugins.find((item) => item.id === viewed.plugin) : undefined;
+  const addressBar = supportsAddressBar(viewed)
+    ? hostAddressBarVisible(viewed, pluginAddressBar(menuPlugin))
     : undefined;
   const canClose = !root || listPanels(root).length > 1;
   const blank = content.type === "blank";
@@ -317,13 +336,19 @@ function PanelView(props: {
     workspaceId: pane.workspaceId,
   }));
   const chrome = {
-    className: selected ? "selected" : undefined,
+    className: [selected ? "selected" : "", stayed ? "is-filled" : ""].filter(Boolean).join(" ") || undefined,
     onClick: select,
     panelId: id,
     panelType: content.type,
+    menuType: viewed.type,
     pluginId: content.type === "plugin" ? content.plugin : undefined,
-    tabbed: panel.type === "tabs",
-    tabEdge: panel.type === "tabs" ? panel.edge : undefined,
+    tabEdge: panel.type === "tabs" ? panel.edge : "top",
+    tabs: panel.type === "tabs" ? panel : undefined,
+    onTabs: (next: TabsPanel) => onPanel(id, next),
+    onCloseTab: (tabId: string) => onCloseTab(id, tabId),
+    onMenuTarget: setMenuTabId,
+    collapsed: Boolean(collapsed),
+    icon,
     addressBar,
     canClose,
     leaveVisit: browserRole === "visit" || browserRole === "keeper",
@@ -342,30 +367,47 @@ function PanelView(props: {
       addressBar === undefined
         ? undefined
         : (show: boolean) => {
+            if (panel.type === "tabs" && menuTabId) {
+              const tab = panel.tabs.find((item) => item.id === menuTabId);
+              if (tab) onPanel(id, writeTab(panel, menuTabId, setAddressBar(tab.panel, show)));
+              return;
+            }
             onPanel(id, setAddressBar(panel, show));
           },
-    entries: menuFor(content, desk.plugins, {
+    entries: menuFor(viewed, desk.plugins, {
       panes: menuPanes,
       workspaceId: activeSpace?.workspaceId ?? null,
     }),
     onView: (choice: string) => {
+      const tabId = panel.type === "tabs" ? menuTabId : null;
+      const subject =
+        panel.type === "tabs" && tabId
+          ? (panel.tabs.find((tab) => tab.id === tabId)?.panel ?? content)
+          : content;
+      const apply = (next: PanelConfig, retitle = false) => {
+        if (panel.type === "tabs" && tabId && next.type !== "tabs") {
+          onPanel(id, writeTab(panel, tabId, next, retitle));
+          return;
+        }
+        onPanel(id, next, retitle);
+      };
       if (choice === "open") {
         setOpening(true);
         return;
       }
       if (choice === "space-panes") {
-        onPanel(id, { type: "herdr", paneId: null }, true);
+        apply({ type: "herdr", paneId: null }, true);
         return;
       }
       if (choice === "terminal" || choice === "pane:new") {
-        const current = content.type === "herdr" ? content.paneId : null;
+        const current = subject.type === "herdr" ? subject.paneId : null;
         const focused = panes.find((item) => item.focused) ?? panes[0];
         const source = current || focused?.paneId;
-        const here = choice === "terminal" ? terminalHereCwd(content) : null;
+        const here = choice === "terminal" ? terminalHereCwd(subject) : null;
         const cwd =
           here ||
           (choice === "terminal" ? activeSpace?.root || focused?.cwd || null : null);
-        if (terminalPlacement(choice, content) === "shell") {
+        if (terminalPlacement(choice, subject) === "shell") {
           void host
             .openShell(activeSpace?.workspaceId)
             .then(async (paneId) => {
@@ -379,24 +421,29 @@ function PanelView(props: {
                   }
                 }
               }
-              onPanel(id, shellPanel(paneId));
+              apply(shellPanel(paneId));
             })
-            .catch(() => onPanel(id, shellPanel(null)));
+            .catch(() => apply(shellPanel(null)));
           return;
         }
         if (!source) {
-          onPanel(id, { type: "herdr", paneId: null });
+          apply({ type: "herdr", paneId: null });
           return;
         }
         void openTerminalPane(source, cwd).then(
-          (paneId) => onPanel(id, { type: "herdr", paneId }),
-          () => onPanel(id, { type: "herdr", paneId: null }),
+          (paneId) => apply({ type: "herdr", paneId }),
+          () => apply({ type: "herdr", paneId: null }),
         );
         return;
       }
       const next = showViewer(panel, choice, desk.plugins, {
         workspaceRoot: workspaceDirectory(activeSpace, panes),
+        tabId,
       });
+      if (panel.type === "tabs" && tabId && next.type === "tabs") {
+        onPanel(id, { ...next, active: tabId });
+        return;
+      }
       onPanel(id, next);
     },
   };
@@ -446,7 +493,6 @@ function PanelView(props: {
           <TabGroup
             group={panel}
             onChange={(next) => onPanel(id, next)}
-            onClose={(tabId) => onCloseTab(id, tabId)}
             renderContent={(tab, update) => (
               <Surface {...props} id={`${id}:${tab.id}`} spaceId={bridgeSpaceId} panel={tab.panel} onPanel={(_id, next) => update(next)} />
             )}
@@ -542,7 +588,7 @@ function Surface({
     return (
       <div className="fill">
         {panel.scope === "pane" ? (
-          <HerdrTerminal paneId={panel.paneId ?? null} />
+          <BoundTerminal paneId={panel.paneId ?? null} panes={panes} />
         ) : (
           <SpaceMirror panes={panes} workspaces={workspaces} onFocusPane={onFocusPane} />
         )}
@@ -599,6 +645,29 @@ function Surface({
     );
   }
   return <div className="empty">Unknown panel.</div>;
+}
+
+function BoundTerminal({ paneId, panes }: { paneId: string | null; panes: PaneView[] }) {
+  const host = useHost();
+  const [ended, setEnded] = useState<string | null>(null);
+  if (!paneId) return <div className="empty">Choose a pane</div>;
+  if (ended === paneId) return <div className="empty">This terminal no longer exists.</div>;
+  return (
+    <HerdrTerminal
+      paneId={paneId}
+      home="panel"
+      onGone={() => {
+        const follow = followTerminalExit(terminalDriver(paneId), paneId, panes);
+        if (follow.kind === "retire-panel") {
+          setEnded(paneId);
+          return;
+        }
+        if (!claimPaneClose(paneId)) return;
+        if (follow.kind === "close-tab") void host.closeTab(follow.tabId);
+        else void host.closePane(follow.paneId);
+      }}
+    />
+  );
 }
 
 function DocumentSurface({
@@ -914,8 +983,8 @@ function capturePointer(event: React.PointerEvent<HTMLDivElement>) {
   }
 }
 
-function paneStyle(share: number): { flex: number } {
-  return { flex: share };
+function paneStyle(share: number, basis: number | null, siblingBasis: number | null): { flex: string | number } {
+  return { flex: splitPaneFlex(share, basis, siblingBasis) };
 }
 
 function join(path: string, side: string): string {

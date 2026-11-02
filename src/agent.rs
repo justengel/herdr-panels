@@ -242,6 +242,7 @@ async fn split(
         title,
         panel: created_panel,
         collapsed: false,
+        icon: None,
     };
     doc.root = layout_ops::split_panel(doc.root, &source_id, direction, created)
         .map_err(AgentError::bad)?;

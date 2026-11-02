@@ -82,6 +82,12 @@ export function browserBlocked(): boolean {
 }
 
 let generation = 0;
+let placeSeq = 0;
+
+function nextPlaceSeq(): number {
+  placeSeq += 1;
+  return placeSeq;
+}
 
 export function nextBrowserGeneration(): number {
   generation += 1;
@@ -102,9 +108,11 @@ export async function placeBrowser(
   bounds: BrowserBox | null,
   generationId: number,
   cuts: BrowserBox[] = [],
+  reload = false,
 ): Promise<void> {
   const host = desktopHost();
   if (!host) throw new Error("desktop shell is not connected");
+  const seq = nextPlaceSeq();
   await host.invoke("place_browser", {
     label,
     url,
@@ -117,7 +125,31 @@ export async function placeBrowser(
     locked: false,
     space: "",
     cuts,
+    reload,
+    seq,
   });
+}
+
+/** Keep the native page when its panel becomes a tab. Creating a second webview leaves a blank page. */
+export async function adoptBrowser(from: string, to: string, generationId: number): Promise<void> {
+  const host = desktopHost();
+  if (!host || from === to) return;
+  await host.invoke("adopt_browser", { from, to, generation: generationId });
+}
+
+/**
+ * Pixels of one native browser webview.
+ * html2canvas cannot see this window. The desktop app has to hand the image back.
+ */
+export async function snapshotBrowser(label: string, width: number, height: number): Promise<Blob | null> {
+  const host = desktopHost();
+  if (!host || width < 2 || height < 2) return null;
+  const base64 = await host.invoke("snapshot_browser", { label, width, height });
+  if (typeof base64 !== "string" || !base64) return null;
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+  return new Blob([bytes], { type: "image/png" });
 }
 
 export async function closeBrowser(label: string, generationId: number): Promise<void> {

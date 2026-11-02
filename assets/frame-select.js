@@ -150,7 +150,7 @@
     whenReady(() => {
       const style = document.createElement("style");
       style.textContent =
-        "html.hwp-select, html.hwp-select * { cursor: crosshair !important; user-select: none !important; } html.hwp-select .hwp-select-ui, html.hwp-select .hwp-select-ui * { cursor: default !important; user-select: auto !important; }";
+        "html.hwp-select, html.hwp-select * { cursor: crosshair !important; user-select: none !important; } html.hwp-select .hwp-select-ui, html.hwp-select .hwp-select-ui * { cursor: default !important; user-select: auto !important; } html.hwp-hide-ui .hwp-select-ui { visibility: hidden !important; }";
       document.documentElement.appendChild(style);
       overlay();
     });
@@ -560,11 +560,52 @@
 
     async function raster(elements) {
       if (elements.length === 0) throw new Error("That selection has no visible area");
+      // The Google logo is a picture, not text. Drawing the element's HTML paints the page
+      // background and leaves the picture out. The desktop window snapshots this webview
+      // instead. Do not remove this: a normal panel and a tab both screenshot as a blank
+      // panel without it. Linux and Windows each capture that same webview.
+      if (window.__hwpNativeSnap) {
+        try {
+          return await nativeShot(elements);
+        } catch {
+          // The app could not snapshot the page. Draw it from the elements instead.
+        }
+      }
       try {
         return await rasterSvg(elements);
       } catch {
         // WebKit taints a canvas drawn from SVG foreignObject, so the PNG comes back empty.
         return paintElements(elements);
+      }
+    }
+
+    /** Ask the desktop app for a pixel snapshot of this webview, cropped to the selection. */
+    async function nativeShot(elements) {
+      const bounds = union(elements.map((element) => asRect(element.getBoundingClientRect())));
+      const left = Math.max(0, bounds.left);
+      const top = Math.max(0, bounds.top);
+      const right = Math.min(window.innerWidth, bounds.right);
+      const bottom = Math.min(window.innerHeight, bounds.bottom);
+      if (right - left < 1 || bottom - top < 1) throw new Error("That selection has no visible area");
+      const root = document.documentElement;
+      const previous = document.title;
+      root.classList.add("hwp-hide-ui");
+      try {
+        await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        const answer = new Promise((resolve, reject) => {
+          window.__hwpSnapshotDone = (ok, data) => (ok ? resolve(data) : reject(new Error(String(data))));
+          setTimeout(() => reject(new Error("The snapshot timed out")), 6000);
+        });
+        document.title = `hwp-snap:${JSON.stringify({ x: left, y: top, w: right - left, h: bottom - top, vw: window.innerWidth })}`;
+        const base64 = await answer;
+        const binary = atob(base64);
+        const bytes = new Uint8Array(binary.length);
+        for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+        return new Blob([bytes], { type: "image/png" });
+      } finally {
+        window.__hwpSnapshotDone = null;
+        root.classList.remove("hwp-hide-ui");
+        document.title = previous;
       }
     }
 

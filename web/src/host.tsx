@@ -40,6 +40,7 @@ interface HostValue {
   /** Open a shell in a new tab without taking the space mirror's place. Returns the new pane id. */
   openShell: (workspaceId?: string) => Promise<string | null>;
   closeTab: (tabId: string) => Promise<void>;
+  closePane: (paneId: string) => Promise<void>;
   renameTab: (tabId: string, label: string) => Promise<void>;
   /** Move a Herdr tab. `insertIndex` is the index in the strip before the move, or the strip length for the end. */
   moveTab: (tabId: string, insertIndex: number) => Promise<boolean>;
@@ -393,6 +394,15 @@ export function HostProvider({
     }
   }
 
+  async function closePane(paneId: string) {
+    try {
+      await api.herdrAction({ action: "pane.close", paneId });
+      await refresh();
+    } catch (err) {
+      noticeRef.current(err instanceof Error ? err.message : String(err));
+    }
+  }
+
   async function renameTab(tabId: string, label: string) {
     const name = label.trim().slice(0, 80);
     if (!name) return;
@@ -548,6 +558,7 @@ export function HostProvider({
     newTab,
     openShell,
     closeTab,
+    closePane,
     renameTab,
     moveTab,
     renameSpace,

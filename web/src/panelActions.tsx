@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { PanelPlace } from "./layoutEdit";
+import { dropPlace, type DropPlace } from "./panelDrop";
 import type { PanelConfig, TabEdge } from "./types";
 
 export interface PanelActions {
@@ -10,9 +11,15 @@ export interface PanelActions {
   use: (id: string, type: PanelConfig["type"], pluginId?: string) => void;
   edge: (id: string, edge: TabEdge) => void;
   place: (sourceId: string, targetId: string, place: PanelPlace) => void;
+  /** Drop a panel onto another panel's bar and make one tab group. */
+  group: (sourceId: string, targetId: string) => void;
+  /** Drag one tab onto a bar, or out beside a panel. */
+  dropTab: (sourceId: string, tabId: string, targetId: string, place: DropPlace) => void;
   /** Split a new panel beside this one. */
   spawn: (id: string, direction: "row" | "column", panel: PanelConfig, title: string) => void;
   rename: (id: string, title: string) => void;
+  icon: (id: string, icon: string | null) => void;
+  collapse: (id: string) => void;
   /** Fill the screen with this panel, or show the whole desk when it already does. */
   fill: (id: string) => void;
   /** Drop this panel from the visit. The panel itself stays where it was. */
@@ -23,6 +30,7 @@ export interface PanelActions {
 interface DragState {
   draggingId: string | null;
   start: (id: string, event: React.PointerEvent) => void;
+  startTab: (panelId: string, tabId: string, event: PointerEvent) => void;
 }
 
 interface Rect {
@@ -34,11 +42,12 @@ interface Rect {
 
 interface LiveDrag {
   id: string;
+  tabId: string | null;
   title: string;
   x: number;
   y: number;
   origin: Rect;
-  hint: { panelId: string; place: PanelPlace; rect: Rect } | null;
+  hint: { panelId: string; place: DropPlace; rect: Rect } | null;
 }
 
 const ActionsContext = createContext<PanelActions | null>(null);
@@ -52,6 +61,11 @@ const PLACE_LABEL: Record<PanelPlace, string> = {
   center: "Swap",
 };
 
+function placeLabel(place: DropPlace): string {
+  if (place === "bar") return "Group on this bar";
+  return PLACE_LABEL[place];
+}
+
 export function PanelActionsProvider({
   actions,
   children,
@@ -64,6 +78,115 @@ export function PanelActionsProvider({
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const [live, setLive] = useState<LiveDrag | null>(null);
 
+  const begin = useCallback((panelId: string, tabId: string | null, originX: number, originY: number, movedAlready: boolean) => {
+    let moved = false;
+    let closed = false;
+    let frame = 0;
+    let origin: Rect | null = null;
+    let title = tabId ?? "Panel";
+    const point = { x: originX, y: originY };
+
+    const sectionOf = (id: string) =>
+      document.querySelector<HTMLElement>(`[data-panel-id="${CSS.escape(id)}"]`);
+
+    const targetAt = (x: number, y: number) => {
+      const hit = document.elementsFromPoint(x, y).find((element) => element.closest("[data-panel-id]"));
+      const hitId = hit?.closest("[data-panel-id]")?.getAttribute("data-panel-id") ?? null;
+      if (!hitId) return null;
+      const section = sectionOf(hitId);
+      if (!section) return null;
+      const rect = clientRect(section);
+      const barEl = section.querySelector<HTMLElement>("[data-panel-bar]");
+      const bar = barEl ? clientRect(barEl) : null;
+      const place = dropPlace(rect, x, y, bar);
+      if (tabId) {
+        if (hitId === panelId && (place === "bar" || place === "center")) return null;
+      } else if (hitId === panelId) {
+        return null;
+      }
+      const zone = place === "bar" && bar ? bar : slotRect(rect, place === "bar" ? "center" : place);
+      return { panelId: hitId, place, rect: zone };
+    };
+
+    const publish = (x: number, y: number) => {
+      if (closed || !origin) return;
+      setLive({
+        id: panelId,
+        tabId,
+        title,
+        x,
+        y,
+        origin,
+        hint: targetAt(x, y),
+      });
+    };
+
+    const arm = (x: number, y: number) => {
+      moved = true;
+      const section = sectionOf(panelId);
+      origin = section ? clientRect(section) : { left: x, top: y, width: 240, height: 120 };
+      if (tabId) {
+        const label = section
+          ?.querySelector(`[data-reorder-id="${CSS.escape(tabId)}"] .tab-label`)
+          ?.textContent?.trim();
+        title = label || tabId;
+      } else {
+        title =
+          section?.querySelector(".panel-title strong")?.textContent?.trim() ||
+          section?.querySelector(".side-heading")?.textContent?.trim().split("\n")[0] ||
+          "Panel";
+        setDraggingId(panelId);
+      }
+      document.body.classList.add("panel-dragging");
+    };
+
+    const finish = (commit: boolean) => {
+      if (closed) return;
+      closed = true;
+      cancelAnimationFrame(frame);
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", cancel);
+      window.removeEventListener("keydown", onKey);
+      document.body.classList.remove("panel-dragging");
+      if (commit && moved) {
+        const next = targetAt(point.x, point.y);
+        if (next) {
+          if (tabId) actionsRef.current.dropTab(panelId, tabId, next.panelId, next.place);
+          else if (next.place === "bar") actionsRef.current.group(panelId, next.panelId);
+          else actionsRef.current.place(panelId, next.panelId, next.place);
+        }
+      }
+      setDraggingId(null);
+      setLive(null);
+    };
+
+    const move = (ev: PointerEvent) => {
+      point.x = ev.clientX;
+      point.y = ev.clientY;
+      if (!moved && Math.hypot(ev.clientX - originX, ev.clientY - originY) < 6) return;
+      if (!moved) {
+        arm(ev.clientX, ev.clientY);
+        frame = requestAnimationFrame(() => publish(point.x, point.y));
+        return;
+      }
+      publish(ev.clientX, ev.clientY);
+    };
+    const up = () => finish(true);
+    const cancel = () => finish(false);
+    const onKey = (ev: KeyboardEvent) => {
+      if (ev.key === "Escape") finish(false);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", cancel);
+    window.addEventListener("keydown", onKey);
+    if (movedAlready) {
+      arm(originX, originY);
+      publish(originX, originY);
+    }
+  }, []);
+
   const start = useCallback((id: string, event: React.PointerEvent) => {
     if (event.button !== 0) return;
     event.preventDefault();
@@ -75,93 +198,14 @@ export function PanelActionsProvider({
         // The pointer can already be gone. Window listeners still follow the drag.
       }
     }
-    const originX = event.clientX;
-    const originY = event.clientY;
-    let moved = false;
-    let origin: Rect | null = null;
-    let title = "Panel";
-    const point = { x: event.clientX, y: event.clientY };
+    begin(id, null, event.clientX, event.clientY, false);
+  }, [begin]);
 
-    const sectionOf = (panelId: string) =>
-      document.querySelector<HTMLElement>(`[data-panel-id="${CSS.escape(panelId)}"]`);
+  const startTab = useCallback((panelId: string, tabId: string, event: PointerEvent) => {
+    begin(panelId, tabId, event.clientX, event.clientY, true);
+  }, [begin]);
 
-    const targetAt = (x: number, y: number) => {
-      const hit = document.elementsFromPoint(x, y).find((element) => element.closest("[data-panel-id]"));
-      const panelId = hit?.closest("[data-panel-id]")?.getAttribute("data-panel-id") ?? null;
-      if (!panelId || panelId === id) return null;
-      const section = sectionOf(panelId);
-      if (!section) return null;
-      const rect = clientRect(section);
-      return { panelId, place: placeAt(rect, x, y), rect: slotRect(rect, placeAt(rect, x, y)) };
-    };
-
-    const finish = (commit: boolean) => {
-      window.removeEventListener("pointermove", move);
-      window.removeEventListener("pointerup", up);
-      window.removeEventListener("pointercancel", cancel);
-      window.removeEventListener("keydown", onKey);
-      document.body.classList.remove("panel-dragging");
-      if (commit && moved) {
-        const next = targetAt(point.x, point.y);
-        if (next) actionsRef.current.place(id, next.panelId, next.place);
-      }
-      setDraggingId(null);
-      setLive(null);
-    };
-
-    const move = (ev: PointerEvent) => {
-      point.x = ev.clientX;
-      point.y = ev.clientY;
-      if (!moved && Math.hypot(ev.clientX - originX, ev.clientY - originY) < 6) return;
-      if (!moved) {
-        moved = true;
-        const section = sectionOf(id);
-        origin = section ? clientRect(section) : { left: ev.clientX, top: ev.clientY, width: 240, height: 120 };
-        title =
-          section?.querySelector(".panel-title strong")?.textContent?.trim() ||
-          section?.querySelector(".side-heading")?.textContent?.trim().split("\n")[0] ||
-          "Panel";
-        setDraggingId(id);
-        document.body.classList.add("panel-dragging");
-        setLive({
-          id,
-          title,
-          x: origin.left + origin.width / 2,
-          y: origin.top + origin.height / 2,
-          origin,
-          hint: null,
-        });
-        const home = origin;
-        requestAnimationFrame(() => {
-          setLive((current) =>
-            current && current.id === id
-              ? { ...current, x: point.x, y: point.y, origin: home, hint: targetAt(point.x, point.y) }
-              : current,
-          );
-        });
-        return;
-      }
-      setLive({
-        id,
-        title,
-        x: ev.clientX,
-        y: ev.clientY,
-        origin: origin!,
-        hint: targetAt(ev.clientX, ev.clientY),
-      });
-    };
-    const up = () => finish(true);
-    const cancel = () => finish(false);
-    const onKey = (ev: KeyboardEvent) => {
-      if (ev.key === "Escape") finish(false);
-    };
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", up);
-    window.addEventListener("pointercancel", cancel);
-    window.addEventListener("keydown", onKey);
-  }, []);
-
-  const drag = useMemo(() => ({ draggingId, start }), [draggingId, start]);
+  const drag = useMemo(() => ({ draggingId, start, startTab }), [draggingId, start, startTab]);
   return (
     <ActionsContext.Provider value={actions}>
       <DragContext.Provider value={drag}>
@@ -191,7 +235,7 @@ function DragOverlay({ live }: { live: LiveDrag }) {
         style={{ left: band.left, top: band.top, width: band.width, height: band.height }}
       >
         <span>{live.title}</span>
-        {live.hint ? <small>{PLACE_LABEL[live.hint.place]}</small> : null}
+        {live.hint ? <small>{placeLabel(live.hint.place)}</small> : null}
       </div>
     </div>,
     document.body,
@@ -206,17 +250,6 @@ function panelRect(id: string): Rect | null {
 function clientRect(element: HTMLElement): Rect {
   const rect = element.getBoundingClientRect();
   return { left: rect.left, top: rect.top, width: rect.width, height: rect.height };
-}
-
-function placeAt(rect: Rect, x: number, y: number): PanelPlace {
-  const px = rect.width <= 0 ? 0.5 : (x - rect.left) / rect.width;
-  const py = rect.height <= 0 ? 0.5 : (y - rect.top) / rect.height;
-  const edge = 0.32;
-  const dx = Math.min(px, 1 - px);
-  const dy = Math.min(py, 1 - py);
-  if (dx <= edge && dx <= dy) return px < 0.5 ? "left" : "right";
-  if (dy <= edge && dy < dx) return py < 0.5 ? "above" : "below";
-  return "center";
 }
 
 function slotRect(rect: Rect, place: PanelPlace): Rect {

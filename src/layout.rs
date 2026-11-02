@@ -34,6 +34,9 @@ pub enum LayoutNode {
         panel: PanelConfig,
         #[serde(default, skip_serializing_if = "is_false")]
         collapsed: bool,
+        /// Preset id, a short legacy mark, or `file:` plus a path.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        icon: Option<String>,
     },
 }
 
@@ -69,6 +72,14 @@ fn default_span() -> u32 {
 
 fn is_false(value: &bool) -> bool {
     !*value
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn is_true(value: &bool) -> bool {
+    *value
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -200,6 +211,12 @@ pub enum PanelConfig {
         edge: TabEdge,
         #[serde(default)]
         active: String,
+        /// Stored names stay on the tabs. False hides them on the bar.
+        #[serde(default = "default_true", rename = "showNames", skip_serializing_if = "is_true")]
+        show_names: bool,
+        /// Tab icons stay on the bar. False hides them. Both false shows the tab id.
+        #[serde(default = "default_true", rename = "showIcons", skip_serializing_if = "is_true")]
+        show_icons: bool,
         tabs: Vec<PanelTab>,
     },
     Chat {
@@ -220,6 +237,24 @@ pub enum HerdrSource {
 pub enum HerdrScope {
     Space,
     Pane,
+}
+
+impl PanelConfig {
+    /// Browser pages this panel shows. A tab's page is locked on the group panel, because the
+    /// native webview is `browser-{panel}:{tab}` and the panel id is the part before the colon.
+    pub fn browser_urls(&self) -> Vec<&str> {
+        match self {
+            Self::Iframe { url, .. } => vec![url.as_str()],
+            Self::Tabs { tabs, .. } => tabs
+                .iter()
+                .filter_map(|tab| match &tab.panel {
+                    Self::Iframe { url, .. } => Some(url.as_str()),
+                    _ => None,
+                })
+                .collect(),
+            _ => Vec::new(),
+        }
+    }
 }
 
 impl HerdrSource {
@@ -328,7 +363,11 @@ fn validate_node(node: &LayoutNode, ids: &mut HashSet<String>) -> anyhow::Result
             }
         }
         LayoutNode::Panel {
-            id, title, panel, ..
+            id,
+            title,
+            panel,
+            icon,
+            ..
         } => {
             validate_panel_id(id)?;
             if !ids.insert(id.clone()) {
@@ -339,6 +378,7 @@ fn validate_node(node: &LayoutNode, ids: &mut HashSet<String>) -> anyhow::Result
                     bail!("panel title is too long");
                 }
             }
+            validate_icon(icon.as_deref())?;
             validate_panel(panel)?;
         }
     }
@@ -444,16 +484,10 @@ fn validate_panel(panel: &PanelConfig) -> anyhow::Result<()> {
                 if !seen.insert(tab.id.clone()) {
                     bail!("duplicate tab id {}", tab.id);
                 }
-                if tab.title.trim().is_empty() || tab.title.chars().count() > 80 {
-                    bail!("tab title must be 1 to 80 characters");
+                if tab.title.chars().count() > 80 {
+                    bail!("tab title must be at most 80 characters");
                 }
-                if tab
-                    .icon
-                    .as_ref()
-                    .is_some_and(|icon| icon.chars().count() > 8)
-                {
-                    bail!("tab icon is too long");
-                }
+                validate_icon(tab.icon.as_deref())?;
                 if matches!(tab.panel, PanelConfig::Tabs { .. }) {
                     bail!("tab groups cannot be nested");
                 }
@@ -472,6 +506,29 @@ fn validate_panel(panel: &PanelConfig) -> anyhow::Result<()> {
         }
     }
     Ok(())
+}
+
+fn validate_icon(icon: Option<&str>) -> anyhow::Result<()> {
+    let Some(icon) = icon.map(str::trim).filter(|icon| !icon.is_empty()) else {
+        return Ok(());
+    };
+    if let Some(path) = icon.strip_prefix("file:") {
+        return validate_relative_or_rooted(path);
+    }
+    if is_icon_token(icon) || icon.chars().count() <= 8 {
+        return Ok(());
+    }
+    bail!("tab icon is too long");
+}
+
+fn is_icon_token(icon: &str) -> bool {
+    let count = icon.chars().count();
+    (1..=32).contains(&count)
+        && !icon.starts_with('-')
+        && !icon.ends_with('-')
+        && icon
+            .chars()
+            .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '-')
 }
 
 fn validate_relative_or_rooted(path: &str) -> anyhow::Result<()> {
@@ -641,6 +698,127 @@ mod tests {
             r#"{"type": "tabs", "tabs": [{"id": "inner", "title": "Inner", "panel": {"type": "iframe", "url": "https://example.com"}}]}"#,
         );
         assert!(LayoutDocument::parse(&nested).is_err());
+    }
+
+    #[test]
+    fn hidden_tab_names_stay_stored() {
+        let text = r#"{
+          "id": "tabs",
+          "title": "Tabs",
+          "root": {
+            "type": "panel",
+            "id": "group",
+            "panel": {
+              "type": "tabs",
+              "edge": "right",
+              "showNames": false,
+              "active": "one",
+              "tabs": [{"id": "one", "title": "Notes", "panel": {"type": "blank"}}]
+            }
+          }
+        }"#;
+        let doc = LayoutDocument::parse(text).unwrap();
+        let LayoutNode::Panel {
+            panel: PanelConfig::Tabs { show_names, .. },
+            ..
+        } = &doc.root
+        else {
+            panic!("panel");
+        };
+        assert!(!show_names);
+        let stored = serde_json::to_string(&doc).unwrap();
+        assert!(stored.contains("\"showNames\":false"));
+        let shown = text.replace("\"showNames\": false,\n", "");
+        let open = LayoutDocument::parse(&shown).unwrap();
+        let LayoutNode::Panel {
+            panel: PanelConfig::Tabs { show_names, .. },
+            ..
+        } = &open.root
+        else {
+            panic!("panel");
+        };
+        assert!(*show_names);
+    }
+
+    #[test]
+    fn hidden_tab_icons_stay_stored() {
+        let text = r#"{
+          "id": "tabs",
+          "title": "Tabs",
+          "root": {
+            "type": "panel",
+            "id": "group",
+            "panel": {
+              "type": "tabs",
+              "showIcons": false,
+              "active": "one",
+              "tabs": [{"id": "one", "title": "Notes", "icon": "note", "panel": {"type": "blank"}}]
+            }
+          }
+        }"#;
+        let doc = LayoutDocument::parse(text).unwrap();
+        let LayoutNode::Panel {
+            panel: PanelConfig::Tabs { show_icons, .. },
+            ..
+        } = &doc.root
+        else {
+            panic!("panel");
+        };
+        assert!(!show_icons);
+        let stored = serde_json::to_string(&doc).unwrap();
+        assert!(stored.contains("\"showIcons\":false"));
+        let shown = text.replace("\"showIcons\": false,\n", "");
+        let open = LayoutDocument::parse(&shown).unwrap();
+        let LayoutNode::Panel {
+            panel: PanelConfig::Tabs { show_icons, .. },
+            ..
+        } = &open.root
+        else {
+            panic!("panel");
+        };
+        assert!(*show_icons);
+    }
+
+    #[test]
+    fn a_tab_can_omit_its_name_and_use_a_preset_or_file_icon() {
+        let text = r#"{
+          "id": "icons",
+          "title": "Icons",
+          "root": {
+            "type": "panel",
+            "id": "group",
+            "icon": "folder",
+            "panel": {
+              "type": "tabs",
+              "edge": "right",
+              "active": "one",
+              "tabs": [{
+                "id": "one",
+                "title": "",
+                "icon": "file:icons/star.png",
+                "panel": {"type": "markdown", "path": "notes/a.md"}
+              }, {
+                "id": "two",
+                "title": "Chat",
+                "icon": "📁",
+                "panel": {"type": "chat"}
+              }]
+            }
+          }
+        }"#;
+        let doc = LayoutDocument::parse(text).unwrap();
+        let saved = serde_json::to_value(&doc).unwrap();
+        assert_eq!(saved["root"]["icon"], "folder");
+        assert_eq!(saved["root"]["panel"]["tabs"][0]["title"], "");
+        assert_eq!(saved["root"]["panel"]["tabs"][0]["icon"], "file:icons/star.png");
+
+        let outside = text.replace("file:icons/star.png", "file:../secret.png");
+        assert!(LayoutDocument::parse(&outside).is_err());
+        let huge = text.replace(
+            "file:icons/star.png",
+            "this is not a preset and it is far too long",
+        );
+        assert!(LayoutDocument::parse(&huge).is_err());
     }
 
     #[test]

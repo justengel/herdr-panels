@@ -9,6 +9,16 @@ description = "Close the child webview for a browser panel."
 commands.allow = ["close_browser"]
 
 [[permission]]
+identifier = "allow-adopt-browser"
+description = "Keep a browser page when its panel becomes a tab."
+commands.allow = ["adopt_browser"]
+
+[[permission]]
+identifier = "allow-snapshot-browser"
+description = "Read a browser webview's pixels so a screenshot includes the page, not the empty hole behind it."
+commands.allow = ["snapshot_browser"]
+
+[[permission]]
 identifier = "allow-eval-browser"
 description = "Run a host-built script in a browser panel. Remote pages cannot call this."
 commands.allow = ["eval_browser"]
