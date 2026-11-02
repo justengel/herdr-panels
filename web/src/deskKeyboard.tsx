@@ -85,7 +85,6 @@ export function DeskKeyboard({
   const prefix = String(host.config?.keys.find((field) => field.key === "prefix")?.value || "ctrl+b");
 
   function aim(id: string) {
-    if (zoomedId && zoomedId !== id) onZoom(null);
     enterRef.current = id;
     onFocus(id);
     setFocusTick((tick) => tick + 1);
@@ -374,6 +373,7 @@ function stepAddress(panelId: string, direction: "Back" | "Forward") {
 
 function panelBoxes(): Box[] {
   return [...document.querySelectorAll<HTMLElement>("[data-panel-id]")]
+    .filter((element) => !element.closest(".desk-held") && !element.closest("[hidden]"))
     .map((element) => {
       const rect = element.getBoundingClientRect();
       return {

@@ -38,9 +38,14 @@ import type { Attachment, LayoutDocument, LayoutNode, PanelConfig, RuntimeSnapsh
 import { LayoutView } from "./components/LayoutView";
 import { TopBar } from "./components/TopBar";
 import { DesignBar } from "./components/DesignBar";
+import { UnlockDialog } from "./components/UnlockDialog";
 import { ElementSelect } from "./components/ElementSelect";
+import { desktopHost } from "./desktopBrowser";
 import { DeskKeyboard, KeyedPanelProvider } from "./deskKeyboard";
-import { openVisit, reuseVisit, type OpenedVisit, type VisitWeights } from "./borrowPanel";
+import { leaveVisitPanel, openVisit, reuseVisit, type OpenedVisit, type VisitWeights } from "./borrowPanel";
+import { BorrowKeeper, type KeptPanel } from "./borrowKeep";
+import { BrowserRoleProvider, BrowserVisitProvider } from "./browserPlace";
+import { runBrowserDrive } from "./browserDrive";
 import { layoutForFocusedPane, layoutForPaneFocus, panelForPane, panelRefs } from "./deskKeys";
 import { installDisplayZoom } from "./displayZoom";
 import { pushClosedPanel, takeClosedPanel } from "./panelHistory";
@@ -110,14 +115,16 @@ export function App() {
   const [design, setDesign] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [element, setElement] = useState<{ panelId: string; tag: string; text: string } | null>(null);
-  const [zoomedId, setZoomedId] = useState<string | null>(null);
   const [visit, setVisit] = useState<(OpenedVisit & { openedOn: string }) | null>(null);
+  const [unlockAsk, setUnlockAsk] = useState<{ requestId: string; panelId: string } | null>(null);
+  const [kept, setKept] = useState<KeptPanel[]>([]);
   const [chatTarget, setChatTarget] = useState("");
   const [splitHerdr, setSplitHerdr] = useState(true);
   const [inbox, setInbox] = useState<Record<string, Attachment[]>>({});
   const [sessions, setSessions] = useState<string[]>([]);
   const [plugins, setPlugins] = useState<PluginInfo[]>([]);
   const [selecting, setSelecting] = useState(false);
+  const [cliAccess, setCliAccess] = useState(true);
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
   const [keyId, setKeyId] = useState<string | null>(null);
   const [help, setHelp] = useState(false);
@@ -221,6 +228,12 @@ export function App() {
       );
     };
     refreshCtl();
+    void api.agentAccess().then(
+      (next) => {
+        if (!stopped) setCliAccess(next.enabled);
+      },
+      () => undefined,
+    );
     void api.health().then(
       (next) => {
         if (!stopped) {
@@ -371,7 +384,6 @@ export function App() {
       pendingSpaceRef.current = workspaceId;
       spaceRef.current = workspaceId;
       writeSpaceMap(workspaceId);
-      setZoomedId(null);
       landed = paneId
         ? layoutForFocusedPane(layoutForSpace(workspaceId, seedSpaceLayout()), displayPane ?? paneId)
         : bindTerminalPane(layoutForSpace(workspaceId, seedSpaceLayout()), displayPane);
@@ -412,7 +424,6 @@ export function App() {
     pendingPaneRef.current = paneId;
     const snapshot = runtimeRef.current;
     if (snapshot && next.workspaceId) setRuntime(markWorkspaceFocused(snapshot, next.workspaceId, paneId));
-    setZoomedId((zoomed) => (zoomed && zoomed !== next.panelId ? null : zoomed));
     setKeyId(next.panelId);
     const page = window as Window & { __hwpFocusPanel?: (id: string) => void };
     page.__hwpFocusPanel?.(next.panelId);
@@ -568,6 +579,16 @@ export function App() {
     }
     const opened = openVisit(spaces, panels, arrange, weights);
     if ("error" in opened) return opened;
+    const deskIds = new Set(layoutRef.current ? listPanels(layoutRef.current.root).map((panel) => panel.id) : []);
+    setKept((current) => {
+      const map = new Map(current.map((item) => [item.node.id, item]));
+      for (const panel of listPanels(opened.node)) {
+        if (deskIds.has(panel.id)) map.delete(panel.id);
+        else map.set(panel.id, { node: panel, fromSpace: opened.origins[panel.id] });
+      }
+      for (const id of deskIds) map.delete(id);
+      return [...map.values()];
+    });
     const openedOn = current ?? "";
     setVisit((showing) => ({
       ...opened,
@@ -596,15 +617,18 @@ export function App() {
     if (!visit) return;
     if ((spaceRef.current ?? "") === visit.openedOn) return;
     setVisit(null);
+    setKept([]);
   }, [layout, focusedSpaceId, visit]);
 
   useEffect(() => {
     if (!visit) return;
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
+      if (event.target instanceof Element && event.target.closest(".dialog")) return;
       event.preventDefault();
       event.stopPropagation();
       setVisit(null);
+      setKept([]);
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
@@ -628,6 +652,16 @@ export function App() {
         selector?: string;
         text?: string;
         requestId?: string;
+        op?: string;
+        script?: string;
+        reply?: string;
+        value?: string;
+        key?: string;
+        dx?: number;
+        dy?: number;
+        timeoutMs?: number;
+        locked?: boolean;
+        enabled?: boolean;
       };
       try {
         msg = JSON.parse(String(event.data)) as typeof msg;
@@ -636,6 +670,10 @@ export function App() {
       }
       const posted = (msg as { session?: string }).session;
       if (posted && posted !== tabSession()) return;
+      if (msg.type === "agent-access" && typeof msg.enabled === "boolean") {
+        setCliAccess(msg.enabled);
+        return;
+      }
       if (msg.type === "desk" && msg.desk) {
         if (msg.desk.revision === deskRevision()) return;
         const space = spaceRef.current;
@@ -659,8 +697,49 @@ export function App() {
         return;
       }
       if (msg.type === "zoom") {
-        if (msg.space && spaceRef.current && msg.space !== spaceRef.current) return;
-        setZoomedId(msg.panelId ?? null);
+        if (!msg.panelId) {
+          setVisit(null);
+          setKept([]);
+          return;
+        }
+        const result = visitRef.current([{ panelId: msg.panelId, spaceId: msg.space ?? undefined }], "row");
+        if ("error" in result) notify(result.error);
+        return;
+      }
+      if (msg.type === "showDesk") {
+        setVisit(null);
+        setKept([]);
+        return;
+      }
+      if (msg.type === "panel-lock" && msg.panelId && typeof msg.locked === "boolean") {
+        window.dispatchEvent(
+          new CustomEvent("herdr-panel-lock", { detail: { panelId: msg.panelId, locked: msg.locked } }),
+        );
+        return;
+      }
+      if (msg.type === "panel-unlock" && msg.requestId && msg.panelId) {
+        setUnlockAsk({ requestId: msg.requestId, panelId: msg.panelId });
+        return;
+      }
+      if (msg.type === "panel-unlock-done" && msg.requestId) {
+        setUnlockAsk((current) => (current?.requestId === msg.requestId ? null : current));
+        return;
+      }
+      if (msg.type === "browser-drive" && msg.requestId && msg.panelId && msg.reply && msg.script) {
+        void runBrowserDrive({
+          requestId: msg.requestId,
+          panelId: msg.panelId,
+          op: msg.op || "",
+          script: msg.script,
+          reply: msg.reply,
+          selector: msg.selector,
+          text: msg.text,
+          value: msg.value,
+          key: msg.key,
+          dx: msg.dx,
+          dy: msg.dy,
+          timeoutMs: msg.timeoutMs,
+        });
         return;
       }
       if (msg.type === "visit" && (msg.panelId || msg.panels?.length)) {
@@ -737,8 +816,7 @@ export function App() {
     );
   }
 
-  const shown = zoomedId ? findPanel(layout.root, zoomedId) : null;
-  const root = shown ?? layout.root;
+  const root = layout.root;
 
   function edit(rootNext: LayoutDocument["root"]) {
     remember({ ...layout!, root: rootNext });
@@ -839,8 +917,23 @@ export function App() {
 
   function close(id: string) {
     const spaceIds = runtimeRef.current?.workspaces.map((space) => space.workspaceId) ?? [];
-    const record = describeClose(layout!.root, id);
-    const next = closePinned(layout!.root, id, spaceRef.current ?? "", spaceIds);
+    const doc = layout!;
+    if (!findPanel(doc.root, id)) {
+      const home = visit?.spaceIds[id];
+      const stored = home ? loadSpaceLayout(home) : null;
+      if (home && stored && findPanel(stored, id)) {
+        const next = closePinned(stored, id, home, spaceIds);
+        if (!next || findPanel(next, id)) {
+          setNotice("At least one panel stays open");
+          return;
+        }
+        saveSpaceLayout(home, next);
+        releaseVisit(id);
+        return;
+      }
+    }
+    const record = describeClose(doc.root, id);
+    const next = closePinned(doc.root, id, spaceRef.current ?? "", spaceIds);
     if (!next) {
       setNotice("At least one panel stays open");
       return;
@@ -849,7 +942,23 @@ export function App() {
     edit(next);
     setSelectedId(listPanels(next)[0]?.id ?? null);
     if (openMenuId === id) setOpenMenuId(null);
-    if (zoomedId === id) setZoomedId(null);
+    releaseVisit(id);
+  }
+
+  function releaseVisit(id: string) {
+    const current = visit;
+    if (!current?.panelIds.includes(id)) return;
+    const next = leaveVisitPanel(current, id);
+    if ("done" in next) {
+      setVisit(null);
+      setKept([]);
+      return;
+    }
+    const opened = visitRef.current(next.panels, next.arrange, next.weights);
+    if ("error" in opened) {
+      setVisit(null);
+      setKept([]);
+    }
   }
 
   function addPanel() {
@@ -934,8 +1043,17 @@ export function App() {
             edit(splitPanel(doc.root, id, direction, { type: "panel", id: panelId, title: title || null, panel }));
           },
           rename: (id, title) => edit(mapPanel(layout.root, id, (panel) => ({ ...panel, title: title || null }))),
-          fill: (id) => setZoomedId((current) => (current === id ? null : id)),
-          filledId: zoomedId,
+          fill: (id) => {
+            if (visit?.single && visit.panelIds[0] === id) {
+              setVisit(null);
+              setKept([]);
+              return;
+            }
+            const result = visitRef.current([{ panelId: id }]);
+            if ("error" in result) notify(result.error);
+          },
+          leave: releaseVisit,
+          filledId: visit?.single ? (visit.panelIds[0] ?? null) : null,
         }}
       >
       <HostProvider
@@ -949,6 +1067,25 @@ export function App() {
           )
         }
         onNotice={notify}
+        cliAccess={cliAccess}
+        onToggleCliAccess={() => {
+          if (cliAccess) {
+            void api.setAgentAccess(false).then(
+              (body) => setCliAccess(body.enabled),
+              (err: unknown) => setError(err instanceof Error ? err.message : String(err)),
+            );
+            return;
+          }
+          const host = desktopHost();
+          if (!host) {
+            setError("Agent control can only be turned on from the desktop window.");
+            return;
+          }
+          void host.invoke("set_cli_access").then(
+            () => setCliAccess(true),
+            (err: unknown) => setError(err instanceof Error ? err.message : String(err)),
+          );
+        }}
       >
       <KeyedPanelProvider id={keyId} set={setKeyId}>
       <div className="app">
@@ -956,10 +1093,18 @@ export function App() {
           layout={layout.root}
           runtime={runtime}
           focusedId={keyId}
-          zoomedId={zoomedId}
+          zoomedId={visit?.single ? (visit.panelIds[0] ?? null) : null}
           help={help}
           onFocus={setKeyId}
-          onZoom={setZoomedId}
+          onZoom={(id) => {
+            if (!id || (visit?.single && visit.panelIds[0] === id)) {
+              setVisit(null);
+              setKept([]);
+              return;
+            }
+            const result = visitRef.current([{ panelId: id }]);
+            if ("error" in result) notify(result.error);
+          }}
           onSpace={switchSpace}
           onAgent={focusAgentPane}
           onNotice={notify}
@@ -974,7 +1119,6 @@ export function App() {
           herdrCtl={herdrCtl}
           herdrBusy={herdrBusy}
           notice={notice}
-          zoomed={Boolean(zoomedId)}
           sessions={sessions}
           selecting={selecting}
           onHerdrAction={runHerdrAction}
@@ -1032,7 +1176,6 @@ export function App() {
           }}
           onSelect={() => setSelecting((current) => !current)}
           onAddPanel={addPanel}
-          onExitZoom={() => setZoomedId(null)}
           onClearFocus={() => setKeyId(null)}
         />
         {error ? <div className="banner">{error}</div> : null}
@@ -1048,6 +1191,9 @@ export function App() {
               },
             }}
           >
+          <BrowserVisitProvider ids={visit ? new Set(visit.panelIds) : null} keptIds={new Set(kept.map((item) => item.node.id))}>
+          <div className={visit ? "desk-layer desk-held" : "desk-layer"}>
+          <BrowserRoleProvider role="desk">
           <LayoutView
             node={root}
             root={layout.root}
@@ -1068,18 +1214,28 @@ export function App() {
             onOpenSpace={switchSpace}
             onFocusPane={focusAgentPane}
           />
+          </BrowserRoleProvider>
+          </div>
           {visit ? (
+            <BrowserRoleProvider role="visit">
             <div className="borrow-visit">
               {visit.single ? null : (
                 <header className="borrow-visit-bar">
-                  <button type="button" className="borrow-back" onClick={() => setVisit(null)}>
+                  <button
+                    type="button"
+                    className="borrow-back"
+                    onClick={() => {
+                      setVisit(null);
+                      setKept([]);
+                    }}
+                  >
                     Back
                   </button>
                 </header>
               )}
               <LayoutView
                 node={visit.node}
-                root={visit.node}
+                root={layout.root}
                 panes={runtime?.panes ?? []}
                 workspaces={runtime?.workspaces ?? []}
                 agents={runtime?.agents ?? []}
@@ -1097,22 +1253,43 @@ export function App() {
                     current ? { ...current, node: setGridTracks(current.node, path, columns, rows) } : current,
                   )
                 }
-                onPanel={(id, panel, retitle) =>
+                onPanel={(id, panel, retitle) => {
                   setVisit((current) =>
                     current
                       ? { ...current, node: assignContent(current.node, id, panel, retitle === true) }
                       : current,
-                  )
-                }
+                  );
+                  setKept((current) =>
+                    current.map((item) => (item.node.id === id ? { ...item, node: { ...item.node, panel } } : item)),
+                  );
+                }}
                 onCloseTab={() => undefined}
                 onFocusPane={focusAgentPane}
-                borrowed={!visit.single}
+                borrowed={!(visit.single && visit.panelIds[0] && visit.spaceIds[visit.panelIds[0]] === focusedSpaceId)}
                 origins={visit.origins}
-                onBack={visit.single ? () => setVisit(null) : undefined}
-                fromSpace={visit.single ? visit.spaceLabel : undefined}
               />
             </div>
+            </BrowserRoleProvider>
           ) : null}
+          {visit && kept.length > 0 ? (
+            <BrowserRoleProvider role="keeper">
+              <BorrowKeeper
+                panels={kept}
+                showing={new Set(visit.panelIds)}
+                panes={runtime?.panes ?? []}
+                workspaces={runtime?.workspaces ?? []}
+                agents={runtime?.agents ?? []}
+                layoutId={layout.id}
+                onPanel={(id, panel) => {
+                  setKept((current) =>
+                    current.map((item) => (item.node.id === id ? { ...item, node: { ...item.node, panel } } : item)),
+                  );
+                }}
+                onFocusPane={focusAgentPane}
+              />
+            </BrowserRoleProvider>
+          ) : null}
+          </BrowserVisitProvider>
           </DeskProvider>
         </main>
         {selecting ? (
@@ -1133,7 +1310,6 @@ export function App() {
             plugins={plugins}
             selectedId={selectedId}
             element={element}
-            zoomedId={zoomedId}
             chatTarget={chatTarget}
             splitHerdr={splitHerdr}
             onSplitHerdr={setSplitHerdr}
@@ -1143,7 +1319,6 @@ export function App() {
             onConfig={(id, panel) => edit(assignContent(layout.root, id, panel))}
             onSplit={(id, direction) => void split(id, direction)}
             onClose={close}
-            onZoom={setZoomedId}
             onAdd={addToChat}
             onOpenChat={(id, attachment) => {
               const panelId = freshPanelId(layout.root);
@@ -1161,10 +1336,42 @@ export function App() {
             }}
           />
         ) : null}
+        {unlockAsk ? (
+          <UnlockDialog
+            panelTitle={unlockPanelTitle(unlockAsk.panelId, layout.root, visit?.node)}
+            onCancel={() => {
+              const ask = unlockAsk;
+              void answerUnlock(ask.requestId, false).finally(() => setUnlockAsk(null));
+            }}
+            onUnlock={() => {
+              const ask = unlockAsk;
+              void answerUnlock(ask.requestId, true).then(
+                () => setUnlockAsk(null),
+                (err: unknown) => setError(err instanceof Error ? err.message : String(err)),
+              );
+            }}
+          />
+        ) : null}
       </div>
       </KeyedPanelProvider>
       </HostProvider>
       </PanelActionsProvider>
     </DesignProvider>
   );
+}
+
+async function answerUnlock(id: string, yes: boolean): Promise<void> {
+  const host = desktopHost();
+  if (host) {
+    await host.invoke("answer_panel_unlock", { id, yes });
+    return;
+  }
+  if (yes) throw new Error("Unlock has to be confirmed in the desktop window.");
+  await api.answerPanelUnlock(id, false);
+}
+
+function unlockPanelTitle(panelId: string, root: LayoutNode, visitNode?: LayoutNode): string {
+  const panel = findPanel(root, panelId) ?? (visitNode ? findPanel(visitNode, panelId) : null);
+  const title = panel?.title?.trim();
+  return title || "this panel";
 }

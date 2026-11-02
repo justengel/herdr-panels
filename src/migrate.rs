@@ -8,7 +8,7 @@ use crate::store;
 
 /// Current config file format. Add a step in `migrate_config` when a later
 /// version has to rewrite desks or layouts, then bump this number.
-pub const SCHEMA: u32 = 1;
+pub const SCHEMA: u32 = 2;
 
 /// Rewrite saved desks and layouts for this install. Installed plugins are left
 /// as they are. A desk copied in later is still updated the next time it is read.
@@ -16,7 +16,11 @@ pub fn migrate_config(dir: &Path) -> anyhow::Result<()> {
     let mut settings = store::load_settings(dir)?;
     migrate_desks(dir)?;
     if settings.schema < SCHEMA {
-        migrate_layouts(dir)?;
+        if settings.schema < 1 {
+            migrate_layouts(dir)?;
+        }
+        // Viewers before this stored false because they forced Agent control off at startup.
+        settings.agent_access = true;
         settings.schema = SCHEMA;
         store::save_settings(dir, &settings)?;
     }
@@ -147,6 +151,7 @@ mod tests {
         }
         let settings = store::load_settings(&dir).unwrap();
         assert_eq!(settings.schema, SCHEMA);
+        assert!(settings.agent_access);
         assert_eq!(
             fs::read_to_string(&plugin).unwrap(),
             r#"{"id":"welcome","title":"Welcome"}"#
@@ -154,6 +159,30 @@ mod tests {
 
         migrate_config(&dir).unwrap();
         assert_eq!(desk::load_desk(&dir, "default").unwrap().revision, 4);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_older_forced_off_turns_on_once_and_a_later_off_stays_off() {
+        let dir = std::env::temp_dir().join(format!(
+            "hwp-access-migrate-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("settings.json"),
+            r#"{"activeLayout":"side-by-side","schema":1,"agentAccess":false}"#,
+        )
+        .unwrap();
+        migrate_config(&dir).unwrap();
+        assert!(store::load_settings(&dir).unwrap().agent_access);
+        store::set_agent_access(&dir, false).unwrap();
+        migrate_config(&dir).unwrap();
+        assert!(!store::load_settings(&dir).unwrap().agent_access);
         let _ = fs::remove_dir_all(&dir);
     }
 }

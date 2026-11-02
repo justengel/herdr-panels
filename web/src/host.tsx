@@ -57,6 +57,9 @@ interface HostValue {
   deskOverrides: Record<string, string>;
   setDeskBinding: (id: string, value: string | null) => void;
   notify: (message: string) => void;
+  /** Whether the CLI may read panels and drive them. Arranging the desk stays available either way. */
+  cliAccess: boolean;
+  toggleCliAccess: () => void;
 }
 
 const HostContext = createContext<HostValue | null>(null);
@@ -71,11 +74,15 @@ export function HostProvider({
   runtime,
   onRuntime,
   onNotice,
+  cliAccess,
+  onToggleCliAccess,
   children,
 }: {
   runtime: RuntimeSnapshot | null;
   onRuntime: (runtime: RuntimeSnapshot) => void;
   onNotice: (message: string) => void;
+  cliAccess: boolean;
+  onToggleCliAccess: () => void;
   children: ReactNode;
 }) {
   const [config, setConfig] = useState<HerdrConfig | null>(null);
@@ -556,6 +563,8 @@ export function HostProvider({
     deskOverrides,
     setDeskBinding,
     notify: (message) => noticeRef.current(message),
+    cliAccess,
+    toggleCliAccess: onToggleCliAccess,
   };
 
   return (

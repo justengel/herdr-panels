@@ -1,6 +1,6 @@
 /** Shown when a plugin calls a control method and the panel flag is off. Keep in step with `CONTROL_OFF` in `src/plugin_grant.rs`. */
 export const CONTROL_OFF_MESSAGE =
-  'This panel cannot type into a pane. Turn on "control" in the design bar.';
+  'This panel cannot type into a pane or drive a browser panel. Turn on "control" in the design bar.';
 
 const HINT_KEY = "herdr-panels.control-hint";
 
@@ -10,7 +10,7 @@ export function controlHintVisible(
   seen: boolean,
 ): boolean {
   if (control) return false;
-  if (!permissions?.includes("herdr:control")) return false;
+  if (!permissions?.some((name) => name === "herdr:control" || name === "browser:control")) return false;
   return !seen;
 }
 

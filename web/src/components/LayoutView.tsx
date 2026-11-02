@@ -10,13 +10,15 @@ import { carryRaw, showsRawText } from "../rawText";
 import { adoptPluginAddress, menuFor, PANES_HINT, pluginOpenMessage, showViewer, TERMINAL_HINT, viewerName } from "../viewMenu";
 import { climbExplorer, explorerRootFor, resolveWorkspacePath, workspaceDirectory } from "../explorerRoot";
 import { canPinPanel, findPin, pinApplies, upsertPin } from "../pins";
-import { unpinEverywhere, unpinHere } from "../spaceLayout";
+import { spaceLayoutKey, unpinEverywhere, unpinHere } from "../spaceLayout";
 import { openTerminalPane, shellPanel, terminalPlacement } from "../openTerminal";
 import { cdCommand, terminalHereCwd } from "../terminalHere";
 import { useHost } from "../host";
 import { cellNode, listPanels } from "../layoutEdit";
 import { useDesign } from "../design";
 import { useDesk } from "../desk";
+import { BorrowSlot } from "../borrowKeep";
+import { useBrowserRole, useKeptIds, useVisitIds } from "../browserPlace";
 import { usePanelActions } from "../panelActions";
 import { PanelChrome } from "./PanelChrome";
 import { addressOf, DocumentFrame } from "./LocationBar";
@@ -50,7 +52,6 @@ interface Props {
   onCloseTab: (id: string, tabId: string) => void;
   onFocusPane: (paneId: string) => void;
   onOpenSpace?: (workspaceId: string) => void;
-  onBack?: () => void;
   fromSpace?: string;
   borrowed?: boolean;
   origins?: Record<string, string>;
@@ -75,7 +76,6 @@ export function LayoutView({
   onCloseTab,
   onFocusPane,
   onOpenSpace,
-  onBack,
   fromSpace,
   borrowed,
   origins,
@@ -84,6 +84,8 @@ export function LayoutView({
   openMenuToken = 0,
   root,
 }: Props) {
+  const role = useBrowserRole();
+  const keptIds = useKeptIds();
   const tree = root ?? node;
   const shared = {
     panes,
@@ -129,6 +131,10 @@ export function LayoutView({
     return <GridView {...shared} node={node} path={path} />;
   }
 
+  if (role === "visit" && keptIds.has(node.id)) {
+    return <BorrowSlot panelId={node.id} />;
+  }
+
   return (
     <PanelView
       {...shared}
@@ -136,8 +142,7 @@ export function LayoutView({
       title={node.title}
       panel={node.panel}
       pending={pending[node.id] ?? []}
-      onBack={onBack}
-      fromSpace={fromSpace ?? origins?.[node.id]}
+      fromSpace={spaceCaption(node.id, fromSpace, origins, spaceIds, workspaces)}
       borrowed={borrowed}
     />
   );
@@ -264,7 +269,6 @@ function PanelView(props: {
   onCloseTab: (id: string, tabId: string) => void;
   onFocusPane: (paneId: string) => void;
   onOpenSpace?: (workspaceId: string) => void;
-  onBack?: () => void;
   fromSpace?: string;
   borrowed?: boolean;
   spaceIds?: Record<string, string>;
@@ -272,7 +276,7 @@ function PanelView(props: {
   openMenuToken?: number;
   root?: LayoutNode;
 }) {
-  const { id, title, panel, panes, workspaces, onPanel, onCloseTab, openMenuId, openMenuToken, root, onBack, fromSpace, borrowed, spaceIds } =
+  const { id, title, panel, panes, workspaces, onPanel, onCloseTab, openMenuId, openMenuToken, root, fromSpace, borrowed, spaceIds } =
     props;
   const design = useDesign();
   const host = useHost();
@@ -281,6 +285,12 @@ function PanelView(props: {
   const [opening, setOpening] = useState(false);
   const [pinning, setPinning] = useState(false);
   const [pinTick, setPinTick] = useState(0);
+  const visitIds = useVisitIds();
+  const keptIds = useKeptIds();
+  const browserRole = useBrowserRole();
+  if (browserRole === "desk" && visitIds?.has(id) && !keptIds.has(id)) {
+    return <div className="desk-panel-held" />;
+  }
   const selected = design.enabled && design.selectedId === id;
   const select = (event: React.MouseEvent<HTMLElement>) => {
     if (!design.enabled) return;
@@ -316,14 +326,18 @@ function PanelView(props: {
     tabEdge: panel.type === "tabs" ? panel.edge : undefined,
     addressBar,
     canClose,
+    leaveVisit: browserRole === "visit" || browserRole === "keeper",
     openMenuToken: openMenuId === id ? openMenuToken : undefined,
-    onMenuDismiss: blank && canClose ? () => panelActions.close(id) : undefined,
+    onMenuDismiss:
+      browserRole === "visit" || browserRole === "keeper"
+        ? () => panelActions.leave(id)
+        : blank && canClose
+          ? () => panelActions.close(id)
+          : undefined,
     allowPin,
     pinLabel: pinned ? "Pinned…" : "Pin…",
-    onPin: allowPin && !onBack && !borrowed ? () => setPinning(true) : undefined,
-    onBack,
+    onPin: allowPin && !borrowed ? () => setPinning(true) : undefined,
     fromSpace,
-    borrowed,
     onAddressBar:
       addressBar === undefined
         ? undefined
@@ -975,4 +989,18 @@ function startTrackDrag(
   };
   window.addEventListener("pointermove", move);
   window.addEventListener("pointerup", up);
+}
+
+function spaceCaption(
+  panelId: string,
+  fromSpace: string | undefined,
+  origins: Record<string, string> | undefined,
+  spaceIds: Record<string, string> | undefined,
+  workspaces: WorkspaceView[],
+): string | undefined {
+  const home = spaceIds?.[panelId];
+  const here = workspaces.find((item) => item.focused)?.workspaceId ?? workspaces[0]?.workspaceId;
+  const away = Boolean(home && here && spaceLayoutKey(home) !== spaceLayoutKey(here));
+  if (home && !away) return undefined;
+  return fromSpace ?? (away ? origins?.[panelId] : undefined);
 }

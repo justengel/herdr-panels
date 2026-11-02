@@ -241,6 +241,17 @@ button.status:hover:not(:disabled) {
   flex: 1;
   min-height: 0;
   min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.desk-layer {
+  display: flex;
+  flex: 1 1 auto;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
 }
 
 .borrow-visit {
@@ -271,7 +282,37 @@ button.status:hover:not(:disabled) {
   min-height: 36px;
 }
 
-.borrow-header .borrow-back {
+.borrow-slot {
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+}
+
+.borrow-keeper {
+  position: absolute;
+  width: 0;
+  height: 0;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.borrow-float {
+  position: fixed;
+  z-index: 6;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  pointer-events: auto;
+}
+
+.borrow-float > .panel {
+  width: 100%;
+  height: 100%;
+}
+
+.borrow-visit-bar .borrow-back {
   margin-right: 8px;
   border: 0;
   background: transparent;
@@ -279,7 +320,7 @@ button.status:hover:not(:disabled) {
   padding: 4px 8px;
 }
 
-.borrow-header .borrow-back:hover { color: var(--text); }
+.borrow-visit-bar .borrow-back:hover { color: var(--text); }
 
 .banner, .boot-error {
   color: var(--blocked);
@@ -402,7 +443,7 @@ button.status:hover:not(:disabled) {
 .panel-header input,
 .panel-header select { cursor: pointer; }
 
-.grip, .panel-close, .panel-expand, .tab-gear-button {
+.grip, .panel-close, .panel-expand, .panel-lock, .tab-gear-button {
   flex: 0 0 auto;
   width: 22px;
   height: 22px;
@@ -414,7 +455,8 @@ button.status:hover:not(:disabled) {
 
 .grip { cursor: grab; letter-spacing: -0.15em; }
 .grip::before { content: "⋮⋮"; font-size: 12px; }
-.grip:hover, .panel-close:hover, .panel-expand:hover, .tab-gear-button:hover { color: var(--text); }
+.grip:hover, .panel-close:hover, .panel-expand:hover, .panel-lock:hover, .tab-gear-button:hover { color: var(--text); }
+.panel-lock.is-locked { color: var(--accent); }
 body.panel-dragging, body.panel-dragging * { cursor: grabbing !important; user-select: none; }
 .panel.is-drag-source { opacity: 0.45; }
 
@@ -616,6 +658,26 @@ body.panel-dragging, body.panel-dragging * { cursor: grabbing !important; user-s
   gap: 8px;
 }
 .dialog-spacer { flex: 1; }
+.unlock-backdrop { z-index: 60; }
+.unlock-dialog p {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.45;
+}
+.unlock-dialog .dialog-actions button {
+  border: 1px solid var(--line-strong);
+  background: var(--bg);
+  color: var(--text);
+  border-radius: 4px;
+  padding: 6px 12px;
+  cursor: pointer;
+}
+.unlock-dialog .dialog-actions button:hover { border-color: var(--text); }
+.unlock-dialog .dialog-actions button.unlock {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #1a1408;
+}
 .pin-dialog-body {
   display: flex;
   flex-direction: column;
@@ -967,12 +1029,17 @@ body.panel-dragging, body.panel-dragging * { cursor: grabbing !important; user-s
 }
 .plain-actions .grip,
 .plain-actions .tab-gear-button,
+.plain-actions .panel-lock,
 .plain-actions .panel-expand,
 .plain-actions .panel-close {
   background: var(--bg-panel);
   border-radius: 4px;
 }
-.panel.is-plain .side-heading { padding-right: 124px; }
+.panel.is-plain .side-heading { padding-right: 154px; }
+
+.copy-on-select {
+  display: contents;
+}
 
 .file-text {
   margin: 0;
@@ -1698,7 +1765,8 @@ body.space-dragging, body.space-dragging * { cursor: grabbing !important; user-s
 
 .tab-gear-button,
 .panel-expand,
-.panel-close {
+.panel-close,
+.panel-lock {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1706,7 +1774,8 @@ body.space-dragging, body.space-dragging * { cursor: grabbing !important; user-s
 .panel-expand[aria-pressed="true"] { color: var(--accent); }
 .tab-gear-button svg,
 .panel-expand svg,
-.panel-close svg {
+.panel-close svg,
+.panel-lock svg {
   display: block;
   width: 16px;
   height: 16px;

@@ -43,8 +43,8 @@ pub async fn execute() -> anyhow::Result<()> {
     match first {
         Some("update") => crate::self_update::execute().await,
         Some("install-launcher") => crate::launcher::execute(),
-        Some("panel") | Some("plugin") | Some("status") | Some("token") | Some("help")
-        | Some("--help") | Some("-h") | Some("--version") | Some("-V") => {
+        Some("panel") | Some("plugin") | Some("status") | Some("token") | Some("access")
+        | Some("help") | Some("--help") | Some("-h") | Some("--version") | Some("-V") => {
             crate::client::execute().await
         }
         Some("server") => {
@@ -129,7 +129,7 @@ async fn launch_or_serve() -> anyhow::Result<()> {
     ) {
         crate::launch::Choice::OpenWindow => {
             println!("viewer is already running at {probe_url}");
-            open_surface(&probe_url, args.open)
+            open_surface(&probe_url, args.open).await
         }
         crate::launch::Choice::Refuse(message) => anyhow::bail!(message),
         crate::launch::Choice::StartServer => {
@@ -152,10 +152,16 @@ async fn open_recorded_desktop() -> anyhow::Result<()> {
     {
         anyhow::bail!(message);
     }
+    if crate::client::request_desk_window(&config_dir)
+        .await
+        .is_ok()
+    {
+        return Ok(());
+    }
     open_desktop_at(&url)
 }
 
-fn open_surface(url: &str, browser_requested: bool) -> anyhow::Result<()> {
+async fn open_surface(url: &str, browser_requested: bool) -> anyhow::Result<()> {
     match surface_for(find_desktop().is_some(), browser_requested) {
         Surface::Browser => {
             if !browser_requested {
@@ -165,6 +171,13 @@ fn open_surface(url: &str, browser_requested: bool) -> anyhow::Result<()> {
             Ok(())
         }
         Surface::Desktop => {
+            let config_dir = prepare_config_dir(None)?;
+            if crate::client::request_desk_window(&config_dir)
+                .await
+                .is_ok()
+            {
+                return Ok(());
+            }
             if let Err(err) = spawn_desktop_at(Some(url)) {
                 eprintln!("desktop window: {err:#}");
                 open_browser(url);
@@ -212,9 +225,7 @@ fn desktop_command(url: Option<&str>) -> anyhow::Result<std::process::Command> {
         "the desktop window is not installed. From the repository root, run: cargo install --path src-tauri",
     )?;
     let mut command = std::process::Command::new(path);
-    if let Some(url) = url {
-        command.env("HERDR_PANELS_URL", url);
-    }
+    crate::desk_gate::apply_desktop_env(&mut command, url);
     Ok(command)
 }
 

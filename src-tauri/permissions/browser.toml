@@ -9,6 +9,11 @@ description = "Close the child webview for a browser panel."
 commands.allow = ["close_browser"]
 
 [[permission]]
+identifier = "allow-eval-browser"
+description = "Run a host-built script in a browser panel. Remote pages cannot call this."
+commands.allow = ["eval_browser"]
+
+[[permission]]
 identifier = "allow-set-browser-select"
 description = "Turn element selection on or off inside browser panels."
 commands.allow = ["set_browser_select"]
@@ -32,3 +37,13 @@ commands.allow = ["set_frame_focus"]
 identifier = "allow-open-external"
 description = "Open an http or https URL in the system browser. Other schemes are refused by the command."
 commands.allow = ["open_external"]
+
+[[permission]]
+identifier = "allow-set-cli-access"
+description = "Turn CLI access on from the desktop window."
+commands.allow = ["set_cli_access"]
+
+[[permission]]
+identifier = "allow-answer-panel-unlock"
+description = "Confirm or cancel unlocking a panel from the desktop window."
+commands.allow = ["answer_panel_unlock"]

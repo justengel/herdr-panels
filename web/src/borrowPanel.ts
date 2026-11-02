@@ -72,7 +72,7 @@ export interface VisitWeights {
 }
 
 export function chooseArrange(count: number, requested?: string): VisitArrange | { error: string } {
-  if (count > 6) return { error: "a visit can show at most 6 panels" };
+  if (count < 1) return { error: "a visit needs at least one panel" };
   const name = requested?.trim().toLowerCase() ?? "";
   if (!name) return count >= 3 ? "grid" : "row";
   if (name === "row" || name === "column" || name === "grid") return name;
@@ -94,14 +94,9 @@ export function visitWeights(
   }
   if (arrange === "grid") {
     if (sizes.length) return { error: "size is for a row or a column" };
-    const columnCount = count <= 4 ? 2 : 3;
-    const rowCount = Math.ceil(count / columnCount);
-    const nextColumns = columns.length ? columns : Array.from({ length: columnCount }, () => 1);
-    const nextRows = rows.length ? rows : Array.from({ length: rowCount }, () => 1);
-    if (nextColumns.length !== columnCount) return { error: "columns has one weight per column" };
-    if (nextRows.length !== rowCount) return { error: "rows has one weight per row" };
-    if (!positive(nextColumns) || !positive(nextRows)) return { error: "a weight must be a positive number" };
-    return { sizes: [], columns: nextColumns, rows: nextRows };
+    const tracks = gridTracks(count, columns, rows);
+    if ("error" in tracks) return tracks;
+    return { sizes: [], columns: tracks.columns, rows: tracks.rows };
   }
   if (columns.length || rows.length) return { error: "columns and rows are for a grid" };
   const nextSizes = sizes.length ? sizes : Array.from({ length: count }, () => 1);
@@ -112,6 +107,35 @@ export function visitWeights(
 
 function positive(values: number[]): boolean {
   return values.every((value) => Number.isFinite(value) && value > 0);
+}
+
+function gridTracks(
+  count: number,
+  columns: number[],
+  rows: number[],
+): { columns: number[]; rows: number[] } | { error: string } {
+  let columnCount = 0;
+  let rowCount = 0;
+  if (!columns.length && !rows.length) {
+    columnCount = Math.max(1, Math.ceil(Math.sqrt(count)));
+    rowCount = Math.ceil(count / columnCount);
+  } else if (!rows.length) {
+    columnCount = Math.max(1, columns.length);
+    rowCount = Math.ceil(count / columnCount);
+  } else if (!columns.length) {
+    rowCount = Math.max(1, rows.length);
+    columnCount = Math.ceil(count / rowCount);
+  } else {
+    columnCount = columns.length;
+    rowCount = rows.length;
+  }
+  if (columnCount < 1 || rowCount < 1 || columnCount * rowCount < count) {
+    return { error: "more panels than cells" };
+  }
+  const nextColumns = columns.length ? columns : Array.from({ length: columnCount }, () => 1);
+  const nextRows = rows.length ? rows : Array.from({ length: rowCount }, () => 1);
+  if (!positive(nextColumns) || !positive(nextRows)) return { error: "a weight must be a positive number" };
+  return { columns: nextColumns, rows: nextRows };
 }
 
 /** Resolve every panel, then place them. One failure returns only the error. */
@@ -174,6 +198,28 @@ export function openVisit(
   };
 }
 
+/** Remove one panel from a visit. The last panel ends it. A row or column keeps the other weights. */
+export function leaveVisitPanel(
+  opened: OpenedVisit,
+  panelId: string,
+):
+  | { done: true }
+  | {
+      panels: { panelId: string; spaceId?: string }[];
+      arrange: VisitArrange;
+      weights?: VisitWeights;
+    } {
+  const index = opened.panelIds.indexOf(panelId);
+  if (index < 0) return { done: true };
+  const rest = opened.panelIds.filter((id) => id !== panelId);
+  if (rest.length === 0) return { done: true };
+  const panels = rest.map((id) => ({ panelId: id, spaceId: opened.spaceIds[id] }));
+  if (rest.length === 1 || opened.arrange === "grid") return { panels, arrange: opened.arrange };
+  const sizes =
+    opened.sizes.length === opened.panelIds.length ? opened.sizes.filter((_, item) => item !== index) : undefined;
+  return { panels, arrange: opened.arrange, weights: sizes ? { sizes } : undefined };
+}
+
 /** Keep panels that are already on this visit, and apply a new share to each divider. */
 export function reuseVisit(current: LayoutNode, opened: OpenedVisit): LayoutNode {
   const ids = listPanels(current)
@@ -220,14 +266,12 @@ function gridOf(visits: PanelVisit[], columns: number[], rows: number[]): Layout
     cells: visits.map((visit, index) => {
       const column = index % columnCount;
       const row = Math.floor(index / columnCount);
-      const remainder = visits.length % columnCount;
-      const last = index === visits.length - 1;
       return {
         id: visit.panelId,
         title: visit.title,
         column,
         row,
-        colSpan: last && remainder !== 0 ? columnCount - column : 1,
+        colSpan: 1,
         rowSpan: 1,
         node: visit.node,
       };

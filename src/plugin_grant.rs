@@ -15,11 +15,13 @@ pub const PANELS_READ: &str = "panels:read";
 pub const PANELS_CONTROL: &str = "panels:control";
 pub const LINKS: &str = "links:open";
 pub const COMMANDS: &str = "commands:run";
+pub const BROWSER_READ: &str = "browser:read";
+pub const BROWSER_CONTROL: &str = "browser:control";
 
 /// Reply when the plugin declared control but this panel's layout has it off.
 /// Keep in step with `CONTROL_OFF_MESSAGE` in `web/src/controlHint.ts`.
 pub const CONTROL_OFF: &str =
-    "This panel cannot type into a pane. Turn on \"control\" in the design bar.";
+    "This panel cannot type into a pane or drive a browser panel. Turn on \"control\" in the design bar.";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PluginGrants {
@@ -44,7 +46,7 @@ pub fn parse_grants(
     for name in permissions {
         if !known(&name) {
             bail!(
-                "unknown permission \"{name}\". use herdr:read, herdr:control, files:read, panels:read, panels:control, links:open, or commands:run"
+                "unknown permission \"{name}\". use herdr:read, herdr:control, files:read, panels:read, panels:control, links:open, commands:run, browser:read, or browser:control"
             );
         }
         if !kept.iter().any(|have: &String| have == &name) {
@@ -91,7 +93,14 @@ pub fn parse_grants(
 fn known(name: &str) -> bool {
     matches!(
         name,
-        READ | CONTROL | FILES | PANELS_READ | PANELS_CONTROL | LINKS | COMMANDS
+        READ | CONTROL
+            | FILES
+            | PANELS_READ
+            | PANELS_CONTROL
+            | LINKS
+            | COMMANDS
+            | BROWSER_READ
+            | BROWSER_CONTROL
     )
 }
 
@@ -175,6 +184,8 @@ pub fn wants_bridge(permissions: &[String]) -> bool {
             || name == PANELS_CONTROL
             || name == LINKS
             || name == COMMANDS
+            || name == BROWSER_READ
+            || name == BROWSER_CONTROL
     })
 }
 
@@ -251,6 +262,12 @@ pub fn consent_text(
                     lines.push(format!("  {command}"));
                 }
             }
+            BROWSER_READ => lines.push(
+                "- Read the text and HTML of a browser panel, and save a PNG of that region, including a site where you are signed in.".into(),
+            ),
+            BROWSER_CONTROL => lines.push(
+                "- Navigate, wait, click, fill, press keys, and scroll in a browser panel. The actions are script-generated. The panel's control checkbox has to be on. That same checkbox also allows typing into a Herdr pane when herdr:control is granted.".into(),
+            ),
             _ => {}
         }
     }
@@ -514,6 +531,11 @@ pub fn bridge_allowed_in_layout(
 fn decide(permissions: &[String], method: &str, flag: Result<bool, String>) -> Result<(), String> {
     let control_method = matches!(method, "sendText" | "sendKeys" | "focusPane" | "scrollPane");
     let read_method = matches!(method, "status" | "listPanes" | "readPane");
+    let browser_read = matches!(method, "read" | "shot");
+    let browser_control = matches!(
+        method,
+        "navigate" | "wait" | "click" | "fill" | "key" | "scroll" | "back" | "forward" | "reload"
+    );
     let context = method == "context";
     let panels_read = method == "listPanels";
     let panels_control = matches!(
@@ -537,6 +559,8 @@ fn decide(permissions: &[String], method: &str, flag: Result<bool, String>) -> R
         && !links
         && !run
         && !context
+        && !browser_read
+        && !browser_control
     {
         return Err(format!("Unknown bridge method: {method}"));
     }
@@ -571,6 +595,21 @@ fn decide(permissions: &[String], method: &str, flag: Result<bool, String>) -> R
     if control_method {
         if !permissions.iter().any(|name| name == CONTROL) {
             return Err("This plugin does not have herdr:control".into());
+        }
+        if !flag {
+            return Err(CONTROL_OFF.into());
+        }
+        return Ok(());
+    }
+    if browser_read {
+        if !permissions.iter().any(|name| name == BROWSER_READ) {
+            return Err("This plugin does not have browser:read".into());
+        }
+        return Ok(());
+    }
+    if browser_control {
+        if !permissions.iter().any(|name| name == BROWSER_CONTROL) {
+            return Err("This plugin does not have browser:control".into());
         }
         if !flag {
             return Err(CONTROL_OFF.into());
@@ -921,7 +960,7 @@ mod tests {
                 bridge_allowed(&control, &quiet, "checkin-report", "report", method).unwrap_err();
             assert_eq!(
                 err,
-                "This panel cannot type into a pane. Turn on \"control\" in the design bar."
+                "This panel cannot type into a pane or drive a browser panel. Turn on \"control\" in the design bar."
             );
             assert!(bridge_allowed(&control, &live, "checkin-report", "report", method).is_ok());
         }
@@ -1237,7 +1276,7 @@ mod tests {
         assert_eq!(
             bridge_allowed_in_layout(&control, &quiet, "checkin-report", "report", "focusPane")
                 .unwrap_err(),
-            "This panel cannot type into a pane. Turn on \"control\" in the design bar."
+            "This panel cannot type into a pane or drive a browser panel. Turn on \"control\" in the design bar."
         );
     }
 
@@ -1258,6 +1297,43 @@ mod tests {
         );
         assert!(is_herdr_pane_id("wK:p1"));
         assert!(!is_herdr_pane_id("p1"));
+    }
+
+    #[test]
+    fn browser_read_does_not_need_the_control_flag_and_browser_control_does() {
+        let quiet = desk(false);
+        let live = desk(true);
+        let read = vec![BROWSER_READ.to_string()];
+        let drive = vec![BROWSER_CONTROL.to_string()];
+        assert!(wants_bridge(&read));
+        assert!(wants_bridge(&drive));
+        assert!(parse_permissions(read.clone(), Vec::new()).is_ok());
+        for method in ["read", "shot"] {
+            assert!(bridge_allowed(&read, &quiet, "checkin-report", "report", method).is_ok());
+        }
+        assert_eq!(
+            bridge_allowed(&read, &live, "checkin-report", "report", "click").unwrap_err(),
+            "This plugin does not have browser:control"
+        );
+        assert_eq!(
+            bridge_allowed(&drive, &quiet, "checkin-report", "report", "click").unwrap_err(),
+            CONTROL_OFF
+        );
+        for method in [
+            "navigate", "wait", "click", "fill", "key", "scroll", "back", "forward", "reload",
+        ] {
+            assert!(bridge_allowed(&drive, &live, "checkin-report", "report", method).is_ok());
+        }
+        let text = consent_text(
+            "demo",
+            "Demo",
+            &[BROWSER_READ.into(), BROWSER_CONTROL.into()],
+            &[],
+            &[],
+        );
+        assert!(text.contains("signed in"));
+        assert!(text.contains("script-generated"));
+        assert!(text.contains("same checkbox"));
     }
 
     fn collided_desk(markdown_space: &str, plugin_space: &str) -> DeskDocument {

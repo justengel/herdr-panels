@@ -12,6 +12,7 @@ describe("control hint", () => {
     expect(controlHintVisible(["herdr:control"], true, false)).toBe(false);
     expect(controlHintVisible(["herdr:control"], false, true)).toBe(false);
     expect(controlHintVisible(["herdr:read"], false, false)).toBe(false);
+    expect(controlHintVisible(["browser:control"], false, false)).toBe(true);
     expect(controlHintVisible(undefined, false, false)).toBe(false);
   });
 });

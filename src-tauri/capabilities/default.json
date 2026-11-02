@@ -12,10 +12,13 @@
     "core:default",
     "allow-place-browser",
     "allow-close-browser",
+    "allow-eval-browser",
     "allow-set-browser-select",
     "allow-set-display-zoom",
     "allow-set-desk-prefix",
     "allow-set-frame-focus",
-    "allow-open-external"
+    "allow-open-external",
+    "allow-set-cli-access",
+    "allow-answer-panel-unlock"
   ]
 }

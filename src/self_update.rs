@@ -807,9 +807,17 @@ async fn restart_installed_viewer(exe: &Path) -> Result<RestartOutcome, String> 
             wait_until_up(&url, token.as_deref()).await?;
             let mut opened = false;
             if open_desktop {
-                if let Some(desktop) = exe.parent().and_then(desktop_binary) {
-                    spawn_detached(&desktop, &[], &[("HERDR_PANELS_URL", url.as_str())])?;
-                    opened = true;
+                // The server process owns the desk grant. It has to spawn the window.
+                if let Some(dir) = config_dir.as_ref() {
+                    if crate::client::request_desk_window(dir).await.is_ok() {
+                        opened = true;
+                    }
+                }
+                if !opened {
+                    if let Some(desktop) = exe.parent().and_then(desktop_binary) {
+                        spawn_detached(&desktop, &[], &[("HERDR_PANELS_URL", url.as_str())])?;
+                        opened = true;
+                    }
                 }
             }
             Ok(RestartOutcome::Restarted {

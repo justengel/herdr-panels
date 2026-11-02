@@ -40,47 +40,30 @@ export function browserBounds(
   };
 }
 
-/** Keep the largest part of the page that does not sit under a right-click menu. */
-export function fitAround(box: BrowserBox, obstacles: BrowserBox[]): BrowserBox | null {
-  return obstacles.reduce<BrowserBox | null>((current, obstacle) => {
-    if (!current) return null;
-    return cutAround(current, obstacle);
-  }, box);
+/**
+ * The part of each menu that sits on this page.
+ * The native window stays full size and is cut to these rectangles, so the menu
+ * draws on top without a margin and without the site reflowing.
+ */
+export function menuCuts(page: BrowserBox, obstacles: BrowserBox[]): BrowserBox[] {
+  const cuts: BrowserBox[] = [];
+  for (const obstacle of obstacles) {
+    const x = Math.max(page.x, obstacle.x);
+    const y = Math.max(page.y, obstacle.y);
+    const right = Math.min(page.x + page.width, obstacle.x + obstacle.width);
+    const bottom = Math.min(page.y + page.height, obstacle.y + obstacle.height);
+    if (right - x < 1 || bottom - y < 1) continue;
+    cuts.push({ x, y, width: right - x, height: bottom - y });
+  }
+  return cuts;
 }
 
-function cutAround(box: BrowserBox, obstacle: BrowserBox): BrowserBox | null {
-  const pad = 6;
-  const block = {
-    x: obstacle.x - pad,
-    y: obstacle.y - pad,
-    width: obstacle.width + pad * 2,
-    height: obstacle.height + pad * 2,
-  };
-  const left = Math.max(box.x, block.x);
-  const top = Math.max(box.y, block.y);
-  const right = Math.min(box.x + box.width, block.x + block.width);
-  const bottom = Math.min(box.y + box.height, block.y + block.height);
-  if (right <= left || bottom <= top) return box;
-
-  const candidates: BrowserBox[] = [];
-  if (top - box.y >= 2) {
-    candidates.push({ x: box.x, y: box.y, width: box.width, height: top - box.y });
-  }
-  if (box.y + box.height - bottom >= 2) {
-    candidates.push({ x: box.x, y: bottom, width: box.width, height: box.y + box.height - bottom });
-  }
-  if (left - box.x >= 2) {
-    candidates.push({ x: box.x, y: box.y, width: left - box.x, height: box.height });
-  }
-  if (box.x + box.width - right >= 2) {
-    candidates.push({ x: right, y: box.y, width: box.x + box.width - right, height: box.height });
-  }
-  candidates.sort((a, b) => b.width * b.height - a.width * a.height);
-  return candidates[0] ?? null;
+export function hideBrowserPanels(input: { dragging: boolean; settings: boolean; dialog: boolean }): boolean {
+  return input.dragging || input.settings || input.dialog;
 }
 
 export function menuObstacles(): BrowserBox[] {
-  return [...document.querySelectorAll(".panel-menu, .select-menu")].flatMap((node) => {
+  return [...document.querySelectorAll(".panel-menu, .panel-menu-flyout, .select-menu")].flatMap((node) => {
     const rect = node.getBoundingClientRect();
     const width = Math.round(rect.width);
     const height = Math.round(rect.height);
@@ -91,8 +74,11 @@ export function menuObstacles(): BrowserBox[] {
 
 export function browserBlocked(): boolean {
   const body = document.body;
-  if (body.classList.contains("panel-dragging")) return true;
-  return document.querySelector(".settings-backdrop") !== null;
+  return hideBrowserPanels({
+    dragging: body.classList.contains("panel-dragging"),
+    settings: document.querySelector(".settings-backdrop") !== null,
+    dialog: document.querySelector(".dialog-backdrop") !== null,
+  });
 }
 
 let generation = 0;
@@ -102,11 +88,20 @@ export function nextBrowserGeneration(): number {
   return generation;
 }
 
+export function browserSlotKey(bounds: BrowserBox | null, cuts: BrowserBox[] = []): string {
+  if (!bounds) return "hidden";
+  const base = `${bounds.x},${bounds.y},${bounds.width},${bounds.height}`;
+  if (cuts.length === 0) return base;
+  const holes = cuts.map((cut) => `${cut.x},${cut.y},${cut.width},${cut.height}`).join(";");
+  return `${base}|${holes}`;
+}
+
 export async function placeBrowser(
   label: string,
   url: string,
   bounds: BrowserBox | null,
   generationId: number,
+  cuts: BrowserBox[] = [],
 ): Promise<void> {
   const host = desktopHost();
   if (!host) throw new Error("desktop shell is not connected");
@@ -119,6 +114,9 @@ export async function placeBrowser(
     height: bounds?.height ?? 0,
     visible: bounds !== null,
     generation: generationId,
+    locked: false,
+    space: "",
+    cuts,
   });
 }
 

@@ -704,5 +704,179 @@
         }
       });
     }
+
+    const CROSS_ORIGIN_FRAME = "a cross-origin frame inside that page cannot be scripted";
+
+    function docsOf(root) {
+      const docs = [];
+      let blocked = false;
+      const walk = (doc) => {
+        if (!doc || docs.includes(doc)) return;
+        docs.push(doc);
+        for (const frame of doc.querySelectorAll("iframe, frame")) {
+          try {
+            const child = frame.contentDocument;
+            if (child) walk(child);
+            else blocked = true;
+          } catch {
+            blocked = true;
+          }
+        }
+      };
+      walk(root);
+      return { docs, blocked };
+    }
+
+    function findElement(selector, text) {
+      const { docs, blocked } = docsOf(document);
+      if (selector) {
+        for (const doc of docs) {
+          let hit = null;
+          try {
+            hit = doc.querySelector(selector);
+          } catch {
+            return { error: "the selector is invalid" };
+          }
+          if (hit instanceof Element) return { element: hit };
+        }
+        if (blocked) return { error: CROSS_ORIGIN_FRAME };
+        return { error: "that element was not found" };
+      }
+      if (text) {
+        const needle = String(text).trim().toLowerCase();
+        for (const doc of docs) {
+          const root = doc.body || doc.documentElement;
+          if (!root) continue;
+          for (const node of root.querySelectorAll("*")) {
+            if (textOf(node).toLowerCase().includes(needle)) return { element: node };
+          }
+        }
+        if (blocked) return { error: CROSS_ORIGIN_FRAME };
+        return { error: "that text was not found" };
+      }
+      const page = document.body || document.documentElement;
+      return page ? { element: page } : { error: "the page is empty" };
+    }
+
+    function blobBase64(blob) {
+      return blob.arrayBuffer().then((buffer) => {
+        const bytes = new Uint8Array(buffer);
+        let binary = "";
+        const step = 0x8000;
+        for (let index = 0; index < bytes.length; index += step) {
+          binary += String.fromCharCode(...bytes.subarray(index, index + step));
+        }
+        return btoa(binary);
+      });
+    }
+
+    async function readElement(element) {
+      const text = textOf(element).slice(0, 20000);
+      const html = String(element.outerHTML || "").slice(0, 80000);
+      const rect = element.getBoundingClientRect();
+      if (rect.width < 1 || rect.height < 1) return { text, html, png: "" };
+      try {
+        const blob = await raster([element]);
+        const png = await blobBase64(blob);
+        return { text, html, png };
+      } catch (err) {
+        return { text, html, png: "", error: err && err.message ? err.message : "Could not take the screenshot" };
+      }
+    }
+
+    function setField(element, value) {
+      const field = element;
+      if (field.isContentEditable) {
+        field.textContent = value;
+        field.dispatchEvent(new InputEvent("input", { bubbles: true, data: value }));
+        return;
+      }
+      const prototype = field instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+      const setter = Object.getOwnPropertyDescriptor(prototype, "value");
+      if (setter && setter.set) setter.set.call(field, value);
+      else field.value = value;
+      field.dispatchEvent(new Event("input", { bubbles: true }));
+      field.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+
+    async function waitFor(spec) {
+      const limit = Math.max(0, Number(spec.timeoutMs) || 0);
+      const started = Date.now();
+      for (;;) {
+        const found = findElement(spec.selector || "", spec.text || "");
+        if (found.element) return found;
+        if (found.error === CROSS_ORIGIN_FRAME || found.error === "the selector is invalid") return found;
+        if (Date.now() - started >= limit) return { error: "the browser panel did not answer in time" };
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+    }
+
+    window.__hwpDrive = (spec) => {
+      if (!spec || typeof spec.reply !== "string" || typeof spec.id !== "string") return;
+      let posted = false;
+      const post = (payload) => {
+        if (posted) return;
+        posted = true;
+        let href = "";
+        try {
+          href = String(location.href || "");
+        } catch (err) {
+          href = "";
+        }
+        const body = JSON.stringify(Object.assign({ id: spec.id, text: "", html: "", png: "", error: "", href }, payload || {}, { href }));
+        fetch(spec.reply, {
+          method: "POST",
+          headers: { "content-type": "text/plain" },
+          body,
+        }).catch(() => {});
+      };
+      Promise.resolve()
+        .then(async () => {
+          const op = String(spec.op || "");
+          if (op === "read" || op === "shot") {
+            const found = findElement(spec.selector || "", spec.text || "");
+            if (!found.element) return { error: found.error || "that element was not found" };
+            return readElement(found.element);
+          }
+          if (op === "wait") {
+            const found = await waitFor(spec);
+            if (!found.element) return { error: found.error || "that element was not found" };
+            return { text: textOf(found.element).slice(0, 20000) };
+          }
+          if (op === "click" || op === "fill" || op === "key" || op === "scroll") {
+            const found = findElement(spec.selector || "", spec.text || "");
+            const element = found.element;
+            if (!element && (op === "click" || op === "fill" || spec.selector || spec.text)) {
+              return { error: found.error || "that element was not found" };
+            }
+            const target = element || document.activeElement || document.body;
+            if (op === "click") {
+              if (target instanceof HTMLElement) target.focus();
+              target.click();
+            } else if (op === "fill") {
+              const field = target.matches?.("input, textarea, [contenteditable=''], [contenteditable='true']")
+                ? target
+                : target.querySelector?.("input, textarea, [contenteditable='true']");
+              if (!field) return { error: "that element is not a field" };
+              if (field instanceof HTMLElement) field.focus();
+              setField(field, spec.value == null ? "" : String(spec.value));
+            } else if (op === "key") {
+              const key = spec.key == null ? "" : String(spec.key);
+              const view = target.ownerDocument?.defaultView || window;
+              target.dispatchEvent(new view.KeyboardEvent("keydown", { key, bubbles: true }));
+              target.dispatchEvent(new view.KeyboardEvent("keyup", { key, bubbles: true }));
+            } else {
+              const dx = Number(spec.dx) || 0;
+              const dy = Number(spec.dy) || 0;
+              if (target && target !== document.body && target !== document.documentElement && target.scrollBy) target.scrollBy(dx, dy);
+              else window.scrollBy(dx, dy);
+            }
+            return { text: target ? textOf(target).slice(0, 20000) : "" };
+          }
+          return { error: "unknown browser action" };
+        })
+        .then((payload) => post(payload))
+        .catch((err) => post({ error: err && err.message ? err.message : String(err) }));
+    };
   };
 })();

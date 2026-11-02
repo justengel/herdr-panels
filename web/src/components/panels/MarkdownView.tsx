@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { marked } from "marked";
 import DOMPurify from "dompurify";
 import { useTabSession, wsUrl } from "../../api";
+import { CopyOnSelect } from "../CopyOnSelect";
 import { noteLinkAction, openExternalUrl } from "../../externalLink";
 
 interface Props {
@@ -58,26 +59,28 @@ export function MarkdownView({ path, design = false, onPick }: Props) {
   if (error) return <div className="empty">{error}</div>;
   if (missing) return <div className="empty">File not found: {path}</div>;
   return (
-    <article
-      className={design ? "markdown designing" : "markdown"}
-      onClick={(event) => {
-        if (design) {
+    <CopyOnSelect>
+      <article
+        className={design ? "markdown designing" : "markdown"}
+        onClick={(event) => {
+          if (design) {
+            event.preventDefault();
+            event.stopPropagation();
+            const target = event.target as HTMLElement;
+            const node = target.closest("h1,h2,h3,h4,h5,p,li,pre,blockquote,table") ?? target;
+            const text = (node.textContent ?? "").replace(/\s+/g, " ").trim().slice(0, 180);
+            onPick?.({ tag: node.tagName.toLowerCase(), text });
+            return;
+          }
+          const anchor = (event.target as HTMLElement).closest("a");
+          if (!anchor?.href) return;
+          const action = noteLinkAction(anchor.href, window.location.href);
+          if (action === "stay") return;
           event.preventDefault();
-          event.stopPropagation();
-          const target = event.target as HTMLElement;
-          const node = target.closest("h1,h2,h3,h4,h5,p,li,pre,blockquote,table") ?? target;
-          const text = (node.textContent ?? "").replace(/\s+/g, " ").trim().slice(0, 180);
-          onPick?.({ tag: node.tagName.toLowerCase(), text });
-          return;
-        }
-        const anchor = (event.target as HTMLElement).closest("a");
-        if (!anchor?.href) return;
-        const action = noteLinkAction(anchor.href, window.location.href);
-        if (action === "stay") return;
-        event.preventDefault();
-        if (action === "open") void openExternalUrl(anchor.href).catch(() => undefined);
-      }}
-      dangerouslySetInnerHTML={{ __html: html }}
-    />
+          if (action === "open") void openExternalUrl(anchor.href).catch(() => undefined);
+        }}
+        dangerouslySetInnerHTML={{ __html: html }}
+      />
+    </CopyOnSelect>
   );
 }

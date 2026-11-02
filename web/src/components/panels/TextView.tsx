@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { useTabSession, wsUrl } from "../../api";
+import { CopyOnSelect } from "../CopyOnSelect";
 
 export function TextView({ path, text }: { path?: string; text?: string }) {
   if (text !== undefined) return <StaticText text={text} />;
@@ -8,7 +9,7 @@ export function TextView({ path, text }: { path?: string; text?: string }) {
 
 function StaticText({ text }: { text: string }) {
   if (text.includes("\u0000")) return <div className="empty">This file is not text.</div>;
-  return <pre className="file-text">{text}</pre>;
+  return <TextBody text={text} />;
 }
 
 function WatchedText({ path }: { path: string }) {
@@ -53,5 +54,13 @@ function WatchedText({ path }: { path: string }) {
   if (error) return <div className="empty">{error}</div>;
   if (missing) return <div className="empty">File not found: {path}</div>;
   if (text.includes("\u0000")) return <div className="empty">This file is not text.</div>;
-  return <pre className="file-text">{text}</pre>;
+  return <TextBody text={text} />;
+}
+
+function TextBody({ text }: { text: string }) {
+  return (
+    <CopyOnSelect>
+      <pre className="file-text">{text}</pre>
+    </CopyOnSelect>
+  );
 }

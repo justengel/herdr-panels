@@ -389,8 +389,8 @@ impl VisitArrange {
 
 /// Two panels sit side by side. Three or more use a grid unless the caller chose a direction.
 pub fn choose_arrange(count: usize, requested: Option<&str>) -> Result<VisitArrange, &'static str> {
-    if count > 6 {
-        return Err("a visit can show at most 6 panels");
+    if count == 0 {
+        return Err("a visit needs at least one panel");
     }
     match requested.map(str::trim).filter(|value| !value.is_empty()) {
         None => Ok(if count >= 3 {
@@ -453,24 +453,7 @@ pub fn visit_weights(
             if !sizes.is_empty() {
                 return Err("size is for a row or a column");
             }
-            let column_count = if count <= 4 { 2 } else { 3 };
-            let row_count = count.div_ceil(column_count);
-            let columns = if columns.is_empty() {
-                vec![1.0; column_count]
-            } else if columns.len() != column_count {
-                return Err("columns has one weight per column");
-            } else {
-                columns.to_vec()
-            };
-            let rows = if rows.is_empty() {
-                vec![1.0; row_count]
-            } else if rows.len() != row_count {
-                return Err("rows has one weight per row");
-            } else {
-                rows.to_vec()
-            };
-            positive(&columns)?;
-            positive(&rows)?;
+            let (columns, rows) = grid_tracks(count, columns, rows)?;
             Ok(VisitWeights {
                 sizes: Vec::new(),
                 columns,
@@ -489,6 +472,43 @@ fn positive(values: &[f64]) -> Result<(), &'static str> {
     } else {
         Ok(())
     }
+}
+
+/// Caller track lengths are the grid. Omitted tracks grow with the panel count.
+fn grid_tracks(
+    count: usize,
+    columns: &[f64],
+    rows: &[f64],
+) -> Result<(Vec<f64>, Vec<f64>), &'static str> {
+    let (column_count, row_count) = if columns.is_empty() && rows.is_empty() {
+        let column_count = (count as f64).sqrt().ceil() as usize;
+        let column_count = column_count.max(1);
+        (column_count, count.div_ceil(column_count))
+    } else if rows.is_empty() {
+        let column_count = columns.len().max(1);
+        (column_count, count.div_ceil(column_count))
+    } else if columns.is_empty() {
+        let row_count = rows.len().max(1);
+        (count.div_ceil(row_count), row_count)
+    } else {
+        (columns.len(), rows.len())
+    };
+    if column_count == 0 || row_count == 0 || column_count.saturating_mul(row_count) < count {
+        return Err("more panels than cells");
+    }
+    let columns = if columns.is_empty() {
+        vec![1.0; column_count]
+    } else {
+        columns.to_vec()
+    };
+    let rows = if rows.is_empty() {
+        vec![1.0; row_count]
+    } else {
+        rows.to_vec()
+    };
+    positive(&columns)?;
+    positive(&rows)?;
+    Ok((columns, rows))
 }
 
 #[derive(Debug)]
@@ -970,10 +990,7 @@ mod tests {
             choose_arrange(3, Some("column")).unwrap(),
             VisitArrange::Column
         );
-        assert_eq!(
-            choose_arrange(7, None).unwrap_err(),
-            "a visit can show at most 6 panels"
-        );
+        assert_eq!(choose_arrange(7, None).unwrap(), VisitArrange::Grid);
         assert_eq!(
             choose_arrange(2, Some("diagonal")).unwrap_err(),
             "arrange is row, column, or grid"
@@ -1006,6 +1023,12 @@ mod tests {
             visit_weights(1, VisitArrange::Row, &[2.0], &[], &[]).unwrap_err(),
             "a single panel has no size"
         );
+        assert_eq!(
+            visit_weights(5, VisitArrange::Grid, &[], &[1.0], &[1.0]).unwrap_err(),
+            "more panels than cells"
+        );
+        let wide = visit_weights(7, VisitArrange::Grid, &[], &[], &[]).unwrap();
+        assert_eq!(wide.columns.len() * wide.rows.len() >= 7, true);
         assert_eq!(
             visit_weights(2, VisitArrange::Column, &[], &[2.0], &[]).unwrap_err(),
             "columns and rows are for a grid"

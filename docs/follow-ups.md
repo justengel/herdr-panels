@@ -77,7 +77,7 @@ The window is in the release archive. Tauri packaging is still off (`bundle.acti
 
 ### Code signing
 
-The archives are unsigned on purpose. Windows SmartScreen and macOS Gatekeeper will warn. A certificate costs money.
+The archives are unsigned on purpose. Signing stays out. Windows SmartScreen and macOS Gatekeeper will warn. A certificate costs money. A file with this name can be a different program. A checkout build runs whatever is in that checkout. An agent that can edit the checkout and rebuild can change the script inside a website opened in a browser panel. Do not sign into an account you care about in a browser panel of a binary you did not build, or of a checkout an agent is editing.
 
 ### A test against a live Herdr
 

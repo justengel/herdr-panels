@@ -10,7 +10,6 @@ interface Props {
   plugins: PluginInfo[];
   selectedId: string | null;
   element: { panelId: string; tag: string; text: string } | null;
-  zoomedId: string | null;
   chatTarget: string;
   splitHerdr: boolean;
   onSplitHerdr: (value: boolean) => void;
@@ -20,7 +19,6 @@ interface Props {
   onConfig: (id: string, panel: PanelConfig) => void;
   onSplit: (id: string, direction: "row" | "column") => void;
   onClose: (id: string) => void;
-  onZoom: (id: string | null) => void;
   onAdd: (chatId: string, attachment: Attachment) => void;
   onOpenChat: (id: string, attachment: Attachment) => void;
 }
@@ -84,9 +82,6 @@ export function DesignBar(props: Props) {
             </button>
             <button type="button" onClick={() => props.onClose(panel.id)}>
               Close
-            </button>
-            <button type="button" onClick={() => props.onZoom(props.zoomedId === panel.id ? null : panel.id)}>
-              {props.zoomedId === panel.id ? "Show the desk" : "Fill screen"}
             </button>
             {herdrPane ? (
               <label className="check">
@@ -180,7 +175,7 @@ function ConfigFields({
               onConfig(panelId, { ...panel, control: event.target.checked });
             }}
           />
-          Allow this panel to type into Herdr
+          Allow this panel to type into Herdr and drive browser panels
         </label>
         {controlHintVisible(
           plugins.find((item) => item.id === panel.plugin)?.permissions,
@@ -188,7 +183,7 @@ function ConfigFields({
           controlHintSeen(panel.plugin),
         ) ? (
           <p className="design-hint">
-            This plugin can focus a pane and type into Herdr. Turn on control. This note stays until you do.
+            This checkbox lets the plugin type into Herdr and drive a browser panel. Turn on control. This note stays until you do.
           </p>
         ) : null}
       </>

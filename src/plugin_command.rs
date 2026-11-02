@@ -203,10 +203,7 @@ mod tests {
     use std::fs;
 
     fn scratch(name: &str) -> PathBuf {
-        let root = std::env::temp_dir().join(format!(
-            "hwp-cmd-{name}-{}",
-            std::process::id()
-        ));
+        let root = std::env::temp_dir().join(format!("hwp-cmd-{name}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).unwrap();
         root
@@ -233,8 +230,14 @@ mod tests {
         fs::create_dir_all(&nested).unwrap();
         fs::create_dir_all(&elsewhere).unwrap();
         let roots = vec![project.clone()];
-        assert_eq!(cwd_allowed(&project, &roots).unwrap(), project.canonicalize().unwrap());
-        assert_eq!(cwd_allowed(&nested, &roots).unwrap(), nested.canonicalize().unwrap());
+        assert_eq!(
+            cwd_allowed(&project, &roots).unwrap(),
+            project.canonicalize().unwrap()
+        );
+        assert_eq!(
+            cwd_allowed(&nested, &roots).unwrap(),
+            nested.canonicalize().unwrap()
+        );
         let outside = cwd_allowed(&elsewhere, &roots).unwrap_err();
         assert!(outside.contains("open project"), "{outside}");
         let _ = fs::remove_dir_all(&root);

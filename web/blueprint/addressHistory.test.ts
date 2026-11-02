@@ -11,8 +11,8 @@ describe("address history", () => {
   });
 
   it("pushes an address that changed outside the bar so Back can return", () => {
-    const noted = noteAddress(start, "C:\\Users\\jteng", false);
-    expect(noted).toEqual({ entries: ["C:\\Users", "C:\\Users\\jteng"], index: 1 });
+    const noted = noteAddress(start, "C:\\Users\\me", false);
+    expect(noted).toEqual({ entries: ["C:\\Users", "C:\\Users\\me"], index: 1 });
     expect(noted.entries[noted.index - 1]).toBe("C:\\Users");
   });
 

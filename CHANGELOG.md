@@ -4,6 +4,8 @@
 
 The terminal scrollbar uses the pane’s scrollback length and how far the view sits above the live screen. A wheel notch moves the same number of lines up and down. Settings, on the Panels tab, has Terminal wheel lines for that count. Jumping back to the live screen, including Ctrl+End, leaves the thumb at the bottom of that range.
 
+Agent control is the Spaces menu switch for reading, typing, clicking, and screenshots. The CLI and the API share it. It starts on. The person turns it off from that menu, and `herdr-panels access off` does the same. Turning it back on is only from the desktop window.
+
 ## 0.1.13 - 2026-10-30
 
 In the agents list, a space with more than one Herdr tab shows that tab's name beside the space, such as `herdr-panels · general`. A space with one tab shows only the space name.

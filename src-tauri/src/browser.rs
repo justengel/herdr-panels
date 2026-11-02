@@ -1,6 +1,9 @@
 use std::collections::HashMap;
+use std::io::{Read, Write};
+use std::net::TcpStream;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
+use std::time::Duration;
 
 use herdr_panels::external_link::external_http_url;
 use tauri::webview::{NewWindowResponse, PageLoadEvent, Webview};
@@ -17,6 +20,16 @@ struct Slot {
     view: Webview,
     generation: u64,
     shown: bool,
+    /// The native window has holes cut for a menu. Cleared when the menu closes.
+    clipped: bool,
+}
+
+#[derive(Clone, Copy, serde::Deserialize)]
+struct CssBox {
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
 }
 
 pub struct BrowserHost {
@@ -64,6 +77,47 @@ pub fn scale_bounds(x: f64, y: f64, width: f64, height: f64, zoom: f64) -> (f64,
         return (x, y, width, height);
     }
     (x * zoom, y * zoom, width * zoom, height * zoom)
+}
+
+/// Menu rectangles in the child window's own pixels. The window keeps its full size.
+fn menu_holes(page: CssBox, client_width: i32, client_height: i32, cuts: &[CssBox]) -> Vec<(i32, i32, i32, i32)> {
+    if client_width < 2 || client_height < 2 || page.width < 2.0 || page.height < 2.0 {
+        return Vec::new();
+    }
+    let scale_x = client_width as f64 / page.width;
+    let scale_y = client_height as f64 / page.height;
+    let mut holes = Vec::new();
+    for cut in cuts {
+        if ![cut.x, cut.y, cut.width, cut.height].into_iter().all(f64::is_finite) {
+            continue;
+        }
+        if cut.width < 1.0 || cut.height < 1.0 {
+            continue;
+        }
+        let left_css = cut.x.max(page.x);
+        let top_css = cut.y.max(page.y);
+        let right_css = (cut.x + cut.width).min(page.x + page.width);
+        let bottom_css = (cut.y + cut.height).min(page.y + page.height);
+        if right_css <= left_css || bottom_css <= top_css {
+            continue;
+        }
+        let left = window_px((left_css - page.x) * scale_x, client_width, false);
+        let top = window_px((top_css - page.y) * scale_y, client_height, false);
+        let right = window_px((right_css - page.x) * scale_x, client_width, true);
+        let bottom = window_px((bottom_css - page.y) * scale_y, client_height, true);
+        if right - left >= 1 && bottom - top >= 1 {
+            holes.push((left, top, right - left, bottom - top));
+        }
+    }
+    holes
+}
+
+fn window_px(value: f64, limit: i32, ceil: bool) -> i32 {
+    if !value.is_finite() || limit < 1 {
+        return 0;
+    }
+    let rounded = if ceil { value.ceil() } else { value.floor() };
+    rounded.clamp(0.0, limit as f64) as i32
 }
 
 fn select_boot() -> String {
@@ -124,6 +178,60 @@ fn place_view(view: &Webview, x: f64, y: f64, width: f64, height: f64, shown: &m
     Ok(())
 }
 
+/// Cut menu rectangles out of the native browser window. Resizing the window would reflow the site.
+fn sync_menu_clip(view: &Webview, page: CssBox, cuts: Vec<CssBox>, clipped: &mut bool) {
+    let punch = cuts.iter().any(|cut| cut.width >= 1.0 && cut.height >= 1.0);
+    if !punch && !*clipped {
+        return;
+    }
+    *clipped = punch;
+    let _ = view.with_webview(move |platform| {
+        clip_platform_webview(&platform, page, &cuts);
+    });
+}
+
+fn clip_platform_webview(platform: &tauri::webview::PlatformWebview, page: CssBox, cuts: &[CssBox]) {
+    #[cfg(windows)]
+    unsafe {
+        use windows::Win32::Foundation::{HWND, RECT};
+        use windows::Win32::Graphics::Gdi::{
+            CombineRgn, CreateRectRgn, DeleteObject, SetWindowRgn, HGDIOBJ, RGN_DIFF,
+        };
+        use windows::Win32::UI::WindowsAndMessaging::GetClientRect;
+
+        let mut hwnd = HWND(std::ptr::null_mut());
+        if platform.controller().ParentWindow(&mut hwnd).is_err() || hwnd.0.is_null() {
+            return;
+        }
+        let mut client = RECT::default();
+        if GetClientRect(hwnd, &mut client).is_err() {
+            return;
+        }
+        let holes = menu_holes(page, client.right, client.bottom, cuts);
+        if holes.is_empty() {
+            let _ = SetWindowRgn(hwnd, None, true);
+            return;
+        }
+        let full = CreateRectRgn(0, 0, client.right, client.bottom);
+        if full.0.is_null() {
+            return;
+        }
+        for (x, y, width, height) in &holes {
+            let piece = CreateRectRgn(*x, *y, x + width, y + height);
+            if piece.0.is_null() {
+                continue;
+            }
+            CombineRgn(Some(full), Some(full), Some(piece), RGN_DIFF);
+            let _ = DeleteObject(HGDIOBJ(piece.0));
+        }
+        if SetWindowRgn(hwnd, Some(full), true) == 0 {
+            let _ = DeleteObject(HGDIOBJ(full.0));
+        }
+    }
+    #[cfg(not(windows))]
+    let _ = (platform, page, cuts);
+}
+
 #[tauri::command]
 async fn place_browser(
     app: AppHandle,
@@ -136,9 +244,14 @@ async fn place_browser(
     height: f64,
     visible: bool,
     generation: u64,
+    locked: bool,
+    space: String,
+    cuts: Vec<CssBox>,
 ) -> Result<(), String> {
+    let _ = (locked, space);
     let parsed = browser_target(&label, &url)?;
     finite_box(x, y, width, height)?;
+    let page = CssBox { x, y, width, height };
     let zoom = current_zoom(&host);
     let content_zoom = panel_content_zoom(&host, &label);
     let (x, y, width, height) = scale_bounds(x, y, width, height, zoom);
@@ -154,6 +267,9 @@ async fn place_browser(
             slot.url = target;
         }
         place_view(&slot.view, x, y, width, height, &mut slot.shown, visible)?;
+        let mut clipped = slot.clipped;
+        sync_menu_clip(&slot.view, page, cuts, &mut clipped);
+        slot.clipped = clipped;
         return Ok(());
     }
     if !visible || width < 2.0 || height < 2.0 {
@@ -164,29 +280,37 @@ async fn place_browser(
         .ok_or_else(|| "the desktop window is not open".to_string())?;
     let boot = select_boot();
     let opener = app.clone();
+    let panel_id = label
+        .strip_prefix("browser-")
+        .unwrap_or("")
+        .to_string();
+    let builder = tauri::webview::WebviewBuilder::new(&label, tauri::WebviewUrl::External(parsed.clone()))
+        .initialization_script(boot)
+        .on_navigation(move |url| {
+            browser_panel_link(url.as_str()) == LinkNavigation::Stay
+                && navigation_permitted(&panel_id, url.as_str())
+        })
+        .on_new_window(move |url, _features| {
+            respond_to_new_window(&opener, &url);
+            NewWindowResponse::Deny
+        })
+        .on_page_load(|webview, payload| {
+            if payload.event() != PageLoadEvent::Finished {
+                return;
+            }
+            let host = webview.state::<BrowserHost>();
+            let scale = panel_content_zoom(&host, webview.label());
+            if let Err(err) = webview.eval(browser_page_zoom(scale)) {
+                eprintln!("browser zoom: {err}");
+            }
+            if !host.selecting.load(Ordering::Relaxed) {
+                return;
+            }
+            let _ = webview.eval(select_on());
+        });
     let view = window
         .add_child(
-            tauri::webview::WebviewBuilder::new(&label, tauri::WebviewUrl::External(parsed))
-                .initialization_script(boot)
-                .on_navigation(|url| browser_panel_link(url.as_str()) == LinkNavigation::Stay)
-                .on_new_window(move |url, _features| {
-                    respond_to_new_window(&opener, &url);
-                    NewWindowResponse::Deny
-                })
-                .on_page_load(|webview, payload| {
-                    if payload.event() != PageLoadEvent::Finished {
-                        return;
-                    }
-                    let host = webview.state::<BrowserHost>();
-                    let scale = panel_content_zoom(&host, webview.label());
-                    if let Err(err) = webview.eval(browser_page_zoom(scale)) {
-                        eprintln!("browser zoom: {err}");
-                    }
-                    if !host.selecting.load(Ordering::Relaxed) {
-                        return;
-                    }
-                    let _ = webview.eval(select_on());
-                }),
+            builder,
             LogicalPosition::new(x, y),
             LogicalSize::new(width, height),
         )
@@ -194,6 +318,8 @@ async fn place_browser(
     if let Err(err) = view.eval(browser_page_zoom(content_zoom)) {
         eprintln!("browser zoom: {err}");
     }
+    let mut clipped = false;
+    sync_menu_clip(&view, page, cuts, &mut clipped);
     #[cfg(windows)]
     {
         use windows::Win32::Foundation::HWND;
@@ -212,6 +338,7 @@ async fn place_browser(
             view,
             generation,
             shown: true,
+            clipped,
         },
     );
     Ok(())
@@ -301,6 +428,33 @@ fn set_desk_prefix(ctrl: bool, alt: bool, shift: bool, meta: bool, key: String) 
     Ok(())
 }
 
+/// Run one host-built script in a child webview. The page cannot call this.
+#[tauri::command]
+async fn eval_browser(host: State<'_, BrowserHost>, label: String, script: String) -> Result<(), String> {
+    if !label.starts_with("browser-")
+        || label.len() > "browser-".len() + 49
+        || !label
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')
+    {
+        return Err("browser label is invalid".into());
+    }
+    let script = script.trim();
+    if script.len() > 200_000
+        || !(script.starts_with("window.__hwpDrive(")
+            || script == "history.back()"
+            || script == "history.forward()"
+            || script == "location.reload()")
+    {
+        return Err("that browser script is not allowed".into());
+    }
+    let guard = host.slots.lock().map_err(|_| "browser host is locked".to_string())?;
+    let slot = guard
+        .get(&label)
+        .ok_or_else(|| "that browser panel is not open".to_string())?;
+    slot.view.eval(script).map_err(|err| err.to_string())
+}
+
 #[tauri::command]
 async fn set_browser_select(host: State<'_, BrowserHost>, enabled: bool) -> Result<(), String> {
     host.selecting.store(enabled, Ordering::Relaxed);
@@ -367,6 +521,82 @@ fn main_window_link(raw: &str, ports: &[u16]) -> LinkNavigation {
     }
 }
 
+static NAV_WARNED: AtomicBool = AtomicBool::new(false);
+
+/// Ask the viewer whether this panel may open the URL. A failed check leaves the page alone.
+fn navigation_permitted(panel_id: &str, url: &str) -> bool {
+    if external_http_url(url).is_err() {
+        return false;
+    }
+    if let Some(config) = viewer_config_dir() {
+        if herdr_panels::panel_lock::authoritative(&config) {
+            return herdr_panels::site_lock::navigation_allowed_anywhere(&config, panel_id, url);
+        }
+    }
+    match navigation_answer(panel_id, url) {
+        Some(allow) => allow,
+        None => {
+            if NAV_WARNED
+                .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+                .is_ok()
+            {
+                eprintln!("browser site check is unavailable; panel navigation is not filtered");
+            }
+            true
+        }
+    }
+}
+
+fn viewer_config_dir() -> Option<std::path::PathBuf> {
+    std::env::var_os("HERDR_PANELS_CONFIG")
+        .map(std::path::PathBuf::from)
+        .filter(|path| !path.as_os_str().is_empty())
+        .or_else(|| herdr_panels::paths::app_config_dir().ok())
+}
+
+fn navigation_answer(panel_id: &str, url: &str) -> Option<bool> {
+    let base = std::env::var("HERDR_PANELS_URL").unwrap_or_else(|_| VIEWER.to_string());
+    let base = base.trim().trim_end_matches('/').to_string();
+    let config = viewer_config_dir()?;
+    let token = herdr_panels::auth::session_token(&config).ok()?;
+    let panel = url::form_urlencoded::byte_serialize(panel_id.as_bytes()).collect::<String>();
+    let address = url::form_urlencoded::byte_serialize(url.as_bytes()).collect::<String>();
+    let path = format!("/api/browser-navigation?panelId={panel}&url={address}");
+    let parsed = url::Url::parse(&base).ok()?;
+    let host = parsed.host_str()?.to_string();
+    let port = parsed.port_or_known_default()?;
+    let mut stream = TcpStream::connect((host.as_str(), port)).ok()?;
+    stream.set_read_timeout(Some(Duration::from_millis(400))).ok()?;
+    stream.set_write_timeout(Some(Duration::from_millis(400))).ok()?;
+    let request = format!(
+        "GET {path} HTTP/1.1\r\nHost: {host}:{port}\r\nAuthorization: Bearer {token}\r\nConnection: close\r\n\r\n"
+    );
+    stream.write_all(request.as_bytes()).ok()?;
+    let mut buf = Vec::new();
+    let mut chunk = [0u8; 1024];
+    loop {
+        match stream.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(read) => {
+                buf.extend_from_slice(&chunk[..read]);
+                if buf.len() > 8_192 {
+                    break;
+                }
+            }
+            Err(_) => break,
+        }
+    }
+    let text = String::from_utf8_lossy(&buf);
+    let body = text.split("\r\n\r\n").nth(1).unwrap_or("");
+    if body.contains("\"allow\":true") || body.contains("\"allow\": true") {
+        Some(true)
+    } else if body.contains("\"allow\":false") || body.contains("\"allow\": false") {
+        Some(false)
+    } else {
+        None
+    }
+}
+
 fn browser_panel_link(raw: &str) -> LinkNavigation {
     if external_http_url(raw).is_ok() {
         LinkNavigation::Stay
@@ -423,6 +653,30 @@ fn allow_main_navigation(app: &AppHandle, url: &Url) -> bool {
     }
 }
 
+fn desk_page(webview: &Webview) -> Result<(), String> {
+    if webview.label() == "main" {
+        Ok(())
+    } else {
+        Err(herdr_panels::desk_gate::ENABLE_REFUSED.to_string())
+    }
+}
+
+/// The main page asks the viewer to turn Agent control on. A browser panel cannot.
+#[tauri::command]
+async fn set_cli_access(webview: Webview) -> Result<(), String> {
+    desk_page(&webview)?;
+    herdr_panels::desk_gate::enable_from_desk().await
+}
+
+/// Approve or cancel an unlock. Yes is refused unless this window holds the desk grant.
+#[tauri::command]
+async fn answer_panel_unlock(webview: Webview, id: String, yes: bool) -> Result<(), String> {
+    if webview.label() != "main" {
+        return Err(herdr_panels::desk_gate::UNLOCK_REFUSED.to_string());
+    }
+    herdr_panels::desk_gate::answer_unlock(&id, yes).await
+}
+
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
@@ -430,13 +684,16 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             place_browser,
             close_browser,
+            eval_browser,
             set_browser_select,
             set_display_zoom,
             set_browser_zoom,
             cursor_place,
             set_desk_prefix,
             set_frame_focus,
-            open_external
+            open_external,
+            set_cli_access,
+            answer_panel_unlock
         ])
         .setup(|app| {
             let Some(config) = app
@@ -1149,6 +1406,31 @@ mod browser_wheel {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_menu_cuts_a_hole_and_leaves_the_page_size_alone() {
+        let page = CssBox {
+            x: 100.0,
+            y: 80.0,
+            width: 600.0,
+            height: 400.0,
+        };
+        let outside = CssBox {
+            x: 800.0,
+            y: 80.0,
+            width: 180.0,
+            height: 240.0,
+        };
+        assert!(menu_holes(page, 600, 400, &[outside]).is_empty());
+        let menu = CssBox {
+            x: 500.0,
+            y: 80.0,
+            width: 200.0,
+            height: 240.0,
+        };
+        assert_eq!(menu_holes(page, 600, 400, &[menu]), vec![(400, 0, 200, 240)]);
+        assert_eq!(menu_holes(page, 900, 600, &[menu]), vec![(600, 0, 300, 360)]);
+    }
 
     #[test]
     fn browser_panels_are_placed_in_window_pixels() {

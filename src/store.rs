@@ -16,7 +16,19 @@ pub struct Settings {
     /// Config file format. Migrations in `migrate` advance this.
     #[serde(default)]
     pub schema: u32,
+    /// When true, the CLI and any holder of the viewer token may read panels and drive them.
+    /// Arranging the desk stays available either way. A locked panel still refuses a read or a drive.
+    /// Missing means on. An explicit false is a choice from the Spaces menu or `access off`.
+    #[serde(default = "default_agent_access")]
+    pub agent_access: bool,
 }
+
+fn default_agent_access() -> bool {
+    true
+}
+
+pub const AGENT_ACCESS_OFF: &str =
+    "Agent control is off. The CLI and the API can arrange panels. Turn on Agent control to read or drive them.";
 
 impl Default for Settings {
     fn default() -> Self {
@@ -24,6 +36,7 @@ impl Default for Settings {
             active_layout: "side-by-side".into(),
             content_roots: Vec::new(),
             schema: 0,
+            agent_access: true,
         }
     }
 }
@@ -60,6 +73,18 @@ pub fn save_settings(config_dir: &Path, settings: &Settings) -> anyhow::Result<(
     let bytes = serde_json::to_vec_pretty(settings).context("encoding settings")?;
     write_atomic(&config_dir.join("settings.json"), &with_newline(bytes))
         .context("writing settings.json")
+}
+
+pub fn agent_access_on(config_dir: &Path) -> bool {
+    load_settings(config_dir)
+        .map(|settings| settings.agent_access)
+        .unwrap_or(true)
+}
+
+pub fn set_agent_access(config_dir: &Path, enabled: bool) -> anyhow::Result<()> {
+    let mut settings = load_settings(config_dir)?;
+    settings.agent_access = enabled;
+    save_settings(config_dir, &settings)
 }
 
 pub fn list_layouts(config_dir: &Path) -> anyhow::Result<Vec<LayoutSummary>> {
@@ -180,6 +205,37 @@ mod tests {
         save_layout(&dir, &doc).unwrap();
         let loaded = load_layout(&dir, "side-by-side").unwrap();
         assert_eq!(loaded, doc);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn cli_access_starts_on_and_keeps_an_explicit_off() {
+        let parsed: Settings = serde_json::from_str(r#"{"activeLayout":"side-by-side"}"#).unwrap();
+        assert!(parsed.agent_access);
+        let off: Settings =
+            serde_json::from_str(r#"{"activeLayout":"side-by-side","agentAccess":false}"#).unwrap();
+        assert!(!off.agent_access);
+        let dir = std::env::temp_dir().join(format!(
+            "herdr-access-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        save_settings(
+            &dir,
+            &Settings {
+                active_layout: "side-by-side".into(),
+                ..Settings::default()
+            },
+        )
+        .unwrap();
+        assert!(agent_access_on(&dir));
+        set_agent_access(&dir, true).unwrap();
+        assert!(agent_access_on(&dir));
+        set_agent_access(&dir, false).unwrap();
+        assert!(!agent_access_on(&dir));
         let _ = fs::remove_dir_all(&dir);
     }
 }

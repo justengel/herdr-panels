@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { openVisit, reuseVisit, type VisitSpace } from "../src/borrowPanel";
+import { leaveVisitPanel, openVisit, reuseVisit, type VisitSpace } from "../src/borrowPanel";
 import type { LayoutNode } from "../src/types";
 
 function space(id: string, label: string, root: LayoutNode, current = false): VisitSpace {
@@ -47,7 +47,7 @@ describe("a visit of several panels", () => {
     expect(grid.node.rows).toEqual([1, 1]);
     const three = openVisit(spaces, [{ panelId: "google" }, { panelId: "Notes" }, { panelId: "Agents" }]);
     if (!("node" in three) || three.node.type !== "grid") throw new Error("expected a three-up grid");
-    expect(three.node.cells[2]?.colSpan).toBe(2);
+    expect(three.node.cells[2]?.colSpan).toBe(1);
 
     expect(grid.node.cells.map((cell) => cell.node && cell.node.type === "panel" && cell.node.id)).toEqual([
       "panel-1",
@@ -128,5 +128,29 @@ describe("a visit of several panels", () => {
     expect(openVisit(spaces, [{ panelId: "google" }, { panelId: "Notes" }], "diagonal")).toEqual({
       error: "arrange is row, column, or grid",
     });
+  });
+
+  it("drops one panel and lets the rest of the row keep their weights", () => {
+    const opened = openVisit(
+      spaces,
+      [{ panelId: "google" }, { panelId: "Notes" }, { panelId: "Agents" }],
+      "row",
+      { sizes: [2, 1, 1] },
+    );
+    if (!("node" in opened)) throw new Error(opened.error);
+    expect(leaveVisitPanel(opened, "notes")).toEqual({
+      panels: [
+        { panelId: "panel-1", spaceId: "wH" },
+        { panelId: "agents", spaceId: "wG" },
+      ],
+      arrange: "row",
+      weights: { sizes: [2, 1] },
+    });
+    const dropped = leaveVisitPanel(opened, "panel-1");
+    if ("done" in dropped) throw new Error("expected the row to stay");
+    expect(dropped.weights).toEqual({ sizes: [1, 1] });
+    const only = openVisit(spaces, [{ panelId: "google" }]);
+    if (!("node" in only)) throw new Error(only.error);
+    expect(leaveVisitPanel(only, "panel-1")).toEqual({ done: true });
   });
 });

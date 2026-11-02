@@ -66,6 +66,17 @@
     context: () => call("context"),
     scrollPane: (paneId, direction, lines) => call("scrollPane", { paneId, direction, lines }),
     run: (command, args, cwd) => call("run", { command, args: args || [], cwd: cwd || "" }),
+    read: (panelId, options) => call("read", Object.assign({ panelId }, options || {})),
+    shot: (panelId, options) => call("shot", Object.assign({ panelId }, options || {})),
+    navigate: (panelId, url) => call("navigate", { panelId, url }),
+    wait: (panelId, options) => call("wait", Object.assign({ panelId }, options || {})),
+    click: (panelId, options) => call("click", Object.assign({ panelId }, options || {})),
+    fill: (panelId, options) => call("fill", Object.assign({ panelId }, options || {})),
+    key: (panelId, options) => call("key", Object.assign({ panelId }, options || {})),
+    scroll: (panelId, options) => call("scroll", Object.assign({ panelId }, options || {})),
+    back: (panelId) => call("back", { panelId }),
+    forward: (panelId) => call("forward", { panelId }),
+    reload: (panelId) => call("reload", { panelId }),
     openExternal: (url) => {
       let popup = null;
       try {

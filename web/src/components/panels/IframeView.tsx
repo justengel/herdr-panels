@@ -3,15 +3,15 @@ import { api, frameSrc } from "../../api";
 import {
   browserBlocked,
   browserBounds,
-  closeBrowser,
+  browserSlotKey,
   desktopHost,
-  fitAround,
   isRemotePage,
+  menuCuts,
   menuObstacles,
-  nextBrowserGeneration,
   placeBrowser,
 } from "../../desktopBrowser";
 import { panelZoom, subscribeZoom } from "../../displayZoom";
+import { browserLeader, dropBrowser, holdBrowser, useBrowserRole, useKeptIds, useVisitIds } from "../../browserPlace";
 
 interface Props {
   url: string;
@@ -33,24 +33,39 @@ function EmbeddedPage({ panelId, url, suspended }: { panelId: string; url: strin
   const hole = useRef<HTMLDivElement>(null);
   const suspendedRef = useRef(suspended);
   suspendedRef.current = suspended;
+  const ids = useVisitIds();
+  const keptIds = useKeptIds();
+  const role = useBrowserRole();
+  const place = browserLeader(role, ids, keptIds, panelId);
+  const leaderRef = useRef(place.leader);
+  const hideRef = useRef(place.hide);
+  leaderRef.current = place.leader;
+  hideRef.current = place.hide;
+  const lastRef = useRef("");
   const [note, setNote] = useState("Opening…");
 
   useEffect(() => {
+    lastRef.current = "";
+  }, [place.leader, place.hide, url]);
+
+  useEffect(() => {
     const label = `browser-${panelId}`;
-    const generation = nextBrowserGeneration();
+    const generation = holdBrowser(label);
     let stopped = false;
-    let last = "";
     let frame = 0;
     const tick = () => {
       frame = requestAnimationFrame(tick);
       const node = hole.current;
-      if (!node || stopped) return;
-      const page = browserBounds(node.getBoundingClientRect(), suspendedRef.current || browserBlocked());
-      const bounds = page ? fitAround(page, menuObstacles()) : null;
-      const key = bounds ? `${bounds.x},${bounds.y},${bounds.width},${bounds.height}` : "hidden";
-      if (key === last) return;
-      last = key;
-      void placeBrowser(label, url, bounds, generation).then(
+      if (!node || stopped || !leaderRef.current) return;
+      const bounds = browserBounds(
+        node.getBoundingClientRect(),
+        suspendedRef.current || hideRef.current || browserBlocked(),
+      );
+      const cuts = bounds ? menuCuts(bounds, menuObstacles()) : [];
+      const key = browserSlotKey(bounds, cuts);
+      if (key === lastRef.current) return;
+      lastRef.current = key;
+      void placeBrowser(label, url, bounds, generation, cuts).then(
         () => {
           if (stopped) return;
           setNote(bounds ? "" : "Hidden while the desk is using this area.");
@@ -75,7 +90,7 @@ function EmbeddedPage({ panelId, url, suspended }: { panelId: string; url: strin
       stopped = true;
       unsubscribe();
       cancelAnimationFrame(frame);
-      void closeBrowser(label, generation);
+      dropBrowser(label, generation);
     };
   }, [panelId, url]);
 

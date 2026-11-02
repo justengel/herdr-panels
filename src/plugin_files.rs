@@ -260,10 +260,13 @@ impl FileFeed {
     fn grants(&self) -> (bool, Vec<PathBuf>) {
         if let (Some(dir), Some(id)) = (&self.config_dir, &self.plugin_id) {
             return match crate::plugins::load_installed(dir, id) {
-                Ok(manifest) => (
-                    crate::plugin_grant::allows_files(&manifest.permissions),
-                    manifest.files,
-                ),
+                Ok(manifest) => {
+                    let manifest = crate::plugins::granted(dir, manifest);
+                    (
+                        crate::plugin_grant::allows_files(&manifest.permissions),
+                        manifest.files,
+                    )
+                }
                 Err(_) => (false, Vec::new()),
             };
         }

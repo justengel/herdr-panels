@@ -27,6 +27,7 @@ getrandom = { version = "0.2", features = ["std"] }
 include_dir = "0.7"
 mime_guess = "2"
 notify = "6"
+psl = "2"
 reqwest = "0.12"
 rfd = "0.15"
 serde = { version = "1", features = ["derive"] }

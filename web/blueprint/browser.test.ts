@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { browserBounds, fitAround, isRemotePage } from "../src/desktopBrowser";
+import { browserBounds, browserSlotKey, hideBrowserPanels, isRemotePage, menuCuts } from "../src/desktopBrowser";
 
 describe("a browser panel covers its own rectangle", () => {
   it("places a webview on the panel content", () => {
@@ -11,25 +11,28 @@ describe("a browser panel covers its own rectangle", () => {
     });
   });
 
-  it("hides the webview when a drag or dialog is covering the desk", () => {
+  it("hides a browser panel while a dialog is open", () => {
+    expect(hideBrowserPanels({ dragging: false, settings: false, dialog: true })).toBe(true);
+    expect(hideBrowserPanels({ dragging: false, settings: true, dialog: false })).toBe(true);
+    expect(hideBrowserPanels({ dragging: false, settings: false, dialog: false })).toBe(false);
     expect(browserBounds({ left: 10, top: 10, width: 400, height: 300 }, true)).toBeNull();
   });
 
-  it("keeps the page visible beside a right-click menu", () => {
+  it("covers a menu without shrinking the page", () => {
     const page = { x: 100, y: 80, width: 600, height: 400 };
-    expect(fitAround(page, [{ x: 800, y: 80, width: 180, height: 240 }])).toEqual(page);
-    expect(fitAround(page, [{ x: 120, y: 90, width: 200, height: 80 }])).toEqual({
-      x: 100,
-      y: 176,
-      width: 600,
-      height: 304,
-    });
-    expect(fitAround(page, [{ x: 110, y: 90, width: 180, height: 360 }])).toEqual({
-      x: 296,
-      y: 80,
-      width: 404,
-      height: 400,
-    });
+    expect(menuCuts(page, [{ x: 800, y: 80, width: 180, height: 240 }])).toEqual([]);
+    expect(menuCuts(page, [{ x: 520, y: 90, width: 200, height: 320 }])).toEqual([
+      { x: 520, y: 90, width: 180, height: 320 },
+    ]);
+    expect(
+      menuCuts(page, [
+        { x: 520, y: 90, width: 180, height: 280 },
+        { x: 300, y: 120, width: 200, height: 160 },
+      ]),
+    ).toEqual([
+      { x: 520, y: 90, width: 180, height: 280 },
+      { x: 300, y: 120, width: 200, height: 160 },
+    ]);
   });
 
   it("hides a sliver that cannot show a page", () => {
@@ -41,5 +44,11 @@ describe("a browser panel covers its own rectangle", () => {
     expect(isRemotePage("http://127.0.0.1:8080/app")).toBe(true);
     expect(isRemotePage("/proxy/http/127.0.0.1/")).toBe(false);
     expect(isRemotePage("notes/welcome.md")).toBe(false);
+  });
+
+  it("keeps the same browser panel when it is locked", () => {
+    const bounds = { x: 10, y: 20, width: 300, height: 200 };
+    expect(browserSlotKey(bounds)).toBe("10,20,300,200");
+    expect(browserSlotKey(null)).toBe("hidden");
   });
 });

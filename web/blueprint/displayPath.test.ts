@@ -11,17 +11,17 @@ import {
 
 describe("displayPath", () => {
   it("collapses home to ~ and expands it again", () => {
-    const home = "C:/Users/jteng";
-    expect(displayPath("C:/Users/jteng/projects/herdr-panels/notes/a.md", home)).toBe(
+    const home = "C:/Users/me";
+    expect(displayPath("C:/Users/me/projects/herdr-panels/notes/a.md", home)).toBe(
       "~/projects/herdr-panels/notes/a.md",
     );
     expect(expandDisplayPath("~/projects/herdr-panels/notes/a.md", home).replace(/\\/g, "/")).toBe(
-      "C:/Users/jteng/projects/herdr-panels/notes/a.md",
+      "C:/Users/me/projects/herdr-panels/notes/a.md",
     );
   });
 
   it("guesses a Windows home prefix", () => {
-    expect(guessHome("C:\\Users\\jteng\\projects\\x")).toMatch(/Users\/jteng$/i);
+    expect(guessHome("C:\\Users\\me\\projects\\x")).toMatch(/Users\/me$/i);
   });
 });
 
@@ -60,7 +60,7 @@ describe("middleEllipsis", () => {
 });
 
 describe("focused address", () => {
-  const stored = "C:/Users/jteng/projects/herdr-panels/examples/panels/charts.html";
+  const stored = "C:/Users/me/projects/herdr-panels/examples/panels/charts.html";
 
   it("uses the home shortcut when the field is focused", () => {
     expect(focusedAddress(stored)).toBe("~/projects/herdr-panels/examples/panels/charts.html");

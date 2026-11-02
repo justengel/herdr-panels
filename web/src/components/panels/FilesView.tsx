@@ -336,6 +336,20 @@ export function FilesView({
             >
               {menu.kind === "host" ? (
                 <>
+                  <button
+                    type="button"
+                    role="menuitemcheckbox"
+                    aria-checked={host.cliAccess}
+                    title="Lets an agent with the viewer token read panels, type into them, click them, and take screenshots. The CLI and the API use this same switch. Off leaves that token able to arrange the desk only. This window keeps working either way."
+                    onClick={() => {
+                      setMenu(null);
+                      host.toggleCliAccess();
+                    }}
+                  >
+                    <span className="menu-check">{host.cliAccess ? "✓" : ""}</span>
+                    Agent control
+                  </button>
+                  <div className="menu-rule" />
                   <button type="button" role="menuitem" onClick={() => { setMenu(null); host.openSettings(); }}>
                     settings
                   </button>

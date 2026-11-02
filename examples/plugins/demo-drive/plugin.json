@@ -1,0 +1,11 @@
+{
+  "id": "demo-drive",
+  "title": "Demo drive",
+  "apiVersion": 1,
+  "version": "0.1.0",
+  "entry": "index.html",
+  "description": "Visits one browser panel, then another, then navigates, waits, fills, and clicks.",
+  "permissions": ["browser:read", "browser:control", "panels:control", "herdr:control", "files:read"],
+  "files": ["${HOME}/herdr-panels-shots"],
+  "control": "default"
+}

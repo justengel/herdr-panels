@@ -107,7 +107,7 @@ function authHeaders(): Record<string, string> {
 }
 
 function sessionHeaders(): Record<string, string> {
-  return { "X-Herdr-Session": tabSession() };
+  return { "X-Herdr-Session": tabSession(), "X-Herdr-Panels-Desk": "1" };
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -145,6 +145,12 @@ export interface DeskSaveResult {
 }
 
 export const api = {
+  agentAccess: () => request<{ enabled: boolean }>("/api/agent-access"),
+  setAgentAccess: (enabled: boolean) =>
+    request<{ enabled: boolean }>("/api/agent-access", {
+      method: "POST",
+      body: JSON.stringify({ enabled }),
+    }),
   health: () => request<ViewerHealth>("/api/health"),
   bootstrap: () => request<Bootstrap>("/api/bootstrap"),
   runtime: () => request<RuntimeSnapshot>("/api/runtime"),
@@ -173,6 +179,20 @@ export const api = {
     request<{ text: string; truncated: boolean; revision: number }>(
       `/api/terminal/${encodeURIComponent(paneId)}/screen?source=${encodeURIComponent(source)}`,
     ),
+  panelLock: (panelId: string, spaceId: string) =>
+    request<{ locked: boolean }>(
+      `/api/panel-lock?panelId=${encodeURIComponent(panelId)}&spaceId=${encodeURIComponent(spaceId)}`,
+    ),
+  setPanelLock: (panelId: string, spaceId: string, locked: boolean) =>
+    request<{ ok: boolean; locked?: boolean }>("/api/panel-lock", {
+      method: "POST",
+      body: JSON.stringify({ panelId, spaceId, locked }),
+    }),
+  answerPanelUnlock: (id: string, yes: boolean) =>
+    request<void>("/api/panel-unlock-answer", {
+      method: "POST",
+      body: JSON.stringify({ id, yes }),
+    }),
   splitPane: (paneId: string, direction: "right" | "down") =>
     request<{ paneId: string }>("/api/terminal/split", {
       method: "POST",

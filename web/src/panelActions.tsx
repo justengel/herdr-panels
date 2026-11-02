@@ -15,6 +15,8 @@ export interface PanelActions {
   rename: (id: string, title: string) => void;
   /** Fill the screen with this panel, or show the whole desk when it already does. */
   fill: (id: string) => void;
+  /** Drop this panel from the visit. The panel itself stays where it was. */
+  leave: (id: string) => void;
   filledId: string | null;
 }
 

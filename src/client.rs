@@ -13,7 +13,7 @@ use crate::plugins;
     name = "herdr-panels",
     version,
     about = "Herdr viewer with installable HTML panels",
-    long_about = "herdr-panels starts the viewer and opens the desktop window when that program is installed, or a browser tab otherwise. When the viewer is already running, it opens the window and exits.\nherdr-panels server runs the viewer without opening a window.\nherdr-panels desktop opens the desktop window. On its own it starts a viewer when the address is closed, and that viewer stops when the window closes.\nherdr-panels install-launcher writes the application menu entry: a Linux desktop file, a Windows Start menu shortcut, or a macOS app in the home Applications folder.\nherdr-panels update downloads the latest GitHub release and replaces this program. When the desktop window is beside it, that program is replaced from the same release. A viewer that is already running is stopped and started again on the same address, and an open desktop window is opened again.\nherdr-panels panel, plugin, and token talk to that viewer or its config."
+    long_about = "herdr-panels starts the viewer and opens the desktop window when that program is installed, or a browser tab otherwise. When the viewer is already running, it opens the window and exits.\nherdr-panels server runs the viewer without opening a window.\nherdr-panels desktop opens the desktop window. On its own it starts a viewer when the address is closed, and that viewer stops when the window closes.\nherdr-panels install-launcher writes the application menu entry: a Linux desktop file, a Windows Start menu shortcut, or a macOS app in the home Applications folder.\nherdr-panels update downloads the latest GitHub release and replaces this program. When the desktop window is beside it, that program is replaced from the same release. A viewer that is already running is stopped and started again on the same address, and an open desktop window is opened again.\nherdr-panels panel, access, plugin, and token talk to that viewer or its config."
 )]
 struct ClientCli {
     /// Viewer URL. Defaults to the address recorded by the running server.
@@ -49,6 +49,11 @@ enum ClientCommand {
     Token {
         #[command(subcommand)]
         command: TokenCommand,
+    },
+    /// Show whether Agent control is on. The CLI and the API share this switch
+    Access {
+        /// off turns it off. Omit this to show the state. on is refused
+        state: Option<String>,
     },
 }
 
@@ -170,6 +175,44 @@ enum PanelCommand {
         #[arg(long)]
         id: Option<String>,
     },
+    /// Read a panel's text. Add --png to save a screenshot. Needs Agent control
+    Read {
+        /// Panel name or id
+        panel: String,
+        /// Absolute path for a PNG. The panel has to be open
+        #[arg(long)]
+        png: Option<String>,
+        /// Limit the read to this selector
+        #[arg(long)]
+        selector: Option<String>,
+    },
+    /// Type into a terminal panel. Needs Agent control
+    Type {
+        /// Panel name or id
+        panel: String,
+        /// Text to type
+        text: Option<String>,
+        /// A key to press, such as enter. Repeat for several keys
+        #[arg(long)]
+        key: Vec<String>,
+    },
+    /// Click, fill, or navigate a panel. Needs Agent control
+    Drive {
+        /// Panel name or id
+        panel: String,
+        /// navigate, wait, click, fill, key, scroll, back, forward, or reload
+        op: String,
+        #[arg(long)]
+        selector: Option<String>,
+        #[arg(long)]
+        text: Option<String>,
+        #[arg(long)]
+        value: Option<String>,
+        #[arg(long)]
+        key: Option<String>,
+        #[arg(long)]
+        url: Option<String>,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -207,6 +250,7 @@ pub async fn execute() -> anyhow::Result<()> {
             let token = crate::auth::session_token(&config_dir)?;
             panel_command(&base, &token, space, command).await
         }
+        ClientCommand::Access { state } => access_command(&config_dir, cli.url, state).await,
         ClientCommand::Plugin { command } => match command {
             PluginCommand::List => {
                 for plugin in plugins::list_plugins(&config_dir)? {
@@ -573,6 +617,171 @@ async fn panel_command(
             println!("{response}");
             Ok(())
         }
+        PanelCommand::Read {
+            panel,
+            png,
+            selector,
+        } => {
+            let mut path = format!("/api/agent/panels/{}", path_segment(&panel));
+            let mut query = url::form_urlencoded::Serializer::new(String::new());
+            if let Some(png) = &png {
+                query.append_pair("png", png);
+            }
+            if let Some(selector) = &selector {
+                query.append_pair("selector", selector);
+            }
+            let extra = query.finish();
+            if !extra.is_empty() {
+                path.push('?');
+                path.push_str(&extra);
+            }
+            let response = call(base, token, "GET", &path, None).await?;
+            println!("{response}");
+            Ok(())
+        }
+        PanelCommand::Type { panel, text, key } => {
+            let mut body = json!({});
+            if let Some(text) = text {
+                body["text"] = json!(text);
+            }
+            if !key.is_empty() {
+                body["keys"] = json!(key);
+            }
+            let response = call(
+                base,
+                token,
+                "POST",
+                &format!("/api/agent/panels/{}/write", path_segment(&panel)),
+                Some(body),
+            )
+            .await?;
+            println!("{response}");
+            Ok(())
+        }
+        PanelCommand::Drive {
+            panel,
+            op,
+            selector,
+            text,
+            value,
+            key,
+            url,
+        } => {
+            let response = call(
+                base,
+                token,
+                "POST",
+                &format!("/api/agent/panels/{}/drive", path_segment(&panel)),
+                Some(json!({
+                    "op": op,
+                    "selector": selector,
+                    "text": text,
+                    "value": value,
+                    "key": key,
+                    "url": url,
+                })),
+            )
+            .await?;
+            println!("{response}");
+            Ok(())
+        }
+    }
+}
+
+fn path_segment(value: &str) -> String {
+    url::form_urlencoded::byte_serialize(value.as_bytes())
+        .collect::<String>()
+        .replace('+', "%20")
+}
+
+async fn access_command(
+    config_dir: &std::path::Path,
+    url: Option<String>,
+    state: Option<String>,
+) -> anyhow::Result<()> {
+    let wanted = match state
+        .as_deref()
+        .map(str::trim)
+        .map(|value| value.to_ascii_lowercase())
+        .as_deref()
+    {
+        None | Some("") => None,
+        Some("on") => Some(true),
+        Some("off") => Some(false),
+        Some(_) => anyhow::bail!("access is on or off"),
+    };
+    if let Some(enabled) = wanted {
+        if enabled {
+            if let (Ok(base), Ok(token)) = (
+                server_url(config_dir, url),
+                crate::auth::session_token(config_dir),
+            ) {
+                match call(
+                    &base,
+                    &token,
+                    "POST",
+                    "/api/agent-access",
+                    Some(json!({ "enabled": true })),
+                )
+                .await
+                {
+                    Ok(_) => {
+                        print_access(true);
+                        return Ok(());
+                    }
+                    Err(err) => anyhow::bail!("{err}"),
+                }
+            }
+            anyhow::bail!("{}", crate::desk_gate::ENABLE_REFUSED);
+        }
+        if let (Ok(base), Ok(token)) = (
+            server_url(config_dir, url.clone()),
+            crate::auth::session_token(config_dir),
+        ) {
+            if call(
+                &base,
+                &token,
+                "POST",
+                "/api/agent-access",
+                Some(json!({ "enabled": false })),
+            )
+            .await
+            .is_ok()
+            {
+                print_access(false);
+                return Ok(());
+            }
+        }
+        crate::store::set_agent_access(config_dir, false)?;
+        print_access(false);
+        println!("The viewer was not running, so this applies the next time it starts.");
+        return Ok(());
+    }
+    if let (Ok(base), Ok(token)) = (
+        server_url(config_dir, url),
+        crate::auth::session_token(config_dir),
+    ) {
+        if let Ok(body) = call(&base, &token, "GET", "/api/agent-access", None).await {
+            let value: Value = serde_json::from_str(&body).unwrap_or(json!({ "enabled": true }));
+            print_access(
+                value
+                    .get("enabled")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(true),
+            );
+            return Ok(());
+        }
+    }
+    print_access(crate::store::agent_access_on(config_dir));
+    println!("The viewer is not running. This is the saved choice.");
+    Ok(())
+}
+
+fn print_access(enabled: bool) {
+    if enabled {
+        println!("Agent control is on. The CLI and the API can read panels and drive them.");
+    } else {
+        println!("Agent control is off. The CLI and the API can arrange panels.");
     }
 }
 
@@ -711,6 +920,13 @@ fn weight_list(raw: Option<String>) -> anyhow::Result<Vec<f64>> {
         bail!("a weight must be a positive number");
     }
     Ok(weights)
+}
+
+pub(crate) async fn request_desk_window(config_dir: &std::path::Path) -> anyhow::Result<()> {
+    let base = server_url(config_dir, None)?;
+    let token = crate::auth::session_token(config_dir)?;
+    call(&base, &token, "POST", "/api/desk-window", Some(json!({}))).await?;
+    Ok(())
 }
 
 pub fn record_server(config_dir: &std::path::Path, url: &str) -> anyhow::Result<()> {

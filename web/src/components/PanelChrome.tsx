@@ -7,6 +7,8 @@ import { useKeyedPanel } from "../deskKeyboard";
 import { desktopHost } from "../desktopBrowser";
 import { contentScaleStyle, PanelScaleProvider, usePanelZoom } from "../displayZoom";
 import { usePanelActions, usePanelDrag } from "../panelActions";
+import { api } from "../api";
+import { useDesk } from "../desk";
 
 interface Props {
   title: string;
@@ -42,10 +44,10 @@ interface Props {
   pinLabel?: string;
   onPin?: () => void;
   onClick?: (event: React.MouseEvent<HTMLElement>) => void;
-  /** A borrowed panel. Back dismisses the visit and does not close the original. */
-  onBack?: () => void;
+  /** Space this panel was borrowed from. Shown beside the title. */
   fromSpace?: string;
-  borrowed?: boolean;
+  /** This header is a visit. The corner leaves the visit instead of closing the panel. */
+  leaveVisit?: boolean;
   children: ReactNode;
 }
 
@@ -56,7 +58,7 @@ const EDGES: { edge: TabEdge; label: string }[] = [
   { edge: "right", label: "Tabs on right" },
 ];
 
-type FlyoutKind = "layout" | "plugins" | "panes" | "views";
+type FlyoutKind = "layout" | "plugins" | "panes" | "views" | "options";
 
 /** Delay before a nested flyout opens on hover (menus typically use ~200–400ms). */
 const FLYOUT_OPEN_MS = 220;
@@ -125,15 +127,36 @@ export function PanelChrome({
   pinLabel = "Pin…",
   onPin,
   onClick,
-  onBack,
   fromSpace,
-  borrowed = false,
+  leaveVisit = false,
   children,
 }: Props) {
   const panelActions = usePanelActions();
   const drag = usePanelDrag();
   const keyed = useKeyedPanel();
   const [menu, setMenu] = useState<{ left?: number; right?: number; top: number } | null>(null);
+  const [locked, setLocked] = useState(false);
+  const desk = useDesk();
+  useEffect(() => {
+    if (!panelId) return;
+    const space = desk.focusedWorkspaceId || "";
+    let stopped = false;
+    void api.panelLock(panelId, space).then(
+      (row) => {
+        if (!stopped) setLocked(row.locked);
+      },
+      () => undefined,
+    );
+    const onLock = (event: Event) => {
+      const detail = (event as CustomEvent<{ panelId?: string; locked?: boolean }>).detail;
+      if (detail?.panelId === panelId && typeof detail.locked === "boolean") setLocked(detail.locked);
+    };
+    window.addEventListener("herdr-panel-lock", onLock);
+    return () => {
+      stopped = true;
+      window.removeEventListener("herdr-panel-lock", onLock);
+    };
+  }, [panelId, desk.focusedWorkspaceId]);
   const [flyout, setFlyout] = useState<FlyoutKind | null>(null);
   const [flyoutBox, setFlyoutBox] = useState<FlyoutBox | null>(null);
   const flyoutAnchor = useRef<DOMRect | null>(null);
@@ -310,6 +333,18 @@ export function PanelChrome({
     };
   }, [menu]);
 
+  function toggleLock() {
+    if (!panelId) return;
+    const space = desk.focusedWorkspaceId || "";
+    const next = !locked;
+    void api.setPanelLock(panelId, space, next).then(
+      (row) => {
+        if (row.ok && typeof row.locked === "boolean") setLocked(row.locked);
+      },
+      () => undefined,
+    );
+  }
+
   function run(action: () => void) {
     choseRef.current = true;
     clearFlyoutTimers();
@@ -366,34 +401,6 @@ export function PanelChrome({
       ? { left: menu.left, right: menu.right, top: menu.top }
       : undefined;
 
-  if (onBack || borrowed) {
-    return (
-      <section className={classes} data-panel-id={panelId} data-kind={kind} data-type={panelType} tabIndex={-1}>
-        <header className="panel-header borrow-header">
-          <div className="panel-title">
-            <strong title={hint}>{title}</strong>
-            {fromSpace ? <span className="subtitle">from {fromSpace}</span> : null}
-          </div>
-          {onBack ? (
-            <button
-              type="button"
-              className="borrow-back"
-              onClick={(event) => {
-                event.stopPropagation();
-                onBack();
-              }}
-            >
-              Back
-            </button>
-          ) : null}
-        </header>
-        <PanelBody panelId={panelId} panelType={panelType}>
-          {children}
-        </PanelBody>
-      </section>
-    );
-  }
-
   return (
     <section
       className={classes}
@@ -415,6 +422,7 @@ export function PanelChrome({
             title="Drag onto a side to place this panel, or the middle to swap"
             onPointerDown={beginDrag}
           />
+          {locked ? <LockButton kind={panelType} onToggle={toggleLock} /> : null}
           <button
             ref={gearRef}
             type="button"
@@ -427,20 +435,7 @@ export function PanelChrome({
             <GearIcon />
           </button>
           <FillButton panelId={panelId} title={title} />
-          {canClose ? (
-            <button
-              type="button"
-              className="panel-close"
-              aria-label={`Close ${title}`}
-              title="Close panel"
-              onClick={(event) => {
-                event.stopPropagation();
-                if (panelId) panelActions.close(panelId);
-              }}
-            >
-              <CloseIcon />
-            </button>
-          ) : null}
+          <EndButton panelId={panelId} title={title} canClose={canClose} leaveVisit={leaveVisit} />
         </div>
       ) : (
         <header
@@ -457,12 +452,14 @@ export function PanelChrome({
           <div className="panel-title">
             <strong title={hint}>{title}</strong>
             {subtitle ? <span className="subtitle">{subtitle}</span> : null}
+            {fromSpace ? <span className="subtitle">from {fromSpace}</span> : null}
           </div>
           {config}
           <div className="panel-actions">
             {badge ? <span className={`badge ${badgeClass ?? ""}`}>{badge}</span> : null}
             {viewer ? <span className="panel-type">{viewer}</span> : null}
             {actions}
+            {locked ? <LockButton kind={panelType} onToggle={toggleLock} /> : null}
             <button
               ref={gearRef}
               type="button"
@@ -475,20 +472,7 @@ export function PanelChrome({
               <GearIcon />
             </button>
             <FillButton panelId={panelId} title={title} />
-            {canClose ? (
-              <button
-                type="button"
-                className="panel-close"
-                aria-label={`Close ${title}`}
-                title="Close panel"
-                onClick={(event) => {
-                  event.stopPropagation();
-                  if (panelId) panelActions.close(panelId);
-                }}
-              >
-                <CloseIcon />
-              </button>
-            ) : null}
+            <EndButton panelId={panelId} title={title} canClose={canClose} leaveVisit={leaveVisit} />
           </div>
         </header>
       )}
@@ -516,18 +500,6 @@ export function PanelChrome({
                 {contents}
                 <div className="menu-rule" />
                 <div className="menu-label">Panel</div>
-                <button
-                  type="button"
-                  role="menuitem"
-                  className="menu-flyout-trigger"
-                  aria-haspopup="menu"
-                  aria-expanded={flyout === "layout"}
-                  {...flyoutTrigger("layout")}
-                >
-                  <span className="menu-check" />
-                  <span className="menu-flyout-label">Layout</span>
-                  <span className="menu-chevron">›</span>
-                </button>
                 {showAddress ? (
                   <button
                     type="button"
@@ -541,18 +513,30 @@ export function PanelChrome({
                     Address bar
                   </button>
                 ) : null}
-                {allowPin && onPin ? (
-                  <button
-                    type="button"
-                    role="menuitem"
-                    className="menu-radio"
-                    onMouseEnter={scheduleCloseFlyout}
-                    onClick={() => run(() => onPin())}
-                  >
-                    <span className="menu-check" />
-                    {pinLabel}
-                  </button>
-                ) : null}
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="menu-flyout-trigger"
+                  aria-haspopup="menu"
+                  aria-expanded={flyout === "layout"}
+                  {...flyoutTrigger("layout")}
+                >
+                  <span className="menu-check" />
+                  <span className="menu-flyout-label">Layout</span>
+                  <span className="menu-chevron">›</span>
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="menu-flyout-trigger"
+                  aria-haspopup="menu"
+                  aria-expanded={flyout === "options"}
+                  {...flyoutTrigger("options")}
+                >
+                  <span className="menu-check" />
+                  <span className="menu-flyout-label">Options</span>
+                  <span className="menu-chevron">›</span>
+                </button>
 
                 {viewEntries.length > 0 ? (
                   <>
@@ -639,7 +623,7 @@ export function PanelChrome({
                   </>
                 ) : null}
 
-                {canClose ? (
+                {canClose && !leaveVisit ? (
                   <>
                     <div className="menu-rule menu-rule-strong" />
                     <button
@@ -655,6 +639,41 @@ export function PanelChrome({
                   </>
                 ) : null}
 
+                {flyout === "options" ? (
+                  <div
+                    ref={flyoutRef}
+                    className="panel-menu-flyout"
+                    role="menu"
+                    aria-label="Options"
+                    style={flyoutStyle(flyoutBox)}
+                    onMouseEnter={cancelCloseFlyout}
+                    onMouseLeave={scheduleCloseFlyout}
+                  >
+                    <div className="menu-label">Options</div>
+                    <button
+                      type="button"
+                      role="menuitemcheckbox"
+                      className="menu-radio"
+                      aria-checked={locked}
+                      title={lockTip(panelType, locked)}
+                      onClick={() => run(toggleLock)}
+                    >
+                      <span className="menu-check">{locked ? "✓" : ""}</span>
+                      Lock
+                    </button>
+                    {allowPin && onPin ? (
+                      <button
+                        type="button"
+                        role="menuitem"
+                        className="menu-radio"
+                        onClick={() => run(() => onPin())}
+                      >
+                        <span className="menu-check" />
+                        {pinLabel}
+                      </button>
+                    ) : null}
+                  </div>
+                ) : null}
                 {flyout === "layout" ? (
                   <div
                     ref={flyoutRef}
@@ -810,6 +829,52 @@ function MenuRow({
   );
 }
 
+const LOCK_TIP = "Lock this panel. Plugins and agents cannot read it or drive it. You still can.";
+const UNLOCK_TIP = "Unlock this panel. Plugins and agents you already granted will be able to read it and drive it again.";
+const LOCK_BROWSER_TIP =
+  "Lock this panel. Herdr Panels will not read it, drive it, or open this site in any panel. You can still use this panel.";
+const UNLOCK_BROWSER_TIP =
+  "Unlock this panel. Plugins and agents you already granted can read it, drive it, and open this site again.";
+
+function lockTip(kind: PanelConfig["type"], locked: boolean): string {
+  if (kind === "iframe") return locked ? UNLOCK_BROWSER_TIP : LOCK_BROWSER_TIP;
+  return locked ? UNLOCK_TIP : LOCK_TIP;
+}
+
+function LockButton({
+  kind,
+  onToggle,
+}: {
+  kind: PanelConfig["type"];
+  onToggle: () => void;
+}) {
+  const tip = lockTip(kind, true);
+  return (
+    <button
+      type="button"
+      className="panel-lock is-locked"
+      aria-pressed={true}
+      aria-label="Unlock"
+      title={tip}
+      onClick={(event) => {
+        event.stopPropagation();
+        onToggle();
+      }}
+    >
+      <LockedIcon />
+    </button>
+  );
+}
+
+function LockedIcon() {
+  return (
+    <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+      <rect x="3.25" y="7.25" width="9.5" height="6.25" rx="1.2" fill="none" stroke="currentColor" strokeWidth="1.5" />
+      <path d="M5.4 7.25V5.05a2.6 2.6 0 0 1 5.2 0V7.25" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+    </svg>
+  );
+}
+
 function GearIcon() {
   return (
     <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
@@ -856,6 +921,59 @@ function RestoreIcon() {
     <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
       <path fill="none" stroke="currentColor" strokeWidth="1.5" d="M5.25 2.75h8v8h-8z" />
       <path fill="none" stroke="currentColor" strokeWidth="1.5" d="M2.75 5.25h8v8h-8z" />
+    </svg>
+  );
+}
+
+function EndButton({
+  panelId,
+  title,
+  canClose,
+  leaveVisit,
+}: {
+  panelId?: string;
+  title: string;
+  canClose: boolean;
+  leaveVisit: boolean;
+}) {
+  const panelActions = usePanelActions();
+  if (leaveVisit && panelId) {
+    return (
+      <button
+        type="button"
+        className="panel-close"
+        aria-label={`No longer visit ${title}`}
+        title="No longer visit this panel"
+        onClick={(event) => {
+          event.stopPropagation();
+          panelActions.leave(panelId);
+        }}
+      >
+        <LeaveIcon />
+      </button>
+    );
+  }
+  if (!canClose) return null;
+  return (
+    <button
+      type="button"
+      className="panel-close"
+      aria-label={`Close ${title}`}
+      title="Close panel"
+      onClick={(event) => {
+        event.stopPropagation();
+        if (panelId) panelActions.close(panelId);
+      }}
+    >
+      <CloseIcon />
+    </button>
+  );
+}
+
+function LeaveIcon() {
+  return (
+    <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+      <path fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" d="M3.25 12.25h9.5" />
     </svg>
   );
 }

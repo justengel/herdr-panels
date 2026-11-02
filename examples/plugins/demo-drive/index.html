@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Demo drive</title>
+    <style>
+      :root { color-scheme: dark; }
+      body {
+        margin: 0;
+        padding: 22px 24px;
+        background: #101318;
+        color: #e7e1d6;
+        font: 14px/1.45 "Segoe UI", sans-serif;
+      }
+      p { color: #b7b1a6; }
+      button {
+        margin-top: 12px;
+        padding: 6px 10px;
+        border: 1px solid #2a3140;
+        border-radius: 8px;
+        background: #1a2030;
+        color: #e7e1d6;
+        font: inherit;
+        cursor: pointer;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Demo drive</h1>
+    <p id="status">Opens two pages, visits each, then fills a form.</p>
+    <button type="button" id="run">Run demo</button>
+    <script>
+      const ONE = "https://example.com";
+      const TWO = "https://httpbin.org/forms/post";
+      const status = document.getElementById("status");
+
+      function panelsOf(listed) {
+        return Array.isArray(listed && listed.panels) ? listed.panels : [];
+      }
+
+      async function ensure(url, title) {
+        let panels = panelsOf(await window.herdrPanels.listPanels());
+        let found = panels.find((panel) => panel.type === "iframe" && panel.summary === url);
+        if (found) return found;
+        await window.herdrPanels.openPanel(url, { title });
+        panels = panelsOf(await window.herdrPanels.listPanels());
+        found = panels.find((panel) => panel.type === "iframe" && panel.summary === url);
+        if (!found) throw new Error("The browser panel did not open.");
+        return found;
+      }
+
+      document.getElementById("run").addEventListener("click", () => {
+        status.textContent = "Running…";
+        Promise.resolve()
+          .then(async () => {
+            const first = await ensure(ONE, "Demo one");
+            const second = await ensure(TWO, "Demo two");
+            await window.herdrPanels.visitPanel(first.id);
+            await window.herdrPanels.visitPanel(second.id);
+            await window.herdrPanels.navigate(second.id, TWO);
+            await window.herdrPanels.wait(second.id, { selector: "input[name='custname']", timeout: 8000 });
+            await window.herdrPanels.fill(second.id, { selector: "input[name='custname']", value: "Herdr" });
+            await window.herdrPanels.click(second.id, { selector: "button" });
+            status.textContent = "Visited both panels, then filled and clicked the form.";
+          })
+          .catch((error) => {
+            status.textContent = error && error.message ? error.message : "The demo failed.";
+          });
+      });
+    </script>
+  </body>
+</html>

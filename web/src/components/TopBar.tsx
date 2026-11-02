@@ -12,7 +12,6 @@ interface Props {
   herdrCtl: HerdrCtlStatus | null;
   herdrBusy: boolean;
   notice: string | null;
-  zoomed: boolean;
   sessions: string[];
   selecting: boolean;
   onSession: (name: string) => void;
@@ -21,7 +20,6 @@ interface Props {
   onCloseSession: () => void;
   onSelect: () => void;
   onAddPanel: () => void;
-  onExitZoom: () => void;
   onClearFocus: () => void;
   onHerdrAction: (action: HerdrStatusAction) => void;
 }
@@ -33,7 +31,6 @@ export function TopBar({
   herdrCtl,
   herdrBusy,
   notice,
-  zoomed,
   sessions,
   selecting,
   onSession,
@@ -42,7 +39,6 @@ export function TopBar({
   onCloseSession,
   onSelect,
   onAddPanel,
-  onExitZoom,
   onClearFocus,
   onHerdrAction,
 }: Props) {
@@ -153,11 +149,6 @@ export function TopBar({
         </label>
       )}
       {notice ? <span className="notice">{notice}</span> : null}
-      {zoomed ? (
-        <button type="button" className="quiet" onClick={onExitZoom}>
-          Show all panels
-        </button>
-      ) : null}
       <div className="topbar-spacer" />
       <button
         type="button"

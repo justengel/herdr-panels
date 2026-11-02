@@ -309,6 +309,30 @@ pub fn load_installed(config_dir: &Path, id: &str) -> anyhow::Result<PluginManif
     read_manifest_file(&plugins_dir(config_dir).join(id).join("plugin.json"))
 }
 
+/// Permissions, files, and commands that both install and the live manifest allow.
+/// A folder with no recorded grant has none of them.
+pub fn granted(config_dir: &Path, mut manifest: PluginManifest) -> PluginManifest {
+    let Some(stored) = crate::plugin_store::get(config_dir, &manifest.id)
+        .ok()
+        .flatten()
+    else {
+        manifest.permissions.clear();
+        manifest.files.clear();
+        manifest.commands.clear();
+        return manifest;
+    };
+    let allowed = crate::plugin_store::overlap(
+        &stored,
+        &manifest.permissions,
+        &manifest.files,
+        &manifest.commands,
+    );
+    manifest.permissions = allowed.permissions;
+    manifest.files = allowed.files;
+    manifest.commands = allowed.commands;
+    manifest
+}
+
 pub fn bundled_welcome_manifest() -> anyhow::Result<PluginManifest> {
     if let Some(examples) = crate::paths::bundled_examples() {
         let path = examples.join("plugins").join("welcome").join("plugin.json");
@@ -446,6 +470,7 @@ pub fn uninstall_plugin(config_dir: &Path, id: &str) -> anyhow::Result<PluginMan
         bail!("plugin {id} is not inside the plugins directory");
     }
     fs::remove_dir_all(&resolved).with_context(|| format!("removing {}", resolved.display()))?;
+    crate::plugin_store::remove(config_dir, id)?;
     Ok(manifest)
 }
 
@@ -470,6 +495,15 @@ pub fn install_plugin(
             .with_context(|| format!("removing {}", destination.display()))?;
     }
     copy_tree(source, &destination)?;
+    crate::plugin_store::record(
+        config_dir,
+        &manifest.id,
+        crate::plugin_store::StoredGrant {
+            permissions: manifest.permissions.clone(),
+            files: manifest.files.clone(),
+            commands: manifest.commands.clone(),
+        },
+    )?;
     Ok(manifest)
 }
 

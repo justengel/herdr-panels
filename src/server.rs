@@ -1,5 +1,6 @@
 use std::net::SocketAddr;
 use std::path::{Component, Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -38,6 +39,10 @@ pub struct AppState {
     pub token: String,
     pub port: u16,
     pub passes: crate::frame_pass::FramePasses,
+    pub browser: crate::browser_drive::Mailbox,
+    pub confirm: crate::browser_drive::Mailbox,
+    pub agent_access: Arc<AtomicBool>,
+    pub desk_grant: String,
 }
 
 /// The Herdr session named by `X-Herdr-Session`, or the session this process started with.
@@ -73,8 +78,11 @@ pub struct ServerConfig {
 }
 
 pub fn build_app(config_dir: PathBuf, herdr_socket: PathBuf, port: u16) -> anyhow::Result<Router> {
+    crate::panel_lock::remember(&config_dir);
     let token = crate::auth::session_token(&config_dir)?;
     let settings = store::load_settings(&config_dir)?;
+    let desk_grant = crate::auth::random_secret()?;
+    crate::desk_gate::arm_launch(config_dir.clone(), desk_grant.clone());
     let mut watch_paths = vec![config_dir.clone()];
     watch_paths.extend(settings.content_roots.iter().cloned());
     let watch = WatchHub::start(&watch_paths)?;
@@ -94,6 +102,10 @@ pub fn build_app(config_dir: PathBuf, herdr_socket: PathBuf, port: u16) -> anyho
         token,
         port,
         passes: crate::frame_pass::FramePasses::new(),
+        browser: crate::browser_drive::Mailbox::new(),
+        confirm: crate::browser_drive::Mailbox::new(),
+        agent_access: Arc::new(AtomicBool::new(settings.agent_access)),
+        desk_grant,
     };
     let guard_state = state.clone();
 
@@ -110,6 +122,14 @@ pub fn build_app(config_dir: PathBuf, herdr_socket: PathBuf, port: u16) -> anyho
         .route("/api/pick-file", post(pick_file))
         .route("/api/local-open", post(local_open))
         .route("/api/save-png", post(save_png))
+        .route("/api/browser-reply", post(browser_reply))
+        .route(
+            "/api/panel-lock",
+            get(panel_lock_status).post(panel_lock_change),
+        )
+        .route("/api/browser-navigation", get(browser_navigation))
+        .route("/api/panel-unlock-answer", post(panel_unlock_answer))
+        .route("/api/desk-window", post(open_desk_window))
         .route("/api/frame", get(frame_policy))
         .route("/api/frame-pass", post(issue_frame_pass))
         .route("/api/session/focus", post(focus_session))
@@ -178,6 +198,7 @@ pub async fn serve(config: ServerConfig) -> anyhow::Result<()> {
     } else {
         tracing::info!("UI bundle not found; run `npm run dev` in web/ or `npm run build`");
     }
+    crate::desk_gate::set_launch_url(&config.url);
     if config.open_desktop {
         match crate::cli::spawn_desktop_at(Some(&config.url)) {
             Ok(()) => tracing::info!("opened the desktop window"),
@@ -199,13 +220,16 @@ pub async fn serve(config: ServerConfig) -> anyhow::Result<()> {
 }
 
 async fn guard(State(state): State<AppState>, req: Request<Body>, next: Next) -> Response {
+    let path = req.uri().path().to_string();
+    if path == "/api/browser-reply" {
+        return next.run(req).await;
+    }
     let origin = header_text(&req, "origin");
     if let Some(origin) = origin.as_deref() {
         if origin != "null" && !crate::auth::origin_allowed(origin, state.port) {
             return deny(StatusCode::FORBIDDEN, "origin is not allowed");
         }
     }
-    let path = req.uri().path().to_string();
     if is_shell_document(&path) && origin.as_deref() == Some("null") {
         return deny(StatusCode::FORBIDDEN, "origin is not allowed");
     }
@@ -614,8 +638,11 @@ struct DeskSaved {
 async fn put_desk(
     State(state): State<AppState>,
     HerdrSession(link): HerdrSession,
-    Json(body): Json<DeskPut>,
+    Json(mut raw): Json<Value>,
 ) -> Result<Json<DeskSaved>, ApiError> {
+    crate::panel_lock::drop_lock_keys(&mut raw);
+    let body: DeskPut =
+        serde_json::from_value(raw).map_err(|err| ApiError::bad(err.to_string()))?;
     let session = link.name.clone();
     if body.session != session {
         let desk = crate::desk::load_desk(&state.config_dir, &session).map_err(ApiError::bad)?;
@@ -825,6 +852,417 @@ async fn save_png(headers: HeaderMap, body: Bytes) -> Result<Json<Value>, ApiErr
     Ok(Json(json!({
         "path": saved.map(|path| path.to_string_lossy().into_owned()),
     })))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LockChange {
+    panel_id: String,
+    #[serde(default)]
+    space_id: Option<String>,
+    locked: bool,
+}
+
+async fn browser_reply(State(state): State<AppState>, body: Bytes) -> Result<StatusCode, ApiError> {
+    let body: Value =
+        serde_json::from_slice(&body).map_err(|_| ApiError::bad("unknown browser reply"))?;
+    let id = body
+        .get("id")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    if id.len() < 16 || id.len() > 80 || !id.chars().all(|ch| ch.is_ascii_hexdigit()) {
+        return Err(ApiError::bad("unknown browser reply"));
+    }
+    let body = redact_locked_site(&state, body);
+    if !state.browser.finish(&id, body).await {
+        return Err(ApiError::bad("unknown browser reply"));
+    }
+    Ok(StatusCode::NO_CONTENT)
+}
+
+fn redact_locked_site(state: &AppState, mut body: Value) -> Value {
+    let href = body.get("href").and_then(Value::as_str).unwrap_or("");
+    if href.is_empty() || !crate::site_lock::any_desk_blocks(&state.config_dir, href) {
+        return body;
+    }
+    if let Some(map) = body.as_object_mut() {
+        map.insert("text".into(), Value::String(String::new()));
+        map.insert("html".into(), Value::String(String::new()));
+        map.insert("png".into(), Value::String(String::new()));
+        map.insert(
+            "error".into(),
+            Value::String(crate::site_lock::LOCKED.into()),
+        );
+    }
+    body
+}
+
+#[derive(Deserialize)]
+struct NavQuery {
+    #[serde(rename = "panelId")]
+    panel_id: String,
+    url: String,
+}
+
+async fn browser_navigation(
+    State(state): State<AppState>,
+    Query(query): Query<NavQuery>,
+) -> Json<Value> {
+    let allow = query.panel_id.len() <= 80
+        && query.url.len() <= 4_000
+        && crate::site_lock::navigation_allowed_anywhere(
+            &state.config_dir,
+            &query.panel_id,
+            &query.url,
+        );
+    Json(json!({ "allow": allow }))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LockQuery {
+    panel_id: String,
+    #[serde(default)]
+    space_id: Option<String>,
+}
+
+async fn panel_lock_status(
+    State(state): State<AppState>,
+    HerdrSession(link): HerdrSession,
+    Query(query): Query<LockQuery>,
+) -> Result<Json<Value>, ApiError> {
+    if query.panel_id.trim().is_empty() {
+        return Err(ApiError::bad("panelId is required"));
+    }
+    let (space, pane) =
+        lock_subject(&state, &link, query.space_id.as_deref(), &query.panel_id).await?;
+    let locked = crate::panel_lock::is_locked(
+        &state.config_dir,
+        &link.name,
+        &space,
+        &query.panel_id,
+        pane.as_deref(),
+    );
+    Ok(Json(json!({ "locked": locked })))
+}
+
+async fn panel_lock_change(
+    State(state): State<AppState>,
+    HerdrSession(link): HerdrSession,
+    Json(body): Json<LockChange>,
+) -> Result<Json<Value>, ApiError> {
+    if body.panel_id.trim().is_empty() {
+        return Err(ApiError::bad("panelId is required"));
+    }
+    let (space, pane) =
+        lock_subject(&state, &link, body.space_id.as_deref(), &body.panel_id).await?;
+    if body.locked {
+        crate::panel_lock::set_locked(
+            &state.config_dir,
+            &link.name,
+            &space,
+            &body.panel_id,
+            pane.as_deref(),
+            true,
+        )
+        .map_err(ApiError::bad)?;
+        publish_lock(&state, &link.name, &body.panel_id, &space, true);
+        return Ok(Json(json!({ "ok": true, "locked": true })));
+    }
+    if !crate::panel_lock::is_locked(
+        &state.config_dir,
+        &link.name,
+        &space,
+        &body.panel_id,
+        pane.as_deref(),
+    ) {
+        return Ok(Json(json!({ "ok": true, "locked": false })));
+    }
+    if state.agent.viewers() == 0 {
+        return Err(ApiError::bad("the desk is not open"));
+    }
+    if !crate::panel_lock::begin_confirm() {
+        return Err(ApiError::bad("a confirmation is already open"));
+    }
+    let _guard = ConfirmGuard;
+    let yes = ask_unlock(&state, &link.name, &body.panel_id, &space).await;
+    if !yes {
+        return Ok(Json(json!({ "ok": false })));
+    }
+    crate::panel_lock::set_locked(
+        &state.config_dir,
+        &link.name,
+        &space,
+        &body.panel_id,
+        pane.as_deref(),
+        false,
+    )
+    .map_err(ApiError::bad)?;
+    publish_lock(&state, &link.name, &body.panel_id, &space, false);
+    Ok(Json(json!({ "ok": true, "locked": false })))
+}
+
+struct ConfirmGuard;
+
+impl Drop for ConfirmGuard {
+    fn drop(&mut self) {
+        crate::panel_lock::end_confirm();
+    }
+}
+
+fn publish_lock(state: &AppState, session: &str, panel_id: &str, space: &str, locked: bool) {
+    state.agent.publish(&json!({
+        "type": "panel-lock",
+        "session": session,
+        "panelId": panel_id,
+        "spaceId": space,
+        "locked": locked,
+    }));
+}
+
+async fn ask_unlock(state: &AppState, session: &str, panel_id: &str, space: &str) -> bool {
+    let (id, rx) = state.confirm.open().await;
+    state.agent.publish(&json!({
+        "type": "panel-unlock",
+        "session": session,
+        "requestId": &id,
+        "panelId": panel_id,
+        "spaceId": space,
+    }));
+    let answer = tokio::time::timeout(Duration::from_secs(120), rx).await;
+    state.confirm.cancel(&id).await;
+    state.agent.publish(&json!({
+        "type": "panel-unlock-done",
+        "session": session,
+        "requestId": &id,
+    }));
+    match answer {
+        Ok(Ok(value)) => value.get("yes").and_then(Value::as_bool).unwrap_or(false),
+        _ => false,
+    }
+}
+
+#[derive(Deserialize)]
+struct UnlockAnswer {
+    id: String,
+    yes: bool,
+}
+
+async fn open_desk_window() -> Result<Json<Value>, ApiError> {
+    crate::cli::spawn_desktop_at(None).map_err(ApiError::bad)?;
+    Ok(Json(json!({ "ok": true })))
+}
+
+async fn panel_unlock_answer(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<UnlockAnswer>,
+) -> Result<StatusCode, ApiError> {
+    if body.id.len() < 16 || body.id.len() > 80 || !body.id.chars().all(|ch| ch.is_ascii_hexdigit())
+    {
+        return Err(ApiError::bad("that confirmation is not waiting"));
+    }
+    if body.yes {
+        let presented = headers
+            .get(crate::desk_gate::GRANT_HEADER)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or("");
+        if !crate::desk_gate::grant_matches(&state.desk_grant, presented) {
+            return Err(ApiError::forbidden(crate::desk_gate::UNLOCK_REFUSED));
+        }
+    }
+    if !state
+        .confirm
+        .finish(&body.id, json!({ "yes": body.yes }))
+        .await
+    {
+        return Err(ApiError::bad("that confirmation is not waiting"));
+    }
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn lock_subject(
+    state: &AppState,
+    link: &crate::session::SessionLink,
+    space_id: Option<&str>,
+    panel_id: &str,
+) -> Result<(String, Option<String>), ApiError> {
+    let snapshot = link.runtime.snapshot().await;
+    let space = space_id
+        .map(str::trim)
+        .filter(|space| !space.is_empty())
+        .map(str::to_string)
+        .or(snapshot.focused_workspace_id)
+        .unwrap_or_default();
+    let desk = crate::desk::load_desk(&state.config_dir, &link.name).map_err(ApiError::bad)?;
+    let key = crate::desk::space_key(&space);
+    let node = desk.spaces.get(&key).or_else(|| desk.spaces.get(&space));
+    let pane = node.and_then(|node| {
+        crate::layout_ops::list_panels(node)
+            .into_iter()
+            .find(|panel| panel.id == panel_id)
+            .and_then(|panel| match panel.panel {
+                crate::layout::PanelConfig::Herdr {
+                    pane_id: Some(pane_id),
+                    ..
+                } => Some(pane_id),
+                _ => None,
+            })
+    });
+    Ok((space, pane))
+}
+
+async fn drive_navigate(
+    state: &AppState,
+    link: &crate::session::SessionLink,
+    body: &BridgeBody,
+) -> Result<Json<Value>, ApiError> {
+    let target = browser_target(body);
+    let url = param_str(&body.params, "url");
+    let parsed =
+        url::Url::parse(&url).map_err(|_| ApiError::bad("navigate needs an http or https url"))?;
+    if parsed.scheme() != "http" && parsed.scheme() != "https" {
+        return Err(ApiError::bad("navigate needs an http or https url"));
+    }
+    crate::agent::forbid_browser_url(state, link, &url).map_err(agent_error)?;
+    refuse_locked_panel(state, link, &target).await?;
+    let doc = crate::desk::load_desk(&state.config_dir, &link.name).map_err(ApiError::bad)?;
+    let found = doc
+        .spaces
+        .values()
+        .flat_map(crate::layout_ops::list_panels)
+        .find(|panel| panel.id == target);
+    let Some(found) = found else {
+        return Err(ApiError::bad("panel was not found"));
+    };
+    let next = match found.panel {
+        crate::layout::PanelConfig::Iframe {
+            proxy, address_bar, ..
+        } => crate::layout::PanelConfig::Iframe {
+            url,
+            proxy,
+            address_bar,
+        },
+        _ => return Err(ApiError::bad("navigate is for a browser panel")),
+    };
+    crate::agent::update_desk(state, link, &target, None, Some(next), None, None)
+        .await
+        .map(Json)
+        .map_err(agent_error)
+}
+
+async fn drive_browser(
+    state: &AppState,
+    link: &crate::session::SessionLink,
+    plugin_id: &str,
+    body: &BridgeBody,
+) -> Result<Json<Value>, ApiError> {
+    let target = browser_target(body);
+    refuse_locked_panel(state, link, &target).await?;
+    crate::agent::forbid_browser_id(state, link, &target).map_err(agent_error)?;
+    let manifest = crate::plugins::granted(
+        &state.config_dir,
+        crate::plugins::load_installed(&state.config_dir, plugin_id).map_err(ApiError::bad)?,
+    );
+    let timeout = body
+        .params
+        .get("timeout")
+        .and_then(Value::as_u64)
+        .unwrap_or(3_000)
+        .min(30_000);
+    let call = crate::browser_drive::DriveCall {
+        op: body.method.clone(),
+        selector: param_opt(&body.params, "selector"),
+        text: param_opt(&body.params, "text"),
+        value: param_opt(&body.params, "value"),
+        key: param_opt(&body.params, "key"),
+        dx: body.params.get("dx").and_then(Value::as_f64).unwrap_or(0.0),
+        dy: body.params.get("dy").and_then(Value::as_f64).unwrap_or(0.0),
+        timeout_ms: timeout,
+        url: None,
+    };
+    let value = crate::browser_drive::ask(
+        &state.browser,
+        state.port,
+        &link.name,
+        &target,
+        &call,
+        state.agent.viewers(),
+        |message| state.agent.publish(message),
+    )
+    .await
+    .map_err(ApiError::bad)?;
+    if let Some(error) = value
+        .get("error")
+        .and_then(Value::as_str)
+        .filter(|error| !error.is_empty())
+    {
+        return Err(ApiError::bad(error));
+    }
+    let mut saved = None;
+    let mut empty = false;
+    if body.method == "shot" {
+        if let Some(requested) = param_opt(&body.params, "path") {
+            let path = crate::browser_drive::shot_path_for_plugin(&manifest.files, &requested)
+                .map_err(ApiError::forbidden)?;
+            crate::panel_lock::refuse_protected_file(&path, &state.config_dir)
+                .map_err(ApiError::forbidden)?;
+            match crate::browser_drive::png_bytes(&value).map_err(ApiError::bad)? {
+                Some(bytes) => {
+                    if let Some(parent) = path.parent() {
+                        if !parent.is_dir() {
+                            return Err(ApiError::bad("the screenshot directory was not found"));
+                        }
+                    }
+                    std::fs::write(&path, bytes).map_err(|err| ApiError::bad(err.to_string()))?;
+                    saved = Some(path.display().to_string());
+                }
+                None => empty = true,
+            }
+        }
+    }
+    Ok(Json(json!({
+        "text": value.get("text").and_then(Value::as_str).unwrap_or(""),
+        "html": value.get("html").and_then(Value::as_str).unwrap_or(""),
+        "path": saved,
+        "pngEmpty": empty,
+    })))
+}
+
+fn browser_target(body: &BridgeBody) -> String {
+    let named = param_str(&body.params, "panelId");
+    if named.trim().is_empty() {
+        body.panel_id.clone()
+    } else {
+        named
+    }
+}
+
+async fn refuse_locked_panel(
+    state: &AppState,
+    link: &crate::session::SessionLink,
+    panel_id: &str,
+) -> Result<(), ApiError> {
+    let snapshot = link.runtime.snapshot().await;
+    let space = snapshot.focused_workspace_id.unwrap_or_default();
+    let desk = crate::desk::load_desk(&state.config_dir, &link.name).map_err(ApiError::bad)?;
+    let found = desk
+        .spaces
+        .values()
+        .flat_map(crate::layout_ops::list_panels)
+        .find(|panel| panel.id == panel_id);
+    let pane = found.as_ref().and_then(|panel| match &panel.panel {
+        crate::layout::PanelConfig::Herdr {
+            pane_id: Some(pane_id),
+            ..
+        } => Some(pane_id.as_str()),
+        _ => None,
+    });
+    if crate::panel_lock::is_locked(&state.config_dir, &link.name, &space, panel_id, pane) {
+        return Err(ApiError::forbidden("this panel is locked"));
+    }
+    Ok(())
 }
 
 fn pick_start_dir(directory: Option<&str>) -> Option<PathBuf> {
@@ -1107,7 +1545,10 @@ async fn plugin_bridge(
     if body.panel_id.is_empty() || body.panel_id.len() > 80 || body.method.len() > 40 {
         return Err(ApiError::bad("invalid bridge request"));
     }
-    let manifest = crate::plugins::load_installed(&state.config_dir, &id).map_err(ApiError::bad)?;
+    let manifest = crate::plugins::granted(
+        &state.config_dir,
+        crate::plugins::load_installed(&state.config_dir, &id).map_err(ApiError::bad)?,
+    );
     let session = link.name.clone();
     let desk = crate::desk::load_desk(&state.config_dir, &session).map_err(ApiError::bad)?;
     let space_id = body
@@ -1154,6 +1595,9 @@ async fn plugin_bridge(
             if !is_pane_id(&pane_id) {
                 return Err(ApiError::bad("invalid pane id"));
             }
+            if crate::panel_lock::pane_locked(&state.config_dir, &pane_id) {
+                return Err(ApiError::forbidden("this panel is locked"));
+            }
             let source = body.params.get("source").and_then(Value::as_str);
             let source = screen_source(source).map_err(ApiError::bad)?;
             let screen = client
@@ -1171,6 +1615,9 @@ async fn plugin_bridge(
             if !is_pane_id(&pane_id) {
                 return Err(ApiError::bad("invalid pane id"));
             }
+            if crate::panel_lock::pane_locked(&state.config_dir, &pane_id) {
+                return Err(ApiError::forbidden("this panel is locked"));
+            }
             crate::terminal::dispatch(
                 &client,
                 &pane_id,
@@ -1186,6 +1633,9 @@ async fn plugin_bridge(
             let pane_id = param_str(&body.params, "paneId");
             if !is_pane_id(&pane_id) {
                 return Err(ApiError::bad("invalid pane id"));
+            }
+            if crate::panel_lock::pane_locked(&state.config_dir, &pane_id) {
+                return Err(ApiError::forbidden("this panel is locked"));
             }
             let keys = param_keys(&body.params)?;
             crate::terminal::dispatch(&client, &pane_id, ClientInput::Keys { keys })
@@ -1353,7 +1803,7 @@ async fn plugin_bridge(
             if panel_id.trim().is_empty() {
                 return Err(ApiError::bad("panelId is required"));
             }
-            crate::agent::zoom_desk(&state, &link, Some(&panel_id), None)
+            crate::agent::visit_desk(&state, &link, &[panel_id], None, &[], &[], &[])
                 .await
                 .map(Json)
                 .map_err(agent_error)
@@ -1434,12 +1884,18 @@ async fn plugin_bridge(
                     ApiError::bad(err)
                 }
             })?;
+            if crate::panel_lock::pane_locked(&state.config_dir, &pane_id) {
+                return Err(ApiError::forbidden("this panel is locked"));
+            }
             link.controls
                 .scroll(&pane_id, &direction, lines, "wheel")
                 .await
                 .map_err(ApiError::bad)?;
             Ok(Json(json!({ "ok": true })))
         }
+        "navigate" => drive_navigate(&state, &link, &body).await,
+        "read" | "shot" | "wait" | "click" | "fill" | "key" | "scroll" | "back" | "forward"
+        | "reload" => drive_browser(&state, &link, &id, &body).await,
         _ => Err(ApiError::bad(format!(
             "Unknown bridge method: {}",
             body.method
@@ -1540,6 +1996,7 @@ fn param_opt(params: &Value, key: &str) -> Option<String> {
 fn agent_error(err: crate::agent::AgentError) -> ApiError {
     match err.status {
         StatusCode::NOT_FOUND => ApiError::missing(err.message),
+        StatusCode::FORBIDDEN => ApiError::forbidden(err.message),
         StatusCode::BAD_GATEWAY => ApiError::upstream(err.message),
         _ => ApiError::bad(err.message),
     }
@@ -1869,6 +2326,17 @@ async fn herdr_action(
     }
 }
 
+fn allow_terminal_http(state: &AppState, headers: &HeaderMap) -> Result<(), ApiError> {
+    let from_desk = headers
+        .get("x-herdr-panels-desk")
+        .and_then(|value| value.to_str().ok())
+        == Some("1");
+    if from_desk || state.agent_access.load(Ordering::Relaxed) {
+        return Ok(());
+    }
+    Err(ApiError::forbidden(crate::store::AGENT_ACCESS_OFF))
+}
+
 fn required(value: Option<String>, name: &str) -> Result<String, ApiError> {
     value
         .filter(|item| !item.trim().is_empty())
@@ -1886,12 +2354,17 @@ struct InputBody {
 }
 
 async fn terminal_input(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
     HerdrSession(link): HerdrSession,
     Json(body): Json<InputBody>,
 ) -> Result<StatusCode, ApiError> {
+    allow_terminal_http(&state, &headers)?;
     if !is_pane_id(&body.pane_id) {
         return Err(ApiError::bad("invalid pane id"));
+    }
+    if crate::panel_lock::pane_locked(&state.config_dir, &body.pane_id) {
+        return Err(ApiError::forbidden("this panel is locked"));
     }
     let client = link.runtime.client().clone();
     if let Some(text) = body.text {
@@ -1958,13 +2431,18 @@ struct ScreenQuery {
 }
 
 async fn terminal_screen(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
     HerdrSession(link): HerdrSession,
     axum::extract::Path(pane_id): axum::extract::Path<String>,
     Query(query): Query<ScreenQuery>,
 ) -> Result<Json<Value>, ApiError> {
+    allow_terminal_http(&state, &headers)?;
     if !is_pane_id(&pane_id) {
         return Err(ApiError::bad("invalid pane id"));
+    }
+    if crate::panel_lock::pane_locked(&state.config_dir, &pane_id) {
+        return Err(ApiError::forbidden("this panel is locked"));
     }
     let source = screen_source(query.source.as_deref()).map_err(ApiError::bad)?;
     validate_lines(query.lines)?;
