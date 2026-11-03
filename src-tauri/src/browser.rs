@@ -144,6 +144,75 @@ fn select_on() -> String {
     script
 }
 
+/// A browser page cannot call the viewer. It posts the PNG here, and this process opens the picker.
+/// Copy, HTML, and Screenshot post `hwpLeave` on the same bridge. The page title is only a fallback:
+/// a screenshot replaces that title before WebKit delivers it, so the desk never saw Select turn off.
+#[cfg(target_os = "linux")]
+fn arm_png_save(webkit: webkit2gtk::WebView, reply: Webview) {
+    use webkit2gtk::{UserContentManagerExt, WebViewExt};
+    let Some(manager) = webkit.user_content_manager() else {
+        return;
+    };
+    if manager.register_script_message_handler("hwpSave") {
+        let reply = reply.clone();
+        manager.connect_script_message_received(Some("hwpSave"), move |_, result| {
+            let Some(value) = result.js_value() else {
+                return;
+            };
+            let text = value.to_string();
+            let reply = reply.clone();
+            std::thread::spawn(move || {
+                let _ = reply.eval(png_save_reply(&text));
+            });
+        });
+    }
+    if manager.register_script_message_handler("hwpLeave") {
+        let app = reply.app_handle().clone();
+        manager.connect_script_message_received(Some("hwpLeave"), move |_, _| {
+            schedule_end_browser_select(&app);
+        });
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn png_save_reply(raw: &str) -> String {
+    let outcome = decode_png_save(raw).and_then(|(bytes, name)| herdr_panels::server::save_png_dialog(bytes, &name));
+    match outcome {
+        Ok(Some(path)) => format!(
+            "window.__hwpSaveDone&&window.__hwpSaveDone(true,{});",
+            serde_json::to_string(&path.display().to_string()).unwrap_or_else(|_| "\"\"".to_string())
+        ),
+        Ok(None) => "window.__hwpSaveDone&&window.__hwpSaveDone(true,null);".to_string(),
+        Err(err) => format!(
+            "window.__hwpSaveDone&&window.__hwpSaveDone(false,{});",
+            serde_json::to_string(&err).unwrap_or_else(|_| "\"Could not save the screenshot\"".to_string())
+        ),
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn decode_png_save(raw: &str) -> Result<(Vec<u8>, String), String> {
+    use base64::Engine;
+    const MAX: usize = 32 * 1024 * 1024;
+    #[derive(serde::Deserialize)]
+    struct Message {
+        #[serde(default)]
+        name: String,
+        data: String,
+    }
+    let message: Message = serde_json::from_str(raw).map_err(|_| "the screenshot could not be read".to_string())?;
+    if message.data.len() > MAX * 4 / 3 + 8 {
+        return Err("the screenshot is too large".into());
+    }
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(message.data.trim())
+        .map_err(|_| "the screenshot could not be read".to_string())?;
+    if bytes.len() > MAX {
+        return Err("the screenshot is too large".into());
+    }
+    Ok((bytes, message.name))
+}
+
 pub fn browser_target(label: &str, url: &str) -> Result<Url, String> {
     if !valid_browser_label(label) {
         return Err("browser label is invalid".into());
@@ -236,6 +305,37 @@ struct SnapRequest {
     h: f64,
     /// Viewport width in CSS pixels. The printed window is in physical pixels.
     vw: f64,
+}
+
+/// Copy, HTML, and Screenshot in a browser panel ask for this.
+/// The page restores its own title on the next turn. The save dialog stays up.
+///
+/// Run this on a later turn of the main loop. The page posts it from inside WebKit,
+/// and telling the desk page to run script from that callback never arrives.
+fn schedule_end_browser_select(app: &AppHandle) {
+    let later = app.clone();
+    if app
+        .run_on_main_thread(move || end_browser_select(&later))
+        .is_err()
+    {
+        end_browser_select(app);
+    }
+}
+
+fn end_browser_select(app: &AppHandle) {
+    let Some(host) = app.try_state::<BrowserHost>() else {
+        return;
+    };
+    host.selecting.store(false, Ordering::Relaxed);
+    let script = "if (window.__hwpRestoreTitle) window.__hwpRestoreTitle(); if (window.__hwpSetSelect) window.__hwpSetSelect(false);";
+    if let Ok(guard) = host.slots.lock() {
+        for slot in guard.values() {
+            let _ = slot.view.eval(script);
+        }
+    }
+    if let Some(main) = app.get_webview("main") {
+        let _ = main.eval("window.dispatchEvent(new Event('hwp-select-off'))");
+    }
 }
 
 /// A page asked for its own pixels by setting the title to `hwp-snap:` plus the selection.
@@ -453,6 +553,41 @@ fn crop_rgba(pixels: &[u8], width: i32, height: i32, request: SnapRequest) -> Re
     Ok((out, w as u32, h as u32))
 }
 
+/// A snapshot of the desk page, cropped to a rectangle, as a base64 PNG. Linux only.
+/// A browser panel uses `snapshot_browser` instead. This command is the main page.
+#[tauri::command]
+async fn snapshot_view(webview: Webview, x: f64, y: f64, width: f64, height: f64, viewport: f64) -> Result<String, String> {
+    desk_page(&webview)?;
+    finite_box(x, y, width, height)?;
+    if width < 1.0 || height < 1.0 {
+        return Err("the snapshot crop is empty".into());
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let (send, receive) = tokio::sync::oneshot::channel();
+        let request = crate::linux_snapshot::Request {
+            x,
+            y,
+            w: width,
+            h: height,
+            vw: viewport,
+        };
+        crate::linux_snapshot::capture(&webview, request, move |outcome| {
+            let _ = send.send(outcome);
+        });
+        return match tokio::time::timeout(Duration::from_secs(8), receive).await {
+            Ok(Ok(outcome)) => outcome,
+            Ok(Err(_)) => Err("the snapshot was cancelled".into()),
+            Err(_) => Err("the snapshot timed out".into()),
+        };
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = viewport;
+        Err("this window cannot take a snapshot".into())
+    }
+}
+
 #[cfg(target_os = "linux")]
 async fn snapshot_linux(view: &Webview, width: f64, height: f64) -> Result<String, String> {
     let (send, receive) = tokio::sync::oneshot::channel();
@@ -639,7 +774,19 @@ async fn place_browser(
             respond_to_new_window(&opener, &url);
             NewWindowResponse::Deny
         })
-        .on_document_title_changed(|view, title| answer_snap(&view, &title))
+        .on_document_title_changed({
+            let select_app = app.clone();
+            move |view, title| {
+                if title == "hwp-select:off" {
+                    // Windows has no page message. Linux sends `hwpLeave` and also sets this
+                    // title only when that message is missing. Either way, leave the signal
+                    // before handling a snapshot title that replaces it.
+                    schedule_end_browser_select(&select_app);
+                    return;
+                }
+                answer_snap(&view, &title);
+            }
+        })
         .on_page_load(|webview, payload| {
             if payload.event() != PageLoadEvent::Finished {
                 return;
@@ -663,6 +810,13 @@ async fn place_browser(
         .map_err(|err| err.to_string())?;
     #[cfg(target_os = "linux")]
     crate::linux_overlay::adopt(&view, x, y, width, height);
+    #[cfg(target_os = "linux")]
+    {
+        let reply = view.clone();
+        if let Err(err) = view.with_webview(move |platform| arm_png_save(platform.inner(), reply)) {
+            eprintln!("screenshot save: {err}");
+        }
+    }
     if let Err(err) = view.eval(browser_page_zoom(content_zoom)) {
         eprintln!("browser zoom: {err}");
     }
@@ -1105,6 +1259,7 @@ pub fn run() {
             place_browser,
             adopt_browser,
             snapshot_browser,
+            snapshot_view,
             close_browser,
             eval_browser,
             set_browser_select,

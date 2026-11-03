@@ -13,6 +13,7 @@
     "allow-place-browser",
     "allow-adopt-browser",
     "allow-snapshot-browser",
+    "allow-snapshot-view",
     "allow-close-browser",
     "allow-eval-browser",
     "allow-set-browser-select",

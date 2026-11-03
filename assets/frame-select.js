@@ -392,25 +392,71 @@
           menu.style.left = `${Math.min(Math.max(8, bounds.left), window.innerWidth - 280)}px`;
         },
         clear() {
-          closeShot();
           boxes.replaceChildren();
           menu.style.display = "none";
         },
       };
 
+      // The desktop turns the desk Select button off from this. A page message is its own
+      // channel. The document title is only the fallback, because a screenshot sets that
+      // title to ask for pixels and WebKit can deliver only the later title. The desk then
+      // stays in Select while this page has already dropped its crosshair. Switching the
+      // panel away and back creates a new page, and that page follows the desk, so Select
+      // looks in sync again without the button ever turning off.
+      function signalSelectOff() {
+        const handlers = window.webkit && window.webkit.messageHandlers;
+        const bridge = handlers && handlers.hwpLeave;
+        if (bridge && typeof bridge.postMessage === "function") {
+          try {
+            bridge.postMessage("off");
+            return Promise.resolve();
+          } catch {
+            // The title below is the other way the desktop hears this.
+          }
+        }
+        return new Promise((resolve) => {
+          const previous = document.title;
+          const finish = () => {
+            if (document.title === "hwp-select:off") document.title = previous;
+            if (window.__hwpRestoreTitle === finish) window.__hwpRestoreTitle = null;
+            resolve();
+          };
+          window.__hwpRestoreTitle = finish;
+          try {
+            document.title = "hwp-select:off";
+          } catch {
+            finish();
+            return;
+          }
+          setTimeout(finish, 500);
+        });
+      }
+      function leaveSelect() {
+        const done = signalSelectOff();
+        if (window.__hwpSetSelect) window.__hwpSetSelect(false);
+        return done;
+      }
       function copyText() {
         const text = chosen.map((element) => textOf(element)).filter(Boolean).join("\n");
+        leaveSelect();
         write(text, "Copied", "Nothing to copy");
       }
       function copyHtml() {
-        write(chosen.map((element) => element.outerHTML).join("\n"), chosen.length === 1 ? "Copied HTML" : `Copied HTML for ${chosen.length} elements`, "Nothing to copy");
+        const html = chosen.map((element) => element.outerHTML).join("\n");
+        const count = chosen.length;
+        leaveSelect();
+        write(html, count === 1 ? "Copied HTML" : `Copied HTML for ${count} elements`, "Nothing to copy");
       }
       function copyShot() {
+        const elements = chosen.slice();
+        // Wait until the desktop has seen Select turn off. A snapshot sets the document
+        // title next, and that title is the fallback signal on Windows.
+        const left = leaveSelect();
         const generation = ++shotGeneration;
         const layer = boxes;
         const hidden = layer.style.visibility;
         layer.style.visibility = "hidden";
-        const pending = raster(chosen).finally(() => {
+        const pending = left.then(() => raster(elements)).finally(() => {
           layer.style.visibility = hidden;
         });
         const copied = writePng(pending);
@@ -426,8 +472,7 @@
                 if (generation !== shotGeneration || later !== true) return;
                 const text = layer.querySelector(".hwp-shot-dialog p");
                 if (text) {
-                  text.textContent =
-                    "Copied to the clipboard. Save a PNG if it does not paste. Save downloads a PNG into your Downloads folder. Nothing is written until you choose Save.";
+                  text.textContent = `Copied to the clipboard. Save a PNG if it does not paste. ${saveTail()}`;
                 }
               });
             });
@@ -483,13 +528,31 @@
         heading.style.fontSize = "16px";
         const text = document.createElement("p");
         text.style.margin = "0";
-        text.textContent = `${lead} Save downloads a PNG into your Downloads folder. Nothing is written until you choose Save.`;
+        text.textContent = `${lead} ${saveTail()}`;
         const actions = document.createElement("div");
         actions.style.cssText = "display:flex;justify-content:space-between;gap:8px;";
+        let saving = false;
         const save = choice("Save", () => {
-          downloadBlob(blob, name);
-          status.textContent = "Saving to Downloads";
-          close();
+          if (saving) return;
+          const pending = requestSave(blob, name);
+          if (!pending) {
+            downloadBlob(blob, name);
+            status.textContent = "Saving to Downloads";
+            close();
+            return;
+          }
+          saving = true;
+          status.textContent = "Choose where to save";
+          pending.then(
+            (path) => {
+              status.textContent = path ? `Saved ${path}` : "";
+              close();
+            },
+            (err) => {
+              status.textContent = err instanceof Error && err.message ? err.message : "Could not save the screenshot";
+              close();
+            },
+          );
         });
         const dismiss = choice("Don't save", close);
         actions.append(save, dismiss);
@@ -527,6 +590,41 @@
           onClick();
         });
         return node;
+      }
+      function filePicker() {
+        const bridge = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.hwpSave;
+        return bridge && typeof bridge.postMessage === "function" ? bridge : null;
+      }
+      function saveTail() {
+        return filePicker()
+          ? "Save asks where to put the file. Nothing is written until you pick a file."
+          : "Save downloads a PNG into your Downloads folder. Nothing is written until you choose Save.";
+      }
+      function requestSave(blob, name) {
+        const bridge = filePicker();
+        if (!bridge) return null;
+        return blobBase64(blob).then(
+          (data) =>
+            new Promise((resolve, reject) => {
+              const timer = setTimeout(() => {
+                window.__hwpSaveDone = null;
+                reject(new Error("The file picker timed out"));
+              }, 120000);
+              window.__hwpSaveDone = (ok, value) => {
+                clearTimeout(timer);
+                window.__hwpSaveDone = null;
+                if (ok) resolve(value || null);
+                else reject(new Error(value || "Could not save the screenshot"));
+              };
+              try {
+                bridge.postMessage(JSON.stringify({ name, data }));
+              } catch (err) {
+                clearTimeout(timer);
+                window.__hwpSaveDone = null;
+                reject(err instanceof Error ? err : new Error("Could not save the screenshot"));
+              }
+            }),
+        );
       }
       function downloadBlob(blob, name) {
         const url = URL.createObjectURL(blob);
@@ -623,6 +721,8 @@
       const ctx = canvas.getContext("2d");
       if (!ctx) throw new Error("Could not take the screenshot");
       const css = pageCss().replace(/<\/style/gi, "<\\/style");
+      ctx.fillStyle = pageBackground();
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
       const body = elements
         .map((element) => {
           const rect = asRect(element.getBoundingClientRect());
@@ -633,9 +733,20 @@
       const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${bounds.width}" height="${bounds.height}"><foreignObject width="100%" height="100%"><div xmlns="http://www.w3.org/1999/xhtml"><style>${css}</style><div style="position:relative;width:${bounds.width}px;height:${bounds.height}px">${body}</div></div></foreignObject></svg>`;
       const image = new Image();
       image.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
-      await image.decode();
+      await Promise.race([
+        image.decode(),
+        new Promise((_, reject) => setTimeout(() => reject(new Error("The page image did not load")), 3000)),
+      ]);
       ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
       return pngBlob(canvas);
+    }
+
+    function pageBackground() {
+      for (const node of [document.body, document.documentElement]) {
+        const color = node ? usableColor(getComputedStyle(node).backgroundColor) : null;
+        if (color) return color;
+      }
+      return "#ffffff";
     }
 
     async function paintElements(elements) {

@@ -3,10 +3,7 @@ export interface ScreenshotOffer {
   body: string;
 }
 
-export type ScreenshotKeep =
-  | { kind: "saved"; path: string }
-  | { kind: "cancelled" }
-  | { kind: "downloaded" };
+export type ScreenshotKeep = { kind: "saved"; path: string } | { kind: "cancelled" };
 
 /** What to say after a screenshot. A file is a separate choice from the clipboard. */
 export function screenshotOffer(copied: boolean, where: "file-dialog" | "downloads"): ScreenshotOffer {
@@ -28,22 +25,16 @@ export function screenshotFileName(now = new Date()): string {
 
 /**
  * Keep a screenshot only when the person confirms.
- * A cancelled file dialog writes nothing. A dialog that cannot open falls back to a download.
+ * A cancelled file dialog writes nothing. A dialog that cannot open is reported.
  */
 export async function keepScreenshot(
   blob: Blob,
   name: string,
   save: (blob: Blob, name: string) => Promise<string | null>,
-  download: (name: string) => void,
 ): Promise<ScreenshotKeep> {
-  try {
-    const path = await save(blob, name);
-    if (!path) return { kind: "cancelled" };
-    return { kind: "saved", path };
-  } catch {
-    download(name);
-    return { kind: "downloaded" };
-  }
+  const path = await save(blob, name);
+  if (!path) return { kind: "cancelled" };
+  return { kind: "saved", path };
 }
 
 /** Start the clipboard write during the click, before the image finishes rendering. */
@@ -72,16 +63,4 @@ function writeBlob(clipboard: Clipboard, pending: Promise<Blob>): Promise<boolea
       ),
     () => false,
   );
-}
-
-export function downloadPng(blob: Blob, name: string) {
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = name;
-  link.rel = "noopener";
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
 }

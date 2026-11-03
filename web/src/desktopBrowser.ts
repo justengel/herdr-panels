@@ -17,6 +17,11 @@ export function isPermissionError(message: string): boolean {
   return /not allowed|permission denied|forbidden/i.test(message);
 }
 
+/** Linux is the only desktop window that can snapshot its own page. */
+export function supportsWindowSnapshot(userAgent: string): boolean {
+  return /Linux|X11/i.test(userAgent);
+}
+
 export function desktopHost(): Internals | null {
   if (typeof window === "undefined") return null;
   const host = window as Window & { __TAURI_INTERNALS__?: Internals };
@@ -197,6 +202,23 @@ export async function snapshotBrowser(label: string, width: number, height: numb
   const host = desktopHost();
   if (!host || width < 2 || height < 2) return null;
   const base64 = await host.invoke("snapshot_browser", { label, width, height });
+  if (typeof base64 !== "string" || !base64) return null;
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+  return new Blob([bytes], { type: "image/png" });
+}
+
+/** A pixel snapshot of the visible desk page, or null where this window cannot take one. */
+export async function desktopSnapshot(rect: { left: number; top: number; width: number; height: number }): Promise<Blob | null> {
+  const host = desktopHost();
+  if (!host || !supportsWindowSnapshot(navigator.userAgent || "")) return null;
+  const left = Math.max(0, rect.left);
+  const top = Math.max(0, rect.top);
+  const width = Math.min(window.innerWidth, rect.left + rect.width) - left;
+  const height = Math.min(window.innerHeight, rect.top + rect.height) - top;
+  if (width < 1 || height < 1) return null;
+  const base64 = await host.invoke("snapshot_view", { x: left, y: top, width, height, viewport: window.innerWidth });
   if (typeof base64 !== "string" || !base64) return null;
   const binary = atob(base64);
   const bytes = new Uint8Array(binary.length);

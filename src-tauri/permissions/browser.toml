@@ -19,6 +19,11 @@ description = "Read a browser webview's pixels so a screenshot includes the page
 commands.allow = ["snapshot_browser"]
 
 [[permission]]
+identifier = "allow-snapshot-view"
+description = "Take a pixel snapshot of the desktop window for the Screenshot button."
+commands.allow = ["snapshot_view"]
+
+[[permission]]
 identifier = "allow-eval-browser"
 description = "Run a host-built script in a browser panel. Remote pages cannot call this."
 commands.allow = ["eval_browser"]

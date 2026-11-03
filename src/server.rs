@@ -789,6 +789,30 @@ fn ensure_png_extension(path: PathBuf) -> PathBuf {
     PathBuf::from(name)
 }
 
+/// Opens a save dialog and writes the PNG only after a path is chosen.
+/// `Ok(None)` means the person cancelled.
+pub fn save_png_dialog(bytes: Vec<u8>, suggested: &str) -> Result<Option<PathBuf>, String> {
+    checked_png(&bytes)?;
+    let suggested = screenshot_file_name(Some(suggested));
+    let mut dialog = rfd::FileDialog::new()
+        .set_title("Save screenshot")
+        .set_file_name(&suggested)
+        .add_filter("PNG image", &["png"]);
+    if let Some(start) = screenshot_start_dir() {
+        dialog = dialog.set_directory(start);
+    }
+    store_png(dialog.save_file(), &bytes)
+}
+
+/// The picker starts in the home directory. A missing Downloads folder is not used.
+fn screenshot_start_dir() -> Option<PathBuf> {
+    let raw = std::env::var_os("HOME")
+        .filter(|value| !value.is_empty())
+        .or_else(|| std::env::var_os("USERPROFILE").filter(|value| !value.is_empty()))?;
+    let path = PathBuf::from(raw);
+    path.is_dir().then_some(path)
+}
+
 /// `None` means the person cancelled. A file is written only for a chosen path.
 fn store_png(choice: Option<PathBuf>, bytes: &[u8]) -> Result<Option<PathBuf>, String> {
     let Some(path) = choice else {
@@ -838,14 +862,7 @@ async fn save_png(headers: HeaderMap, body: Bytes) -> Result<Json<Value>, ApiErr
             .get("x-screenshot-name")
             .and_then(|value| value.to_str().ok()),
     );
-    let saved = tokio::task::spawn_blocking(move || {
-        let chosen = rfd::FileDialog::new()
-            .set_title("Save screenshot")
-            .set_file_name(suggested)
-            .add_filter("PNG image", &["png"])
-            .save_file();
-        store_png(chosen, &bytes)
-    })
+    let saved = tokio::task::spawn_blocking(move || save_png_dialog(bytes, &suggested))
     .await
     .map_err(|err| ApiError::bad(err.to_string()))?
     .map_err(ApiError::bad)?;

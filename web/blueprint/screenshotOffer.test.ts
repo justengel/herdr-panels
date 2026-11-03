@@ -20,15 +20,8 @@ describe("screenshot save offer", () => {
   });
 
   it("writes nothing when the save dialog is cancelled", async () => {
-    const downloaded: string[] = [];
-    const result = await keepScreenshot(
-      new Blob(["png"]),
-      "herdr-panels.png",
-      async () => null,
-      (name) => downloaded.push(name),
-    );
+    const result = await keepScreenshot(new Blob(["png"]), "herdr-panels.png", async () => null);
     expect(result).toEqual({ kind: "cancelled" });
-    expect(downloaded).toEqual([]);
   });
 
   it("keeps the path the person picked", async () => {
@@ -36,24 +29,15 @@ describe("screenshot save offer", () => {
       new Blob(["png"]),
       "herdr-panels.png",
       async () => "C:\\shots\\herdr-panels.png",
-      () => {
-        throw new Error("download should not run");
-      },
     );
     expect(result).toEqual({ kind: "saved", path: "C:\\shots\\herdr-panels.png" });
   });
 
-  it("downloads only when the save dialog cannot open", async () => {
-    const downloaded: string[] = [];
-    const result = await keepScreenshot(
-      new Blob(["png"]),
-      "herdr-panels.png",
-      async () => {
+  it("reports a save dialog that cannot open", async () => {
+    await expect(
+      keepScreenshot(new Blob(["png"]), "herdr-panels.png", async () => {
         throw new Error("dialog unavailable");
-      },
-      (name) => downloaded.push(name),
-    );
-    expect(result).toEqual({ kind: "downloaded" });
-    expect(downloaded).toEqual(["herdr-panels.png"]);
+      }),
+    ).rejects.toThrow(/dialog unavailable/);
   });
 });

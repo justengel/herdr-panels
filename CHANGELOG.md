@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+Copy, HTML, and Screenshot turn Select off. The screenshot dialog still asks where to save the file. A browser panel tells the desk with its own page message, so the Select button and the other panels turn off too. The page title is only the fallback: a screenshot replaces that title, and the desk can miss it.
+
+Save opens a file picker, including a screenshot taken inside a browser panel, and writes the PNG only after a path is chosen. The picker starts in the home directory. On Linux it uses the desktop portal, and Zenity is the fallback.
+
+On Linux, Screenshot of the desk itself asks the window for those pixels and crops them to the selection. A plugin, a note, and a terminal keep their images and gradients. The selection outline is hidden while that snapshot is taken. A snapshot that fails is reported, and the page is drawn instead. A capture that stalls ends with a message. A closed details section stays closed, with a disclosure arrow in place of a list number. An inline element with padding, such as a pill, is no longer cut off. A page inside a plugin frame is drawn on that page's own background. Inside a browser panel, the fallback image waits at most three seconds and fills the page background first.
+
 A browser panel no longer covers the Panels version card, a dialog, or the other desk popups. On Windows the native page is cut around the popup. On Linux the page is held as a still and the live view steps aside, so the popup is drawn and the rest of the page stays visible. A hole cut in the WebKit view paints black, so that is not used.
 
 Clicking a tab on a collapsed panel opens that panel on the clicked tab, including the tab that was already selected. The panel type is no longer drawn in the title bar.

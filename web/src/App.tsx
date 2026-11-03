@@ -44,7 +44,7 @@ import { LayoutView } from "./components/LayoutView";
 import { TopBar } from "./components/TopBar";
 import { DesignBar } from "./components/DesignBar";
 import { UnlockDialog } from "./components/UnlockDialog";
-import { ElementSelect } from "./components/ElementSelect";
+import { ElementSelect, ScreenshotSave, type ShotOffer } from "./components/ElementSelect";
 import { desktopHost } from "./desktopBrowser";
 import { DeskKeyboard, KeyedPanelProvider } from "./deskKeyboard";
 import { deskFillRequest, leaveVisitPanel, openVisit, reuseVisit, type OpenedVisit, type VisitWeights } from "./borrowPanel";
@@ -129,6 +129,8 @@ export function App() {
   const [sessions, setSessions] = useState<string[]>([]);
   const [plugins, setPlugins] = useState<PluginInfo[]>([]);
   const [selecting, setSelecting] = useState(false);
+  const [shot, setShot] = useState<ShotOffer | null>(null);
+  const shotToken = useRef(0);
   const [cliAccess, setCliAccess] = useState(true);
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
   const [keyId, setKeyId] = useState<string | null>(null);
@@ -153,6 +155,11 @@ export function App() {
   const sessionRef = useRef<string | null>(null);
   const deskGeneration = useRef(0);
   useEffect(() => installDisplayZoom({ keyedId: () => keyIdRef.current }), []);
+  useEffect(() => {
+    const leave = () => setSelecting(false);
+    window.addEventListener("hwp-select-off", leave);
+    return () => window.removeEventListener("hwp-select-off", leave);
+  }, []);
   const acceptDeskSaves = useRef(false);
   const deskSaveTimer = useRef(0);
   const applySpaceRef = useRef<(root: LayoutNode) => void>(() => {});
@@ -1317,6 +1324,26 @@ export function App() {
               noticeRef.current = window.setTimeout(() => setNotice(null), 1600);
             }}
             onClose={() => setSelecting(false)}
+            onPrepareShot={() => {
+              const token = ++shotToken.current;
+              return (offer) => {
+                if (token === shotToken.current) setShot(offer);
+              };
+            }}
+          />
+        ) : null}
+        {shot ? (
+          <ScreenshotSave
+            offer={shot}
+            onNotice={(message) => {
+              setNotice(message);
+              window.clearTimeout(noticeRef.current);
+              noticeRef.current = window.setTimeout(() => setNotice(null), 1600);
+            }}
+            onDismiss={() => {
+              shotToken.current += 1;
+              setShot(null);
+            }}
           />
         ) : null}
         {design ? (

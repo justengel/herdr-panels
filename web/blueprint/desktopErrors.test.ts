@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { isPermissionError } from "../src/desktopBrowser";
+import { isPermissionError, supportsWindowSnapshot } from "../src/desktopBrowser";
 
 describe("desktop command errors", () => {
   it("recognizes a command Tauri refused", () => {
@@ -17,6 +17,15 @@ describe("desktop command errors", () => {
   });
 });
 
+describe("window snapshot", () => {
+  it("is offered on Linux only, including a Windows user agent that mentions Safari", () => {
+    expect(supportsWindowSnapshot("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36 Edg/142.0.0.0")).toBe(false);
+    expect(supportsWindowSnapshot("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko)")).toBe(false);
+    expect(supportsWindowSnapshot("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/605.1.15 (KHTML, like Gecko)")).toBe(true);
+    expect(supportsWindowSnapshot("Mozilla/5.0 (Wayland; Linux x86_64)")).toBe(true);
+  });
+});
+
 describe("desktop command permissions", () => {
   const root = join(dirname(fileURLToPath(import.meta.url)), "../..");
 
@@ -27,6 +36,7 @@ describe("desktop command permissions", () => {
       ["allow-set-browser-zoom", "set_browser_zoom"],
       ["allow-cursor-place", "cursor_place"],
       ["allow-snapshot-browser", "snapshot_browser"],
+      ["allow-snapshot-view", "snapshot_view"],
     ]) {
       expect(permissions).toContain(identifier);
       expect(permissions).toContain(`"${command}"`);

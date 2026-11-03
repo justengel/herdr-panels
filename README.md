@@ -71,6 +71,13 @@ Building from this repository is next. The release notes start at [CHANGELOG.md]
 
 These steps build from source. Requirements: Rust, Node.js, and a running Herdr (`herdr`, or `herdr server` for a headless session). The commands are the same on Windows, macOS, and Linux.
 
+On Ubuntu 24.04 the build also needs the GTK and WebKit headers, and a Rust newer than the one `apt install rustc` gives (1.75 cannot read this repository's lock file). The versioned packages work:
+
+```sh
+sudo apt install rustc-1.91 cargo-1.91 libwayland-dev libwebkit2gtk-4.1-dev libgtk-3-dev libsoup-3.0-dev libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev build-essential pkg-config zenity
+export PATH=/usr/lib/rust-1.91/bin:$PATH
+```
+
 ```sh
 cd web
 npm install
@@ -173,6 +180,34 @@ Prefix+Alt+N and Prefix+Alt+P move between spaces. Prefix+Shift+1 through 9 jump
 Keybinds, then Panels, lists every desk shortcut. Change records the keys you press. An action with more than one chord stores them as a comma-separated list. Reset puts the usual chords back. Those shortcuts belong to this window.
 
 The prefix reaches a plugin, an HTML panel, and a browser panel. Ctrl+B inside a plugin frame reaches the desk, the same way it does in a terminal. Clicking one of those panels selects it even when the page inside keeps the click. Other keys stay with the page. Opening and resizing stay on the pointer, or on `herdr-panels panel` for an agent.
+
+### Terminal keys
+
+The terminal follows each platform's usual keys, so Ctrl+C always stays an interrupt where terminals normally keep it.
+
+| Action | Linux | macOS | Windows |
+| --- | --- | --- | --- |
+| Copy the highlight | Ctrl+Shift+C or Ctrl+Insert | Command+C | Ctrl+C (an interrupt when nothing is highlighted), Ctrl+Shift+C, or Ctrl+Insert |
+| Paste | Ctrl+Shift+V or Shift+Insert | Command+V | Ctrl+V, Ctrl+Shift+V, or Shift+Insert |
+| Interrupt | Ctrl+C | Ctrl+C | Ctrl+C with nothing highlighted |
+
+On Linux, Ctrl+V goes to the shell as ^V. Off Windows the web view does the paste itself, because some web views refuse to let a page read the clipboard. Copy falls back to the browser's copy command when the clipboard API is refused. macOS follows the same rules, but it has only been checked by reading the code.
+
+Outside Windows, Shift+Left, Shift+Right, Shift+Home, and Shift+End highlight text and move the shell's own cursor with it, so Home and End land where the shell puts them. Ctrl+Shift+Left and Ctrl+Shift+Right do the same a word at a time. Backspace or Delete removes that highlighted text. Other typing leaves the text in place and clears the highlight. On Windows a highlight is replaced when you type. Shift+Up and Shift+Down go to the shell, where they are history keys.
+
+Terminals have no undo or redo. Ctrl+Z suspends the job. Readline shells such as bash undo with Ctrl+_ and have no redo, and PowerShell undoes with Ctrl+Z and redoes with Ctrl+Y. Text copied from an agent that wraps its own lines keeps those line breaks, because the terminal cannot tell a wrapped line from a real one.
+
+An agent that reads a pasted image needs `xclip` or `wl-paste` on Linux: `sudo apt install xclip`.
+
+### Select and screenshot
+
+**Select** in the top bar picks an element, or drag across several. The bar then offers Copy, HTML, and Screenshot. A Screenshot is copied to the clipboard and then offers to save a PNG. Save opens a file picker and writes nothing until a path is chosen. The picker starts in the home directory. On Linux it uses the desktop portal, and `zenity` is the fallback (`sudo apt install zenity`). A Text panel is one element per line, so Select can pick or drag across part of a file. A file longer than 20,000 lines stays one block.
+
+How the image is made depends on where the page runs:
+
+- In the Linux desktop window the window itself snapshots the visible page and crops it to the selection, with the selection overlay hidden. This works for plugin frames, terminals, and notes, keeps images and gradients, and the selection outline stays out of the picture. A browser panel asks the app by setting its page title to `hwp-snap:` and a rectangle. The desk page uses the `snapshot_view` command.
+- In a browser tab, and in the desktop window when that snapshot fails, the page is drawn from its elements. Closed `details` sections stay closed, and a disclosure arrow replaces the list number. A page inside a plugin frame is drawn on the page's own background. A padded inline element, such as a pill, keeps the box it had on the page.
+- A capture has a time limit, so a stuck one ends with a message. The notice also tells you when the window snapshot failed and the slower method took over.
 
 ### Design mode
 

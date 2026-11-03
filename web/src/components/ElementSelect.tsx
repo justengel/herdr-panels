@@ -3,20 +3,24 @@ import { createPortal } from "react-dom";
 import { api } from "../api";
 import { paintNativeBrowsers } from "../browserShot";
 import { settleComputedColors } from "../cssColor";
-import { desktopHost } from "../desktopBrowser";
-import { hideSelectionChrome, isHtmlElement, isSelectionChrome } from "../shotElement";
-import { intersects, shiftRect, toFrame, type LocalRect } from "../frameSelect";
+import { desktopHost, desktopSnapshot, supportsWindowSnapshot } from "../desktopBrowser";
 import {
-  downloadPng,
-  keepScreenshot,
-  screenshotFileName,
-  screenshotOffer,
-  writeClipboardPng,
-} from "../screenshotOffer";
+  anchorPieces,
+  hideSelectionChrome,
+  isHtmlElement,
+  isSelectionChrome,
+  paintedBackground,
+  settleDisclosure,
+  withTimeout,
+} from "../shotElement";
+import { intersects, shiftRect, toFrame, type LocalRect } from "../frameSelect";
+import { keepScreenshot, screenshotFileName, screenshotOffer, writeClipboardPng } from "../screenshotOffer";
 
 interface Props {
   onNotice: (message: string) => void;
   onClose: () => void;
+  /** Returns a reporter for the save dialog. Select closes before that dialog is ready. */
+  onPrepareShot: () => (offer: ShotOffer) => void;
 }
 
 interface Box {
@@ -72,31 +76,26 @@ const ITEM =
 
 const SELECT_CHROME = ".topbar, .select-menu, .dialog, .dialog-backdrop";
 
-interface ShotOffer {
+export interface ShotOffer {
   blob: Blob;
   copied: boolean;
   name: string;
 }
 
-export function ElementSelect({ onNotice, onClose }: Props) {
+export function ElementSelect({ onNotice, onClose, onPrepareShot }: Props) {
   const [hover, setHover] = useState<Box | null>(null);
   const [marquee, setMarquee] = useState<Box | null>(null);
   const [selection, setSelection] = useState<Selection | null>(null);
-  const [shot, setShot] = useState<ShotOffer | null>(null);
-  const [saving, setSaving] = useState(false);
   const closeRef = useRef(onClose);
   const noticeRef = useRef(onNotice);
-  const shotRef = useRef<ShotOffer | null>(null);
-  const shotTicket = useRef<object | null>(null);
-  const alive = useRef(true);
-  shotRef.current = shot;
+  const prepareRef = useRef(onPrepareShot);
   const drag = useRef<{ x: number; y: number; moved: boolean } | null>(null);
   const chosen = useRef<Piece[]>([]);
   closeRef.current = onClose;
   noticeRef.current = onNotice;
+  prepareRef.current = onPrepareShot;
 
   useEffect(() => {
-    alive.current = true;
     document.body.classList.add("is-selecting");
     let stamp = 0;
     const skip = (target: EventTarget | null) =>
@@ -267,7 +266,7 @@ export function ElementSelect({ onNotice, onClose }: Props) {
       if (event.target instanceof HTMLIFrameElement) tell(event.target, true);
     };
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && !shotRef.current) closeRef.current();
+      if (event.key === "Escape") closeRef.current();
     };
     const onScroll = () => {
       if (chosen.current.length > 0) setSelection(pack(chosen.current));
@@ -306,7 +305,6 @@ export function ElementSelect({ onNotice, onClose }: Props) {
       window.removeEventListener("keydown", onKey);
       window.removeEventListener("resize", onScroll);
       if (desktop) void desktop.invoke("set_browser_select", { enabled: false }).catch(() => undefined);
-      alive.current = false;
     };
   }, []);
 
@@ -321,38 +319,46 @@ export function ElementSelect({ onNotice, onClose }: Props) {
       {selection ? (
         <div className="select-menu" style={menuStyle(selection.bounds)} role="menu">
           <span>{labelFor(selection.pieces)}</span>
-          <button type="button" onClick={() => void copyText(selection.pieces, onNotice)}>
+          <button
+            type="button"
+            onClick={() => {
+              void copyText(selection.pieces, onNotice);
+              onClose();
+            }}
+          >
             Copy
           </button>
-          <button type="button" title="Copy the HTML of the selection" onClick={() => void copyHtml(selection.pieces, onNotice)}>
+          <button
+            type="button"
+            title="Copy the HTML of the selection"
+            onClick={() => {
+              void copyHtml(selection.pieces, onNotice);
+              onClose();
+            }}
+          >
             HTML
           </button>
           <button
             type="button"
             onClick={() => {
-              const ticket = {};
-              shotTicket.current = ticket;
-              const pending = captureShot(selection);
+              const pending = captureShot(selection, onNotice);
               const copied = writeClipboardPng(pending);
               const name = screenshotFileName();
+              const report = prepareRef.current();
+              onClose();
               void pending.then(
                 async (blob) => {
                   const ok = await Promise.race([
                     copied,
                     new Promise<boolean>((resolve) => window.setTimeout(() => resolve(false), 700)),
                   ]);
-                  if (!alive.current || shotTicket.current !== ticket) return;
-                  setSaving(false);
-                  setShot({ blob, copied: ok, name });
-                  if (ok) return;
+                  report({ blob, copied: ok === true, name });
+                  if (ok === true) return;
                   const later = await copied;
-                  if (!alive.current || shotTicket.current !== ticket || !later) return;
-                  setShot((current) => (current && current.blob === blob ? { ...current, copied: true } : current));
+                  if (!later) return;
+                  report({ blob, copied: true, name });
                 },
-                (err) => {
-                  if (!alive.current || shotTicket.current !== ticket) return;
-                  onNotice(clipboardMessage(err, "Could not take the screenshot"));
-                },
+                (err) => onNotice(clipboardMessage(err, "Could not take the screenshot")),
               );
             }}
           >
@@ -360,45 +366,47 @@ export function ElementSelect({ onNotice, onClose }: Props) {
           </button>
         </div>
       ) : null}
-      {shot
-        ? createPortal(
-            <ScreenshotDialog
-              copied={shot.copied}
-              saving={saving}
-              onDismiss={() => {
-                if (saving) return;
-                shotTicket.current = null;
-                setShot(null);
-              }}
-              onSave={() => {
-                if (saving) return;
-                const current = shot;
-                setSaving(true);
-                void keepScreenshot(
-                  current.blob,
-                  current.name,
-                  (blob, name) => api.savePng(blob, name),
-                  (name) => downloadPng(current.blob, name),
-                ).then(
-                  (result) => {
-                    if (!alive.current) return;
-                    setSaving(false);
-                    if (result.kind === "cancelled") return;
-                    setShot(null);
-                    onNotice(result.kind === "saved" ? `Saved ${result.path}` : "Download started");
-                  },
-                  () => {
-                    if (!alive.current) return;
-                    setSaving(false);
-                    onNotice("Could not save the screenshot");
-                  },
-                );
-              }}
-            />,
-            document.body,
-          )
-        : null}
     </>
+  );
+}
+
+/** The save dialog stays after Select turns off. */
+export function ScreenshotSave({
+  offer,
+  onNotice,
+  onDismiss,
+}: {
+  offer: ShotOffer;
+  onNotice: (message: string) => void;
+  onDismiss: () => void;
+}) {
+  const [saving, setSaving] = useState(false);
+  return createPortal(
+    <ScreenshotDialog
+      copied={offer.copied}
+      saving={saving}
+      onDismiss={() => {
+        if (saving) return;
+        onDismiss();
+      }}
+      onSave={() => {
+        if (saving) return;
+        setSaving(true);
+        void keepScreenshot(offer.blob, offer.name, (blob, name) => api.savePng(blob, name)).then(
+          (result) => {
+            setSaving(false);
+            if (result.kind === "cancelled") return;
+            onDismiss();
+            onNotice(`Saved ${result.path}`);
+          },
+          (err) => {
+            setSaving(false);
+            onNotice(err instanceof Error && err.message ? err.message : "Could not save the screenshot");
+          },
+        );
+      }}
+    />,
+    document.body,
   );
 }
 
@@ -763,7 +771,29 @@ async function copyHtml(pieces: Piece[], onNotice: (message: string) => void) {
   }
 }
 
-function captureShot(selection: Selection): Promise<Blob> {
+async function captureShot(selection: Selection, report: (message: string) => void): Promise<Blob> {
+  const native = await nativeShot(selection).catch((err: unknown) => {
+    console.warn("[screenshot] native snapshot failed", err);
+    report(`The window snapshot failed (${err instanceof Error ? err.message : String(err)}). Drawing the page instead.`);
+    return null;
+  });
+  if (native) return native;
+  return withTimeout(drawnShot(selection), 20000);
+}
+
+/** In the Linux desktop window the window itself paints the pixels, overlays hidden. */
+async function nativeShot(selection: Selection): Promise<Blob | null> {
+  if (!desktopHost() || !supportsWindowSnapshot(navigator.userAgent || "")) return null;
+  document.body.classList.add("is-capturing");
+  try {
+    await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+    return await withTimeout(desktopSnapshot(selection.bounds), 10000);
+  } finally {
+    document.body.classList.remove("is-capturing");
+  }
+}
+
+function drawnShot(selection: Selection): Promise<Blob> {
   const live = selection.pieces.every((piece) => isHtmlElement(piece.live));
   if (!live) return shotMarkup(selection.pieces, selection.css);
   if (selection.pieces.length === 1) return rasterize(selection.pieces[0].live as HTMLElement);
@@ -857,7 +887,7 @@ async function shotMarkup(pieces: Piece[], css: string): Promise<Blob> {
       return `<div style="position:absolute;left:${left}px;top:${top}px;width:${piece.rect.width}px">${html}</div>`;
     })
     .join("");
-  const doc = `<!doctype html><html><head><meta charset="utf-8"><style>${safeCss}</style></head><body style="margin:0;background:#14181f"><div style="position:relative;width:${bounds.width}px;height:${bounds.height}px;overflow:hidden">${body}</div></body></html>`;
+  const doc = `<!doctype html><html><head><meta charset="utf-8"><style>${safeCss}</style></head><body style="margin:0"><div style="position:relative;width:${bounds.width}px;height:${bounds.height}px;overflow:hidden">${body}</div></body></html>`;
   const frame = document.createElement("iframe");
   frame.setAttribute("sandbox", "allow-same-origin");
   frame.style.cssText = `position:fixed;left:-10000px;top:0;width:${Math.ceil(bounds.width)}px;height:${Math.ceil(bounds.height)}px;border:0;`;
@@ -872,15 +902,25 @@ async function shotMarkup(pieces: Piece[], css: string): Promise<Blob> {
     const root = frame.contentDocument?.body;
     if (!isHtmlElement(root)) throw new Error("Could not take the screenshot");
     hideSelectionChrome(root.ownerDocument);
+    anchorPieces(root);
     const { default: html2canvas } = await import("html2canvas");
     const canvas = await html2canvas(
       root,
-      shotOptions("#14181f", { width: bounds.width, height: bounds.height }),
+      shotOptions(frameBackground(frame), { width: bounds.width, height: bounds.height }),
     );
     return await blobFrom(canvas);
   } finally {
     frame.remove();
   }
+}
+
+/** The background the framed page paints, so a light page is not drawn on a dark fill. */
+function frameBackground(frame: HTMLIFrameElement): string {
+  const view = frame.contentWindow;
+  const doc = frame.contentDocument;
+  if (!view || !doc) return "#14181f";
+  const colors = [doc.body, doc.documentElement].map((node) => (node ? view.getComputedStyle(node).backgroundColor : ""));
+  return paintedBackground(colors, "#14181f");
 }
 
 function shotOptions(backgroundColor: string, size?: { width: number; height: number }) {
@@ -892,6 +932,7 @@ function shotOptions(backgroundColor: string, size?: { width: number; height: nu
     ignoreElements: (element: Element) => isSelectionChrome(element),
     onclone: (doc: Document) => {
       hideSelectionChrome(doc);
+      settleDisclosure(doc);
       settleComputedColors(doc);
     },
     ...size,
