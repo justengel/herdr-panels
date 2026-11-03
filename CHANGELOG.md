@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.14 - 2026-11-03
 
 Copy, HTML, and Screenshot turn Select off. The screenshot dialog still asks where to save the file. A browser panel tells the desk with its own page message, so the Select button and the other panels turn off too. The page title is only the fallback: a screenshot replaces that title, and the desk can miss it.
 
