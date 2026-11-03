@@ -57,10 +57,21 @@ function WatchedText({ path }: { path: string }) {
   return <TextBody text={text} />;
 }
 
+const LINE_CAP = 20000;
+
 function TextBody({ text }: { text: string }) {
+  const lines = text.split("\n");
+  const body = lines.length > LINE_CAP
+    ? text
+    : lines.map((line, index) => (
+        <span className="file-line" key={index}>
+          {line}
+          {"\n"}
+        </span>
+      ));
   return (
     <CopyOnSelect>
-      <pre className="file-text">{text}</pre>
+      <pre className="file-text">{body}</pre>
     </CopyOnSelect>
   );
 }

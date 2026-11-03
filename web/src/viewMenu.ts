@@ -155,7 +155,7 @@ function viewMatches(view: PluginViewInfo, subject: Subject): boolean {
   return subject.file === "html" && view.opens.includes("html");
 }
 
-/** Panel type, shown on the right of the title bar. A plugin uses its name. */
+/** Panel type used when the title bar has no name of its own. A plugin uses its name. */
 export function viewerName(panel: PanelConfig, pluginTitle = ""): string {
   const content = activePanel(panel);
   switch (content.type) {

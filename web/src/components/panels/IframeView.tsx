@@ -10,7 +10,9 @@ import {
   isRemotePage,
   menuCuts,
   menuObstacles,
+  nativePopupUsesStill,
   placeBrowser,
+  snapshotBrowser,
 } from "../../desktopBrowser";
 import { panelZoom, subscribeZoom } from "../../displayZoom";
 import {
@@ -54,6 +56,8 @@ function EmbeddedPage({ panelId, url, suspended }: { panelId: string; url: strin
   leaderRef.current = place.leader;
   hideRef.current = place.hide;
   const lastRef = useRef("");
+  const coverRef = useRef(false);
+  const coverUrl = useRef("");
   const [note, setNote] = useState("Opening…");
 
   useEffect(() => {
@@ -79,6 +83,44 @@ function EmbeddedPage({ panelId, url, suspended }: { panelId: string; url: strin
         suspendedRef.current || hideRef.current || browserBlocked(),
       );
       const cuts = bounds ? menuCuts(bounds, menuObstacles()) : [];
+      const cover = bounds !== null && nativePopupUsesStill(navigator.userAgent, cuts);
+      if (cover) {
+        if (!coverRef.current) {
+          coverRef.current = true;
+          const shotWidth = bounds.width;
+          const shotHeight = bounds.height;
+          void snapshotBrowser(label, shotWidth, shotHeight)
+            .then((blob) => {
+              if (stopped || !coverRef.current) return;
+              const holeNode = hole.current;
+              if (holeNode && blob) {
+                if (coverUrl.current) URL.revokeObjectURL(coverUrl.current);
+                coverUrl.current = URL.createObjectURL(blob);
+                holeNode.style.backgroundImage = `url("${coverUrl.current}")`;
+                holeNode.style.backgroundSize = "100% 100%";
+                holeNode.style.backgroundRepeat = "no-repeat";
+              }
+              return true;
+            })
+            .catch(() => true)
+            .then((ready) => {
+              if (!ready || stopped || !coverRef.current) return;
+              lastRef.current = "covered";
+              setNote("");
+              void placeBrowser(label, url, null, generation, [], false);
+            });
+        }
+        return;
+      }
+      if (coverRef.current) {
+        coverRef.current = false;
+        if (node.style.backgroundImage) node.style.backgroundImage = "";
+        if (coverUrl.current) {
+          URL.revokeObjectURL(coverUrl.current);
+          coverUrl.current = "";
+        }
+        lastRef.current = "";
+      }
       const key = browserSlotKey(bounds, cuts);
       const again = Boolean(bounds && refresh);
       if (key === lastRef.current && !again) return;
@@ -121,6 +163,7 @@ function EmbeddedPage({ panelId, url, suspended }: { panelId: string; url: strin
       stopped = true;
       unsubscribe();
       cancelAnimationFrame(frame);
+      if (coverUrl.current) URL.revokeObjectURL(coverUrl.current);
       dropBrowser(label, generation, url);
     };
   }, [panelId, url]);

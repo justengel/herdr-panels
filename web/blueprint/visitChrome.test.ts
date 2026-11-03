@@ -17,6 +17,7 @@ const actions: PanelActions = {
   rename: () => undefined,
   icon: () => undefined,
   collapse: () => undefined,
+  openTab: () => undefined,
   fill: () => undefined,
   leave: () => undefined,
   filledId: "google",
@@ -82,7 +83,7 @@ describe("a borrowed panel", () => {
     expect(html.indexOf("Show the whole desk")).toBeLessThan(html.indexOf("No longer visit google"));
   });
 
-  it("puts the panel type on the right, even when it matches the name", () => {
+  it("leaves the panel type off the title bar", () => {
     const html = renderToStaticMarkup(
       createElement(
         PanelActionsProvider,
@@ -93,17 +94,12 @@ describe("a borrowed panel", () => {
             title: "Panes",
             kind: "Panes",
             panelType: "herdr",
-            viewer: "Panes",
           },
           createElement("p", null, "tabs"),
         ),
       ),
     );
-    const title = html.slice(html.indexOf("panel-title"), html.indexOf("panel-actions"));
-    const actionsHtml = html.slice(html.indexOf("panel-actions"));
-    expect(title).not.toContain("panel-type");
-    expect(actionsHtml).toContain("panel-type");
-    expect(actionsHtml.indexOf("panel-type")).toBeLessThan(actionsHtml.indexOf("Panel settings"));
-    expect(html).toContain(">Panes</span>");
+    expect(html).not.toContain("panel-type");
+    expect(html).toContain(">Panes</strong>");
   });
 });

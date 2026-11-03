@@ -9,12 +9,15 @@ import { TabMark } from "./TabMark";
 export function TabStrip({
   group,
   onChange,
+  onActivate,
   onClose,
   onContextMenu,
   onDragAway,
 }: {
   group: TabsPanel;
   onChange: (next: TabsPanel) => void;
+  /** A click or a new tab. The caller opens a collapsed panel onto that tab. */
+  onActivate?: (next: TabsPanel) => void;
   onClose: (tabId: string) => void;
   onContextMenu: (tabId: string, event: React.MouseEvent) => void;
   onDragAway: (tabId: string, event: PointerEvent) => void;
@@ -79,7 +82,9 @@ export function TabStrip({
           onPointerDown={onPointerDown}
           onOpen={() => {
             if (swallowClick(tab.id)) return;
-            onChange({ ...group, active: tab.id });
+            const next = { ...group, active: tab.id };
+            if (onActivate) onActivate(next);
+            else onChange(next);
           }}
           onRename={(title) => rename(tab.id, title)}
           onCancelRename={() => {
@@ -98,7 +103,9 @@ export function TabStrip({
         onClick={() => {
           if (group.tabs.length >= 24) return;
           const tab = blankTab(freshTabId(group.tabs));
-          onChange({ ...group, active: tab.id, tabs: [...group.tabs, tab] });
+          const next = { ...group, active: tab.id, tabs: [...group.tabs, tab] };
+          if (onActivate) onActivate(next);
+          else onChange(next);
         }}
       >
         +

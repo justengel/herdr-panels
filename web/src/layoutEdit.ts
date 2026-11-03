@@ -464,6 +464,11 @@ export function toggleCollapsed(node: LayoutNode, id: string): LayoutNode {
   return mapPanel(node, id, (panel) => ({ ...panel, collapsed: !panel.collapsed }));
 }
 
+/** A click on a tab opens a collapsed panel and shows that tab, even when it was already selected. */
+export function openTab(node: LayoutNode, id: string, group: TabsPanel): LayoutNode {
+  return mapPanel(node, id, (panel) => ({ ...panel, collapsed: false, panel: group }));
+}
+
 /** Drop one panel onto another's bar. A dragged group is flattened into the target. */
 export function groupOnBar(node: LayoutNode, sourceId: string, targetId: string): LayoutNode {
   if (sourceId === targetId) return node;

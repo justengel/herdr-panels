@@ -4,6 +4,7 @@ import { api } from "../api";
 import { paintNativeBrowsers } from "../browserShot";
 import { settleComputedColors } from "../cssColor";
 import { desktopHost } from "../desktopBrowser";
+import { hideSelectionChrome, isHtmlElement, isSelectionChrome } from "../shotElement";
 import { intersects, shiftRect, toFrame, type LocalRect } from "../frameSelect";
 import {
   downloadPng,
@@ -763,7 +764,7 @@ async function copyHtml(pieces: Piece[], onNotice: (message: string) => void) {
 }
 
 function captureShot(selection: Selection): Promise<Blob> {
-  const live = selection.pieces.every((piece) => piece.live instanceof HTMLElement);
+  const live = selection.pieces.every((piece) => isHtmlElement(piece.live));
   if (!live) return shotMarkup(selection.pieces, selection.css);
   if (selection.pieces.length === 1) return rasterize(selection.pieces[0].live as HTMLElement);
   return rasterizeRegion(selection.pieces.map((piece) => piece.live as HTMLElement));
@@ -869,7 +870,8 @@ async function shotMarkup(pieces: Piece[], css: string): Promise<Blob> {
   try {
     await loaded;
     const root = frame.contentDocument?.body;
-    if (!(root instanceof HTMLElement)) throw new Error("Could not take the screenshot");
+    if (!isHtmlElement(root)) throw new Error("Could not take the screenshot");
+    hideSelectionChrome(root.ownerDocument);
     const { default: html2canvas } = await import("html2canvas");
     const canvas = await html2canvas(
       root,
@@ -887,7 +889,11 @@ function shotOptions(backgroundColor: string, size?: { width: number; height: nu
     scale: window.devicePixelRatio || 1,
     logging: false,
     useCORS: true,
-    onclone: (doc: Document) => settleComputedColors(doc),
+    ignoreElements: (element: Element) => isSelectionChrome(element),
+    onclone: (doc: Document) => {
+      hideSelectionChrome(doc);
+      settleComputedColors(doc);
+    },
     ...size,
   };
 }

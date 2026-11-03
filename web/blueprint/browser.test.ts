@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { browserBounds, browserSlotKey, hideBrowserPanels, isRemotePage, menuCuts } from "../src/desktopBrowser";
+import { BROWSER_OVERLAYS, browserBounds, browserSlotKey, hideBrowserPanels, isRemotePage, menuCuts, nativePopupUsesStill, overlayBoxes } from "../src/desktopBrowser";
 
 describe("a browser panel covers its own rectangle", () => {
   it("places a webview on the panel content", () => {
@@ -11,11 +11,29 @@ describe("a browser panel covers its own rectangle", () => {
     });
   });
 
-  it("hides a browser panel while a dialog is open", () => {
-    expect(hideBrowserPanels({ dragging: false, settings: false, dialog: true })).toBe(true);
-    expect(hideBrowserPanels({ dragging: false, settings: true, dialog: false })).toBe(true);
+  it("holds a still of a Linux page while a popup overlaps it", () => {
+    const menu = [{ x: 10, y: 10, width: 40, height: 20 }];
+    expect(nativePopupUsesStill("Mozilla/5.0 (X11; Linux x86_64)", menu)).toBe(true);
+    expect(nativePopupUsesStill("Mozilla/5.0 (X11; Linux x86_64)", [])).toBe(false);
+    expect(nativePopupUsesStill("Mozilla/5.0 (Windows NT 10.0)", menu)).toBe(false);
+  });
+
+  it("keeps the page up under a dialog and hides it only while a panel is dragged", () => {
+    expect(hideBrowserPanels({ dragging: false, settings: false, dialog: true })).toBe(false);
+    expect(hideBrowserPanels({ dragging: false, settings: true, dialog: false })).toBe(false);
+    expect(hideBrowserPanels({ dragging: true, settings: false, dialog: false })).toBe(true);
     expect(hideBrowserPanels({ dragging: false, settings: false, dialog: false })).toBe(false);
     expect(browserBounds({ left: 10, top: 10, width: 400, height: 300 }, true)).toBeNull();
+  });
+
+  it("cuts the version card and every dialog out of a browser panel", () => {
+    for (const name of [".status-card", ".dialog", ".herdr-settings", ".panel-menu", ".select-menu", "[role='dialog']", "[role='tooltip']"]) {
+      expect(BROWSER_OVERLAYS).toContain(name);
+    }
+    expect(overlayBoxes([
+      { getBoundingClientRect: () => ({ left: 900.4, top: 40.2, width: 240.2, height: 96.6 }) },
+      { getBoundingClientRect: () => ({ left: 0, top: 0, width: 0, height: 0 }) },
+    ])).toEqual([{ x: 900, y: 40, width: 240, height: 97 }]);
   });
 
   it("covers a menu without shrinking the page", () => {

@@ -172,16 +172,22 @@ fn place_view(view: &Webview, x: f64, y: f64, width: f64, height: f64, shown: &m
             view.hide().map_err(|err| err.to_string())?;
             *shown = false;
         }
+        #[cfg(target_os = "linux")]
+        crate::linux_overlay::set_shown(view, false);
         return Ok(());
     }
     view.set_position(LogicalPosition::new(x, y))
         .map_err(|err| err.to_string())?;
     view.set_size(LogicalSize::new(width, height))
         .map_err(|err| err.to_string())?;
+    #[cfg(target_os = "linux")]
+    crate::linux_overlay::place(view, x, y, width, height);
     if !*shown {
         view.show().map_err(|err| err.to_string())?;
         *shown = true;
     }
+    #[cfg(target_os = "linux")]
+    crate::linux_overlay::set_shown(view, true);
     // A webview created while the desk is reflowing (a drop onto a tab) stays blank
     // until the parent is told it moved. Do this on every place, not only the first.
     wake_browser(view);
@@ -593,7 +599,15 @@ async fn place_browser(
             slot.view.navigate(parsed).map_err(|err| err.to_string())?;
             slot.url = target;
         }
-        place_view(&slot.view, x, y, width, height, &mut slot.shown, visible)?;
+        place_view(
+            &slot.view,
+            x,
+            y,
+            width,
+            height,
+            &mut slot.shown,
+            visible,
+        )?;
         let mut clipped = slot.clipped;
         sync_menu_clip(&slot.view, page, cuts, &mut clipped);
         slot.clipped = clipped;
@@ -647,6 +661,8 @@ async fn place_browser(
             LogicalSize::new(width, height),
         )
         .map_err(|err| err.to_string())?;
+    #[cfg(target_os = "linux")]
+    crate::linux_overlay::adopt(&view, x, y, width, height);
     if let Err(err) = view.eval(browser_page_zoom(content_zoom)) {
         eprintln!("browser zoom: {err}");
     }

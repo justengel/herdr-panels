@@ -137,6 +137,82 @@ export function joinTerminalSelection(rows: SelectionLine[]): string {
   return logical.map((line) => (line.trimEnd ? line.text.replace(/[ \t]+$/g, "") : line.text)).join("\n");
 }
 
+export type TerminalPlatform = "windows" | "mac" | "linux";
+
+export function terminalPlatform(userAgent: string): TerminalPlatform {
+  if (/Windows/i.test(userAgent)) return "windows";
+  if (/Macintosh|Mac OS X/i.test(userAgent)) return "mac";
+  return "linux";
+}
+
+type KeyPress = {
+  key: string;
+  ctrlKey: boolean;
+  shiftKey: boolean;
+  altKey: boolean;
+  metaKey: boolean;
+};
+
+/**
+ * Copy and paste chords for each platform. Null means the key belongs to the shell.
+ * Windows keeps Ctrl+C and Ctrl+V. Linux and macOS keep Ctrl+C as an interrupt.
+ */
+export function clipboardAction(event: KeyPress, platform: TerminalPlatform): "copy" | "paste" | null {
+  if (event.altKey) return null;
+  const key = event.key.toLowerCase();
+  const insert = event.key === "Insert";
+  if (platform === "windows") {
+    const command = event.ctrlKey || event.metaKey;
+    if (command && key === "c") return "copy";
+    if (command && key === "v") return "paste";
+    if (event.ctrlKey && !event.shiftKey && insert) return "copy";
+    if (!command && event.shiftKey && insert) return "paste";
+    return null;
+  }
+  if (platform === "mac") {
+    if (!event.metaKey || event.ctrlKey) return null;
+    if (key === "c") return "copy";
+    if (key === "v") return "paste";
+    return null;
+  }
+  const command = event.ctrlKey && !event.metaKey;
+  if (command && event.shiftKey && key === "c") return "copy";
+  if (command && event.shiftKey && key === "v") return "paste";
+  if (command && !event.shiftKey && insert) return "copy";
+  if (!command && event.shiftKey && insert) return "paste";
+  return null;
+}
+
+export type HighlightKey = "remove" | "clear" | "keep";
+
+/**
+ * What a key does to a highlight on Linux and macOS. Backspace and Delete
+ * remove that text. Shift plus an arrow, Home, or End keeps growing it.
+ * Any other key drops the highlight and still reaches the shell.
+ */
+export function highlightOnKey(event: KeyPress): HighlightKey {
+  if (event.key === "Shift" || event.key === "Control" || event.key === "Alt" || event.key === "Meta") return "keep";
+  const growing =
+    event.shiftKey &&
+    !event.altKey &&
+    !event.metaKey &&
+    (event.key === "ArrowLeft" || event.key === "ArrowRight" || event.key === "Home" || event.key === "End");
+  if (growing) return "keep";
+  if ((event.key === "Backspace" || event.key === "Delete") && !event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey) {
+    return "remove";
+  }
+  return "clear";
+}
+
+/** The highlight between two carets. Empty when they sit on the same cell. */
+export function selectionFromCarets(anchor: Caret, head: Caret, cols: number): BufferSelection | null {
+  const startIndex = indexOf(anchor, cols);
+  const endIndex = indexOf(head, cols);
+  if (startIndex === endIndex) return null;
+  const [start, end] = startIndex < endIndex ? [anchor, head] : [head, anchor];
+  return { start, end };
+}
+
 /** HTML clipboard body. A pre block keeps the spaces and line breaks a page would otherwise collapse. */
 export function terminalSelectionHtml(text: string): string {
   const body = text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -170,7 +246,29 @@ export async function writeTerminalClipboard(text: string, windows: boolean): Pr
   } catch {
     // The page refused the rich clipboard. Plain text still carries the breaks.
   }
-  await navigator.clipboard.writeText(plain);
+  try {
+    await navigator.clipboard.writeText(plain);
+  } catch {
+    copyWithCommand(plain);
+  }
+}
+
+function copyWithCommand(text: string): boolean {
+  const area = document.createElement("textarea");
+  area.value = text;
+  area.setAttribute("readonly", "");
+  area.style.position = "fixed";
+  area.style.left = "-10000px";
+  document.body.appendChild(area);
+  area.select();
+  let copied = false;
+  try {
+    copied = document.execCommand("copy");
+  } catch {
+    copied = false;
+  }
+  area.remove();
+  return copied;
 }
 
 /** Cells of a mouse selection. `column` is 0-based and may sit on a row outside the viewport. */

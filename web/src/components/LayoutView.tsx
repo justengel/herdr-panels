@@ -7,7 +7,7 @@ import { displayTitle, isDefaultPanelTitle } from "../openTitle";
 import { pluginAddressBar } from "../pluginAddress";
 import { carryAddressBar, hostAddressBarVisible, setAddressBar, supportsAddressBar } from "../addressBar";
 import { carryRaw, showsRawText } from "../rawText";
-import { adoptPluginAddress, menuFor, PANES_HINT, pluginOpenMessage, showViewer, TERMINAL_HINT, viewerName } from "../viewMenu";
+import { adoptPluginAddress, menuFor, PANES_HINT, pluginOpenMessage, showViewer, TERMINAL_HINT } from "../viewMenu";
 import { climbExplorer, explorerRootFor, resolveWorkspacePath, workspaceDirectory } from "../explorerRoot";
 import { canPinPanel, findPin, pinApplies, upsertPin } from "../pins";
 import { spaceLayoutKey, unpinEverywhere, unpinHere } from "../spaceLayout";
@@ -488,7 +488,6 @@ function PanelView(props: {
           title={panelTitle}
           name={givenName}
           kind="Tabs"
-          viewer={viewerName(content, plugin?.title)}
         >
           <TabGroup
             group={panel}
@@ -519,7 +518,6 @@ function PanelView(props: {
         name={givenName}
         kind={kindOf(panel)}
         hint={panel.type === "herdr" ? (panel.scope === "pane" ? TERMINAL_HINT : PANES_HINT) : undefined}
-        viewer={viewerName(content, plugin?.title)}
         badge={herdrBadge(panel, herdrPane(props))}
         badgeClass={herdrBadgeClass(panel, herdrPane(props))}
       >

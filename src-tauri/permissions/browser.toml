@@ -34,6 +34,16 @@ description = "Scale the desktop window and every browser panel together."
 commands.allow = ["set_display_zoom"]
 
 [[permission]]
+identifier = "allow-set-browser-zoom"
+description = "Scale one browser panel."
+commands.allow = ["set_browser_zoom"]
+
+[[permission]]
+identifier = "allow-cursor-place"
+description = "Ask whether the pointer is over the desk, a browser panel, or neither."
+commands.allow = ["cursor_place"]
+
+[[permission]]
 identifier = "allow-set-desk-prefix"
 description = "Tell the desktop window which prefix chord a browser panel should hand to the desk."
 commands.allow = ["set_desk_prefix"]

@@ -2,7 +2,7 @@
 (() => {
   if (window.__hwpInstallSelect) return;
   const ITEM =
-    "button, a, input, textarea, select, label, li, h1, h2, h3, h4, h5, h6, p, pre, blockquote, .tree-row, .agent-row, .space-row, .panel-title, [role='tab']";
+    "button, a, input, textarea, select, label, li, h1, h2, h3, h4, h5, h6, p, pre, blockquote, .file-line, .tree-row, .agent-row, .space-row, .panel-title, [role='tab']";
 
   function asRect(rect) {
     const x = Number(rect.x ?? rect.left ?? 0);
@@ -407,7 +407,12 @@
       }
       function copyShot() {
         const generation = ++shotGeneration;
-        const pending = raster(chosen);
+        const layer = boxes;
+        const hidden = layer.style.visibility;
+        layer.style.visibility = "hidden";
+        const pending = raster(chosen).finally(() => {
+          layer.style.visibility = hidden;
+        });
         const copied = writePng(pending);
         const name = shotName();
         pending.then(

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { addPanelTab, assignContent, closePanelTab, findPanel, groupOnBar, moveTab, normalizeLayout } from "../src/layoutEdit";
+import { addPanelTab, assignContent, closePanelTab, findPanel, groupOnBar, moveTab, normalizeLayout, openTab } from "../src/layoutEdit";
 import { dropPlace } from "../src/panelDrop";
 import { chevronTurn, collapseBasis, iconRail, railBasis, showTabClose, splitPaneFlex, tabFace, tabNumber } from "../src/tabFace";
 import { TAB_ICONS } from "../src/tabIcons";
@@ -32,6 +32,38 @@ const desk: LayoutNode = {
     panel: { type: "explorer", path: "docs" },
   },
 };
+
+describe("clicking a tab on a collapsed panel", () => {
+  it("opens the panel on the clicked tab, including the tab already showing", () => {
+    const collapsed: LayoutNode = {
+      ...desk,
+      first: { ...desk.first, collapsed: true },
+    };
+    const opened = openTab(collapsed, "alpha", {
+      type: "tabs",
+      edge: "left",
+      active: "a",
+      tabs: [
+        { id: "a", title: "One", icon: "star", panel: { type: "markdown", path: "a.md" } },
+        { id: "b", title: "Two", panel: { type: "chat", paneId: null } },
+      ],
+    });
+    const alpha = findPanel(opened, "alpha");
+    expect(alpha?.collapsed).toBe(false);
+    expect(alpha?.panel).toMatchObject({ type: "tabs", active: "a" });
+    const switched = openTab(collapsed, "alpha", {
+      type: "tabs",
+      edge: "left",
+      active: "b",
+      tabs: [
+        { id: "a", title: "One", icon: "star", panel: { type: "markdown", path: "a.md" } },
+        { id: "b", title: "Two", panel: { type: "chat", paneId: null } },
+      ],
+    });
+    expect(findPanel(switched, "alpha")?.collapsed).toBe(false);
+    expect(findPanel(switched, "alpha")?.panel).toMatchObject({ type: "tabs", active: "b" });
+  });
+});
 
 describe("dropping on a panel bar", () => {
   const rect = { left: 0, top: 0, width: 200, height: 200 };

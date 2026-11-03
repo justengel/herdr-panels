@@ -2,12 +2,16 @@
 
 mod browser;
 #[cfg(target_os = "linux")]
+mod linux_overlay;
+#[cfg(target_os = "linux")]
 mod linux_snapshot;
 
 use std::net::{SocketAddr, TcpStream};
 use std::time::Duration;
 
 fn main() {
+    #[cfg(target_os = "linux")]
+    std::env::set_var("GDK_BACKEND", "x11");
     // cargo run keeps a console open and closing it kills this window.
     // Hand the real window to a process that is not attached to that console.
     if hand_off_terminal() {

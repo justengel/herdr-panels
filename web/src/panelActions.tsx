@@ -2,7 +2,7 @@ import { createContext, useCallback, useContext, useMemo, useRef, useState } fro
 import { createPortal } from "react-dom";
 import type { PanelPlace } from "./layoutEdit";
 import { dropPlace, type DropPlace } from "./panelDrop";
-import type { PanelConfig, TabEdge } from "./types";
+import type { PanelConfig, TabEdge, TabsPanel } from "./types";
 
 export interface PanelActions {
   close: (id: string) => void;
@@ -20,6 +20,8 @@ export interface PanelActions {
   rename: (id: string, title: string) => void;
   icon: (id: string, icon: string | null) => void;
   collapse: (id: string) => void;
+  /** Open a collapsed panel onto the tab that was clicked. */
+  openTab: (id: string, group: TabsPanel) => void;
   /** Fill the screen with this panel, or show the whole desk when it already does. */
   fill: (id: string) => void;
   /** Drop this panel from the visit. The panel itself stays where it was. */

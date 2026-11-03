@@ -12,7 +12,7 @@ import {
   writeDeskOverrides,
   type DeskCommand,
 } from "./deskKeys";
-import { desktopHost } from "./desktopBrowser";
+import { DESKTOP_ERROR_EVENT, desktopHost } from "./desktopBrowser";
 import { frameOwnsKeys, framePrefix, readFrameKey, type FrameKey } from "./frameKeys";
 import { chordMatches, eventKey, expandBinding } from "./herdrKeys";
 import { HerdrSettings } from "./components/HerdrSettings";
@@ -119,6 +119,15 @@ export function HostProvider({
   runtimeRef.current = runtime;
   noticeRef.current = onNotice;
   runtimeCb.current = onRuntime;
+
+  useEffect(() => {
+    const onDesktopError = (event: Event) => {
+      const detail = (event as CustomEvent<string>).detail;
+      if (detail) noticeRef.current(detail);
+    };
+    window.addEventListener(DESKTOP_ERROR_EVENT, onDesktopError);
+    return () => window.removeEventListener(DESKTOP_ERROR_EVENT, onDesktopError);
+  }, []);
 
   useEffect(() => {
     void api

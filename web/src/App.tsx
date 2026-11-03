@@ -27,6 +27,7 @@ import {
   moveTab,
   reopenPanel,
   setPanelIcon,
+  openTab,
   toggleCollapsed,
   normalizeLayout,
   setGridTracks,
@@ -1056,6 +1057,7 @@ export function App() {
           rename: (id, title) => edit(mapPanel(layout.root, id, (panel) => ({ ...panel, title: title || null }))),
           icon: (id, icon) => edit(setPanelIcon(layout.root, id, icon)),
           collapse: (id) => edit(toggleCollapsed(layout.root, id)),
+          openTab: (id, group) => edit(openTab(layout.root, id, group)),
           fill: (id) => {
             if (visit?.single && visit.panelIds[0] === id) {
               setVisit(null);

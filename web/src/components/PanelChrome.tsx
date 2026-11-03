@@ -26,8 +26,6 @@ interface Props {
   badge?: string;
   badgeClass?: string;
   subtitle?: string;
-  /** Panel type, aligned to the right of the title bar. */
-  viewer?: string;
   /** Tooltip for the title, used to explain Panes and Terminal. */
   hint?: string;
   config?: ReactNode;
@@ -118,7 +116,6 @@ export function PanelChrome({
   badge,
   badgeClass,
   subtitle,
-  viewer,
   hint,
   config,
   contents,
@@ -523,6 +520,10 @@ export function PanelChrome({
             <TabStrip
               group={tabs}
               onChange={onTabs}
+              onActivate={(next) => {
+                if (collapsed && panelId) panelActions.openTab(panelId, next);
+                else onTabs(next);
+              }}
               onClose={onCloseTab}
               onContextMenu={(tabId, event) => openMenu(event, tabId)}
               onDragAway={(tabId, event) => {
@@ -540,7 +541,6 @@ export function PanelChrome({
           {tabs ? null : config}
           <div className="panel-actions">
             {tabs ? null : badge ? <span className={`badge ${badgeClass ?? ""}`}>{badge}</span> : null}
-            {tabs ? null : viewer ? <span className="panel-type">{viewer}</span> : null}
             {tabs ? null : actions}
             {barTools}
           </div>

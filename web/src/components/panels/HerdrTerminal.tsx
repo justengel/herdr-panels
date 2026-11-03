@@ -5,11 +5,15 @@ import { panelZoom, subscribeZoom, terminalFontSize } from "../../displayZoom";
 import { useHost } from "../../host";
 import {
   caretSelection,
+  clipboardAction,
+  highlightOnKey,
   collectSelectionLines,
   joinTerminalSelection,
   keysToRemoveSelection,
+  selectionFromCarets,
   selectionLinesUnchanged,
   spanBetween,
+  terminalPlatform,
   visibleSelection,
   wordCells,
   writeTerminalClipboard,
@@ -140,6 +144,7 @@ export function HerdrTerminal({ paneId, source, lines, home, onGone }: Props) {
   const anchorRef = useRef<Caret | null>(null);
   const headRef = useRef<Caret | null>(null);
   const heldRef = useRef<BufferSelection | null>(null);
+  const keySelectRef = useRef<{ anchor: Caret } | null>(null);
   const anchorCellRef = useRef<GridCell | null>(null);
   const headCellRef = useRef<GridCell | null>(null);
   const draggingRef = useRef(false);
@@ -462,6 +467,7 @@ export function HerdrTerminal({ paneId, source, lines, home, onGone }: Props) {
         finish(token);
         if (gestureRef.current !== gesture || layoutEpoch !== layout) return;
         restoreSelection(before, requested);
+        syncKeyboardSelection(term);
       };
       if (text) term.write(text, () => done());
       else done();
@@ -762,6 +768,7 @@ export function HerdrTerminal({ paneId, source, lines, home, onGone }: Props) {
   }
 
   function dropHeld(term: Terminal) {
+    keySelectRef.current = null;
     anchorCellRef.current = null;
     headCellRef.current = null;
     lineCacheRef.current.clear();
@@ -838,6 +845,28 @@ export function HerdrTerminal({ paneId, source, lines, home, onGone }: Props) {
   function cursorCaret(term: Terminal): Caret {
     const buffer = term.buffer.active;
     return { x: buffer.cursorX, y: buffer.baseY + buffer.cursorY };
+  }
+
+  function deskPlatform(): ReturnType<typeof terminalPlatform> {
+    return terminalPlatform(typeof navigator === "undefined" ? "" : navigator.userAgent);
+  }
+
+  /** Shift plus an arrow, Home, or End moves the shell cursor and highlights from where it started. */
+  function extendFromKeyboard(term: Terminal, event: { key: string; ctrlKey: boolean }) {
+    const buffer = term.buffer.active;
+    if (!keySelectRef.current) {
+      dropHeld(term);
+      keySelectRef.current = { anchor: { x: buffer.cursorX, y: buffer.cursorY } };
+    }
+    flushText();
+    send({ type: "key", key: event.key, ctrl: event.ctrlKey, alt: false, shift: false, meta: false });
+  }
+
+  function syncKeyboardSelection(term: Terminal) {
+    const state = keySelectRef.current;
+    if (!state) return;
+    const buffer = term.buffer.active;
+    paintSelection(term, selectionFromCarets(state.anchor, { x: buffer.cursorX, y: buffer.cursorY }, term.cols));
   }
 
   function copySelection(term: Terminal) {
@@ -1096,23 +1125,21 @@ export function HerdrTerminal({ paneId, source, lines, home, onGone }: Props) {
         if (!paneId || event.key === "F12") return;
         if (event.nativeEvent.isComposing) return;
         const term = termRef.current;
+        const platform = deskPlatform();
         const command = event.ctrlKey || event.metaKey;
         const printable = event.key.length === 1 && !command && !event.altKey;
-        if (term && command && !event.altKey && event.key.toLowerCase() === "c" && term.hasSelection()) {
+        const action = clipboardAction(event, platform);
+        const arrowSelect = event.shiftKey && !event.altKey && !event.metaKey && (event.key === "ArrowLeft" || event.key === "ArrowRight" || event.key === "Home" || event.key === "End");
+        if (term && action === "copy" && term.hasSelection()) {
           copySelection(term);
           event.preventDefault();
           event.stopPropagation();
           return;
         }
-        if (term && event.ctrlKey && !event.altKey && !event.shiftKey && event.key === "Insert" && term.hasSelection()) {
-          copySelection(term);
-          event.preventDefault();
+        if (term && action === "paste") {
           event.stopPropagation();
-          return;
-        }
-        if (term && !event.altKey && ((command && !event.shiftKey && event.key.toLowerCase() === "v") || (!command && event.shiftKey && event.key === "Insert"))) {
+          if (platform !== "windows") return;
           event.preventDefault();
-          event.stopPropagation();
           pasteStamp.current = Date.now();
           const highlighted = heldRef.current ?? selectionOf(term);
           void navigator.clipboard?.readText().then((text) => {
@@ -1126,7 +1153,29 @@ export function HerdrTerminal({ paneId, source, lines, home, onGone }: Props) {
           }).catch(() => undefined);
           return;
         }
-        if (term && (term.hasSelection() || heldRef.current) && !event.altKey && !event.metaKey && (event.key === "Backspace" || event.key === "Delete" || printable)) {
+        if (term && platform !== "windows" && (keySelectRef.current || heldRef.current)) {
+          const disposition = highlightOnKey(event);
+          if (disposition === "remove") {
+            const highlighted = heldRef.current ?? selectionOf(term);
+            keySelectRef.current = null;
+            if (highlighted) {
+              event.preventDefault();
+              event.stopPropagation();
+              removeHighlight(term, highlighted);
+              return;
+            }
+          } else if (disposition === "clear") {
+            keySelectRef.current = null;
+            dropHeld(term);
+          }
+        }
+        if (term && platform !== "windows" && arrowSelect) {
+          event.preventDefault();
+          event.stopPropagation();
+          extendFromKeyboard(term, event);
+          return;
+        }
+        if (term && platform === "windows" && (term.hasSelection() || heldRef.current) && !event.altKey && !event.metaKey && (event.key === "Backspace" || event.key === "Delete" || printable)) {
           const highlighted = heldRef.current ?? selectionOf(term);
           const removed = highlighted ? keysToRemoveSelection(cursorCaret(term), highlighted) : null;
           if (event.key === "Backspace" || event.key === "Delete") {
@@ -1184,8 +1233,13 @@ export function HerdrTerminal({ paneId, source, lines, home, onGone }: Props) {
         event.preventDefault();
         const term = termRef.current;
         if (term) {
-          const highlighted = heldRef.current ?? selectionOf(term);
-          if (highlighted) removeHighlight(term, highlighted);
+          if (deskPlatform() === "windows") {
+            const highlighted = heldRef.current ?? selectionOf(term);
+            if (highlighted) removeHighlight(term, highlighted);
+          } else {
+            keySelectRef.current = null;
+            dropHeld(term);
+          }
         }
         flushText();
         followInput();

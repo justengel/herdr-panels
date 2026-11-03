@@ -9,10 +9,33 @@ type Internals = {
   invoke: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
 };
 
+export const DESKTOP_ERROR_EVENT = "herdr-panels-desktop-error";
+
+const reportedCommands = new Set<string>();
+
+export function isPermissionError(message: string): boolean {
+  return /not allowed|permission denied|forbidden/i.test(message);
+}
+
 export function desktopHost(): Internals | null {
   if (typeof window === "undefined") return null;
   const host = window as Window & { __TAURI_INTERNALS__?: Internals };
-  return host.__TAURI_INTERNALS__ ?? null;
+  const inner = host.__TAURI_INTERNALS__;
+  if (!inner) return null;
+  return {
+    invoke: async (command, args) => {
+      try {
+        return await inner.invoke(command, args);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        if (isPermissionError(message) && !reportedCommands.has(command)) {
+          reportedCommands.add(command);
+          window.dispatchEvent(new CustomEvent(DESKTOP_ERROR_EVENT, { detail: `${command} was refused: ${message}` }));
+        }
+        throw err;
+      }
+    },
+  };
 }
 
 export function isRemotePage(url: string): boolean {
@@ -41,10 +64,14 @@ export function browserBounds(
 }
 
 /**
- * The part of each menu that sits on this page.
- * The native window stays full size and is cut to these rectangles, so the menu
- * draws on top without a margin and without the site reflowing.
+ * Linux cannot cut a hole through a WebKit view: the opening paints black and hides the popup.
+ * Hold a still of the page in the panel and move the live view aside so the popup can draw.
  */
+export function nativePopupUsesStill(userAgent: string, cuts: BrowserBox[]): boolean {
+  if (!/Linux/i.test(userAgent) || /Android/i.test(userAgent)) return false;
+  return cuts.some((cut) => cut.width >= 1 && cut.height >= 1);
+}
+
 export function menuCuts(page: BrowserBox, obstacles: BrowserBox[]): BrowserBox[] {
   const cuts: BrowserBox[] = [];
   for (const obstacle of obstacles) {
@@ -59,17 +86,42 @@ export function menuCuts(page: BrowserBox, obstacles: BrowserBox[]): BrowserBox[
 }
 
 export function hideBrowserPanels(input: { dragging: boolean; settings: boolean; dialog: boolean }): boolean {
-  return input.dragging || input.settings || input.dialog;
+  // A dialog or menu is cut out of the page. Hiding the page would blank everything under it.
+  return input.dragging;
 }
 
+/**
+ * Popups the desk draws above a browser panel. The native webview ignores z-index,
+ * so each of these is cut out of that window. A new dialog belongs in this list,
+ * or it carries one of these roles.
+ */
+export const BROWSER_OVERLAYS = [
+  ".panel-menu",
+  ".panel-menu-flyout",
+  ".select-menu",
+  ".status-card",
+  ".dialog",
+  ".herdr-settings",
+  ".prefix-mode",
+  "[role='dialog']",
+  "[role='menu']",
+  "[role='tooltip']",
+].join(", ");
+
 export function menuObstacles(): BrowserBox[] {
-  return [...document.querySelectorAll(".panel-menu, .panel-menu-flyout, .select-menu")].flatMap((node) => {
+  return overlayBoxes(document.querySelectorAll(BROWSER_OVERLAYS));
+}
+
+export function overlayBoxes(nodes: Iterable<{ getBoundingClientRect(): { left: number; top: number; width: number; height: number } }>): BrowserBox[] {
+  const boxes: BrowserBox[] = [];
+  for (const node of nodes) {
     const rect = node.getBoundingClientRect();
     const width = Math.round(rect.width);
     const height = Math.round(rect.height);
-    if (width < 2 || height < 2) return [];
-    return [{ x: Math.round(rect.left), y: Math.round(rect.top), width, height }];
-  });
+    if (width < 2 || height < 2) continue;
+    boxes.push({ x: Math.round(rect.left), y: Math.round(rect.top), width, height });
+  }
+  return boxes;
 }
 
 export function browserBlocked(): boolean {

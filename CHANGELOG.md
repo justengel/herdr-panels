@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+A browser panel no longer covers the Panels version card, a dialog, or the other desk popups. On Windows the native page is cut around the popup. On Linux the page is held as a still and the live view steps aside, so the popup is drawn and the rest of the page stays visible. A hole cut in the WebKit view paints black, so that is not used.
+
+Clicking a tab on a collapsed panel opens that panel on the clicked tab, including the tab that was already selected. The panel type is no longer drawn in the title bar.
+
+On Linux, a browser panel sits inside its panel. The child webview is moved into a `GtkFixed` laid over the page, so the page is no longer pushed aside.
+
+A screenshot of an element inside a framed page uses that element. The capture no longer treats an element from another frame as missing, and the selection outline is left out of the picture. A Text panel is one element per line, so Select can pick part of a file. A file longer than 20,000 lines stays one block.
+
+The desktop window says when it refuses a command, once per command. Browser zoom and the pointer-place command are listed in the desktop permissions.
+
+The terminal follows each platform's keys. Linux copies with Ctrl+Shift+C or Ctrl+Insert and pastes with Ctrl+Shift+V or Shift+Insert, and Ctrl+C stays an interrupt. macOS uses Command. Windows keeps Ctrl+C and Ctrl+V, and also takes Ctrl+Shift+V. Off Windows, Shift+Left, Shift+Right, Shift+Home, and Shift+End highlight text. Backspace or Delete removes that text, and other typing leaves it in place.
+
 The terminal scrollbar uses the pane’s scrollback length and how far the view sits above the live screen. A wheel notch moves the same number of lines up and down. Settings, on the Panels tab, has Terminal wheel lines for that count. Jumping back to the live screen, including Ctrl+End, leaves the thumb at the bottom of that range.
 
 Agent control is the Spaces menu switch for reading, typing, clicking, and screenshots. The CLI and the API share it. It starts on. The person turns it off from that menu, and `herdr-panels access off` does the same. Turning it back on is only from the desktop window.

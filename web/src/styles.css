@@ -216,6 +216,8 @@ button.status:hover:not(:disabled) {
   z-index: 70;
   margin: 0;
   min-width: 240px;
+  max-height: calc(100vh - 16px);
+  overflow: auto;
   padding: 8px 10px;
   background: var(--bg-elev);
   border: 1px solid var(--line-strong);
@@ -920,16 +922,6 @@ body.panel-dragging, body.panel-dragging * { cursor: grabbing !important; user-s
   text-transform: none;
 }
 
-.panel-type {
-  padding: 1px 6px;
-  border: 1px solid var(--line);
-  border-radius: 4px;
-  color: var(--muted);
-  font-size: 11px;
-  font-weight: 500;
-  white-space: nowrap;
-}
-
 .badge-idle { color: var(--idle); }
 .badge-working { color: var(--working); }
 .badge-blocked { color: var(--blocked); }
@@ -1223,6 +1215,11 @@ body.panel-dragging, body.panel-dragging * { cursor: grabbing !important; user-s
 
 .copy-on-select {
   display: contents;
+}
+
+.file-text .file-line {
+  display: block;
+  min-height: 1.4em;
 }
 
 .file-text {
