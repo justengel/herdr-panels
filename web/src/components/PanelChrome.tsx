@@ -6,7 +6,7 @@ import { IconField } from "./IconField";
 import { TabMark } from "./TabMark";
 import { TabStrip } from "./TabStrip";
 import type { MenuEntry } from "../viewMenu";
-import { fitFlyout, useKeepMenuOnScreen, type FlyoutBox } from "../menuPlace";
+import { fitFlyout, fitMenu, useKeepMenuOnScreen, type FlyoutBox } from "../menuPlace";
 import { useKeyedPanel } from "../deskKeyboard";
 import { desktopHost } from "../desktopBrowser";
 import { contentScaleStyle, PanelScaleProvider, usePanelZoom } from "../displayZoom";
@@ -35,6 +35,10 @@ interface Props {
   panelId?: string;
   plain?: boolean;
   tabEdge?: TabEdge;
+  /** Absent or true draws the title. A side bar narrows when this is false. */
+  barNames?: boolean;
+  /** Absent or true draws the panel icon. */
+  barIcons?: boolean;
   tabs?: TabsPanel;
   onTabs?: (next: TabsPanel) => void;
   onCloseTab?: (tabId: string) => void;
@@ -66,6 +70,73 @@ const EDGES: { edge: TabEdge; label: string }[] = [
   { edge: "left", label: "Tabs on left" },
   { edge: "right", label: "Tabs on right" },
 ];
+
+const BAR_PLACES: { edge: TabEdge; label: string }[] = [
+  { edge: "top", label: "Bar on top" },
+  { edge: "left", label: "Bar on left" },
+  { edge: "bottom", label: "Bar on bottom" },
+  { edge: "right", label: "Bar on right" },
+];
+
+export function BarFaceItems({
+  names,
+  icons,
+  onNames,
+  onIcons,
+}: {
+  names: boolean;
+  icons: boolean;
+  onNames: (shown: boolean) => void;
+  onIcons: (shown: boolean) => void;
+}) {
+  return (
+    <>
+      <div className="menu-rule" />
+      <button
+        type="button"
+        role="menuitemcheckbox"
+        className="menu-radio"
+        aria-checked={icons}
+        onClick={() => onIcons(!icons)}
+      >
+        <span className="menu-check">{icons ? "✓" : ""}</span>
+        Show icons
+      </button>
+      <button
+        type="button"
+        role="menuitemcheckbox"
+        className="menu-radio"
+        aria-checked={names}
+        onClick={() => onNames(!names)}
+      >
+        <span className="menu-check">{names ? "✓" : ""}</span>
+        Show names
+      </button>
+    </>
+  );
+}
+
+export function BarPlaceItems({ edge, onEdge }: { edge: TabEdge; onEdge: (edge: TabEdge) => void }) {
+  return (
+    <>
+      <div className="menu-rule" />
+      <div className="menu-label">Bar</div>
+      {BAR_PLACES.map((item) => (
+        <button
+          key={item.edge}
+          type="button"
+          role="menuitemradio"
+          className="menu-radio"
+          aria-checked={edge === item.edge}
+          onClick={() => onEdge(item.edge)}
+        >
+          <span className="menu-check">{edge === item.edge ? "✓" : ""}</span>
+          {item.label}
+        </button>
+      ))}
+    </>
+  );
+}
 
 type FlyoutKind = "layout" | "plugins" | "panes" | "views" | "options";
 
@@ -124,6 +195,8 @@ export function PanelChrome({
   panelId,
   plain = false,
   tabEdge = "top",
+  barNames = true,
+  barIcons = true,
   tabs,
   onTabs,
   onCloseTab,
@@ -287,10 +360,15 @@ export function PanelChrome({
   }, [flyout]);
   const dragging = Boolean(panelId && drag.draggingId === panelId);
   const edge = tabs?.edge ?? tabEdge;
-  const showNames = tabs?.showNames !== false;
-  const showIcons = tabs?.showIcons !== false;
-  const rail = Boolean(tabs && iconRail(edge, tabs.tabs, showNames, showIcons));
-  const digitRail = rail && tabs != null && railBasis(edge, tabs.tabs, showNames, showIcons) === 36;
+  const showNames = tabs ? tabs.showNames !== false : barNames;
+  const showIcons = tabs ? tabs.showIcons !== false : barIcons;
+  const sideBar = edge === "left" || edge === "right";
+  const rail = tabs
+    ? iconRail(edge, tabs.tabs, showNames, showIcons)
+    : sideBar && !(showNames && Boolean(title.trim()));
+  const digitRail = rail && (tabs
+    ? railBasis(edge, tabs.tabs, showNames, showIcons) === 36
+    : !(showIcons && Boolean(icon?.trim())));
   const menuTab = tabs?.tabs.find((tab) => tab.id === menuTabId) ?? null;
   const barMenu = Boolean(tabs && onTabs && !menuTab);
   const classes = [
@@ -301,6 +379,7 @@ export function PanelChrome({
     plain ? "is-plain" : "",
     dragging ? "is-drag-source" : "",
     panelId && keyed.id === panelId ? "is-keyed" : "",
+    leaveVisit ? "is-visit" : "",
   ]
     .filter(Boolean)
     .join(" ");
@@ -454,6 +533,7 @@ export function PanelChrome({
         <GearIcon />
       </button>
       <CollapseButton edge={edge} collapsed={collapsed} panelId={panelId} />
+      <AddVisitButton panelId={panelId} leaveVisit={leaveVisit} />
       <FillButton panelId={panelId} title={title} />
       {tabs && tabs.tabs.length > 1 && !leaveVisit ? (
         <button
@@ -504,7 +584,7 @@ export function PanelChrome({
         </div>
       ) : (
         <header
-          className={["panel-header", rail ? "is-rail" : "", digitRail ? "is-digits" : ""].filter(Boolean).join(" ")}
+          className={["panel-header", rail ? "is-rail" : "", digitRail ? "is-digits" : "", sideBar && !tabs ? "is-spine" : ""].filter(Boolean).join(" ")}
           data-panel-bar=""
           data-edge={edge}
           onContextMenu={(event) => openMenu(event)}
@@ -532,10 +612,10 @@ export function PanelChrome({
             />
           ) : (
             <div className="panel-title">
-              {icon ? <TabMark icon={icon} /> : null}
-              <strong title={hint}>{title}</strong>
-              {subtitle ? <span className="subtitle">{subtitle}</span> : null}
-              {fromSpace ? <span className="subtitle">from {fromSpace}</span> : null}
+              {showIcons && icon ? <TabMark icon={icon} /> : null}
+              {showNames ? <strong title={hint}>{title}</strong> : null}
+              {showNames && subtitle ? <span className="subtitle">{subtitle}</span> : null}
+              {showNames && fromSpace ? <span className="subtitle">from {fromSpace}</span> : null}
             </div>
           )}
           {tabs ? null : config}
@@ -617,7 +697,9 @@ export function PanelChrome({
                       if (panelId) run(() => panelActions.addTab(panelId));
                     }}
                     onClose={
-                      canClose && !leaveVisit ? () => run(() => panelActions.close(panelId)) : undefined
+                      canClose && !leaveVisit && panelActions.filledId !== panelId
+                        ? () => run(() => panelActions.close(panelId))
+                        : undefined
                     }
                   />
                 ) : (
@@ -748,7 +830,9 @@ export function PanelChrome({
                   </>
                 ) : null}
 
-                {(menuTab && onCloseTab && ((tabs?.tabs.length ?? 0) > 1 || canClose) || (!menuTab && canClose)) && !leaveVisit ? (
+                {(menuTab && onCloseTab && ((tabs?.tabs.length ?? 0) > 1 || canClose) || (!menuTab && canClose)) &&
+                !leaveVisit &&
+                panelActions.filledId !== panelId ? (
                   <>
                     <div className="menu-rule menu-rule-strong" />
                     <button
@@ -841,6 +925,13 @@ export function PanelChrome({
                       <span className="menu-check" />
                       Add tab
                     </button>
+                    <BarFaceItems
+                      names={showNames}
+                      icons={showIcons}
+                      onNames={(shown) => run(() => panelActions.face(panelId, shown, showIcons))}
+                      onIcons={(shown) => run(() => panelActions.face(panelId, showNames, shown))}
+                    />
+                    <BarPlaceItems edge={edge} onEdge={(next) => run(() => panelActions.edge(panelId, next))} />
                   </div>
                 ) : null}
                 {flyout === "plugins" ? (
@@ -1037,23 +1128,139 @@ function CollapseButton({
   );
 }
 
+function AddVisitButton({ panelId, leaveVisit }: { panelId?: string; leaveVisit: boolean }) {
+  const panelActions = usePanelActions();
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const [open, setOpen] = useState(false);
+  const filled = Boolean(panelId && panelActions.filledId === panelId);
+  useEffect(() => {
+    if (!open) return;
+    const close = (event: Event) => {
+      const target = event.target;
+      if (target instanceof Element && target.closest("[data-visit-add], .panel-add")) return;
+      setOpen(false);
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopPropagation();
+      setOpen(false);
+    };
+    window.addEventListener("pointerdown", close, true);
+    window.addEventListener("keydown", onKey, true);
+    return () => {
+      window.removeEventListener("pointerdown", close, true);
+      window.removeEventListener("keydown", onKey, true);
+    };
+  }, [open]);
+  if (!panelId || (!leaveVisit && !filled)) return null;
+  const choices = panelActions.visitChoices ?? [];
+  const showing = new Set(panelActions.visitPanelIds ?? (filled ? [panelId] : []));
+  const atCap = showing.size >= 6;
+  const groups = new Map<string, { space: string; items: typeof choices }>();
+  for (const choice of choices) {
+    const group = groups.get(choice.spaceId) ?? { space: choice.space, items: [] };
+    group.items.push(choice);
+    groups.set(choice.spaceId, group);
+  }
+  const addable = choices.filter((choice) => !showing.has(choice.panelId));
+  const rect = open ? buttonRef.current?.getBoundingClientRect() : null;
+  const menuBox = rect
+    ? fitMenu(
+        { left: rect.right - 240, top: rect.bottom + 4, width: 240, height: 320 },
+        { width: window.innerWidth, height: window.innerHeight },
+      )
+    : null;
+  const menu =
+    open && menuBox
+      ? createPortal(
+          <div
+            className="panel-menu visit-add-menu"
+            data-visit-add=""
+            role="menu"
+            style={{ left: menuBox.left, top: menuBox.top, width: 240, maxHeight: menuBox.maxHeight }}
+          >
+            {[...groups.entries()].map(([spaceId, group]) => (
+              <div key={spaceId}>
+                <p className="menu-label">{group.space}</p>
+                {group.items.map((choice) => {
+                  const already = showing.has(choice.panelId);
+                  return (
+                    <button
+                      key={`${choice.spaceId}:${choice.panelId}`}
+                      type="button"
+                      className="visit-add-choice"
+                      disabled={already || atCap}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        if (already || atCap) return;
+                        panelActions.joinVisit?.(choice.panelId);
+                        setOpen(false);
+                      }}
+                    >
+                      <span>{choice.title}</span>
+                      {already ? <small className="visit-add-showing">Showing</small> : null}
+                    </button>
+                  );
+                })}
+              </div>
+            ))}
+            {atCap ? <p className="menu-note">A visit can show 6 panels.</p> : null}
+            {addable.length === 0 && !atCap ? (
+              <p className="menu-note">Open another panel on the desk, then add it here.</p>
+            ) : null}
+          </div>,
+          document.body,
+        )
+      : null;
+  return (
+    <>
+      <button
+        ref={buttonRef}
+        type="button"
+        className="panel-add"
+        aria-label="Add a panel to this visit"
+        aria-expanded={open}
+        title="Add a panel to this visit"
+        onClick={(event) => {
+          event.stopPropagation();
+          setOpen((current) => !current);
+        }}
+      >
+        <PlusIcon />
+      </button>
+      {menu}
+    </>
+  );
+}
+
+function PlusIcon() {
+  return (
+    <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+      <path fill="none" stroke="currentColor" strokeWidth="1.5" d="M8 3.25v9.5M3.25 8h9.5" />
+    </svg>
+  );
+}
+
 function FillButton({ panelId, title }: { panelId?: string; title: string }) {
   const panelActions = usePanelActions();
   if (!panelId) return null;
   const filled = panelActions.filledId === panelId;
+  const showing = panelActions.visitPanelIds ?? [];
+  const showDesk = filled || (showing.length > 1 && showing.includes(panelId));
   return (
     <button
       type="button"
       className="panel-expand"
       aria-pressed={filled}
-      aria-label={filled ? "Show the whole desk" : `Fill the screen with ${title}`}
-      title={filled ? "Show the whole desk" : "Fill the screen"}
+      aria-label={showDesk ? (filled ? "Show the whole desk" : "Show the desk") : `Fill the screen with ${title}`}
+      title={showDesk ? (filled ? "Show the whole desk" : "Show the desk") : "Fill the screen"}
       onClick={(event) => {
         event.stopPropagation();
         panelActions.fill(panelId);
       }}
     >
-      {filled ? <RestoreIcon /> : <ExpandIcon />}
+      {showDesk ? <RestoreIcon /> : <ExpandIcon />}
     </button>
   );
 }
@@ -1087,6 +1294,22 @@ function EndButton({
   leaveVisit: boolean;
 }) {
   const panelActions = usePanelActions();
+  if (panelId && panelActions.filledId === panelId && !leaveVisit) {
+    return (
+      <button
+        type="button"
+        className="panel-close"
+        aria-label="Show the desk"
+        title="Show the desk"
+        onClick={(event) => {
+          event.stopPropagation();
+          panelActions.fill(panelId);
+        }}
+      >
+        <LeaveIcon />
+      </button>
+    );
+  }
   if (leaveVisit && panelId) {
     return (
       <button

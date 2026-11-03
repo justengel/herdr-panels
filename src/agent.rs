@@ -15,7 +15,9 @@ use tokio::sync::{broadcast, oneshot, Mutex};
 use crate::chats::{self, ChatMessage};
 use crate::desk;
 use crate::keys::ClientInput;
-use crate::layout::{is_pane_id, Direction, HerdrScope, LayoutDocument, LayoutNode, PanelConfig};
+use crate::layout::{
+    is_pane_id, Direction, HerdrScope, LayoutDocument, LayoutNode, PanelConfig, TabEdge,
+};
 use crate::layout_ops::{self, list_panels};
 use crate::paths::{is_loopback_url, resolve_content};
 use crate::server::{AppState, HerdrSession};
@@ -243,6 +245,9 @@ async fn split(
         panel: created_panel,
         collapsed: false,
         icon: None,
+        edge: TabEdge::Top,
+        show_names: true,
+        show_icons: true,
     };
     doc.root = layout_ops::split_panel(doc.root, &source_id, direction, created)
         .map_err(AgentError::bad)?;

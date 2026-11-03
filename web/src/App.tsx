@@ -33,7 +33,8 @@ import {
   setGridTracks,
   setPanel,
   setSplitRatio,
-  setTabEdge,
+  setBarEdge,
+  setBarFace,
   splitPanel,
 } from "./layoutEdit";
 import { DeskProvider, type PluginInfo } from "./desk";
@@ -47,7 +48,18 @@ import { UnlockDialog } from "./components/UnlockDialog";
 import { ElementSelect, ScreenshotSave, type ShotOffer } from "./components/ElementSelect";
 import { desktopHost } from "./desktopBrowser";
 import { DeskKeyboard, KeyedPanelProvider } from "./deskKeyboard";
-import { deskFillRequest, leaveVisitPanel, openVisit, reuseVisit, type OpenedVisit, type VisitWeights } from "./borrowPanel";
+import {
+  deskFillRequest,
+  insertVisitPanel,
+  joinVisit as appendVisitPanel,
+  leaveVisitPanel,
+  listVisitChoices,
+  openVisit,
+  placeVisitPanel,
+  reuseVisit,
+  type OpenedVisit,
+  type VisitWeights,
+} from "./borrowPanel";
 import { BorrowKeeper, type KeptPanel } from "./borrowKeep";
 import { BrowserRoleProvider, BrowserVisitProvider, StayFillProvider } from "./browserPlace";
 import { runBrowserDrive } from "./browserDrive";
@@ -636,6 +648,7 @@ export function App() {
     if (!visit) return;
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
+      if (document.querySelector("[data-visit-add]")) return;
       if (event.target instanceof Element && event.target.closest(".dialog")) return;
       event.preventDefault();
       event.stopPropagation();
@@ -957,6 +970,25 @@ export function App() {
     releaseVisit(id);
   }
 
+  function keepVisit(node: LayoutNode, origins: Record<string, string>, showing: readonly string[]) {
+    const deskIds = new Set(layoutRef.current ? listPanels(layoutRef.current.root).map((panel) => panel.id) : []);
+    const visible = new Set(showing);
+    setKept((current) => {
+      const map = new Map(current.map((item) => [item.node.id, item]));
+      for (const id of [...map.keys()]) {
+        if (!visible.has(id)) map.delete(id);
+      }
+      for (const panel of listPanels(node)) {
+        if (!visible.has(panel.id) || deskIds.has(panel.id)) {
+          map.delete(panel.id);
+          continue;
+        }
+        map.set(panel.id, { node: panel, fromSpace: origins[panel.id] ?? map.get(panel.id)?.fromSpace });
+      }
+      return [...map.values()];
+    });
+  }
+
   function releaseVisit(id: string) {
     const current = visit;
     if (!current?.panelIds.includes(id)) return;
@@ -966,11 +998,8 @@ export function App() {
       setKept([]);
       return;
     }
-    const opened = visitRef.current(next.panels, next.arrange, next.weights);
-    if ("error" in opened) {
-      setVisit(null);
-      setKept([]);
-    }
+    setVisit({ ...current, ...next, openedOn: current.openedOn });
+    keepVisit(next.node, next.origins, next.panelIds);
   }
 
   function addPanel() {
@@ -1035,6 +1064,9 @@ export function App() {
     visit?.single && visit.panelIds[0] && visit.spaceIds[visit.panelIds[0]] === (focusedSpaceId ?? "")
       ? visit.panelIds[0]
       : null;
+  const visitChoices = listVisitChoices(
+    visitMenuSpaces(focusedSpaceId, layout.root, runtime?.workspaces ?? [], readSpaceLayouts()),
+  );
 
   return (
     <DesignProvider value={designState}>
@@ -1051,10 +1083,76 @@ export function App() {
             edit(addPanelTab(layout.root, id));
           },
           use: (id, type, pluginId) => edit(assignContent(layout.root, id, panelChoice(type, pluginId))),
-          edge: (id, edge) => edit(setTabEdge(layout.root, id, edge)),
-          place: (sourceId, targetId, place) => edit(movePanel(layout.root, sourceId, targetId, place)),
-          group: (sourceId, targetId) => edit(groupOnBar(layout.root, sourceId, targetId)),
-          dropTab: (sourceId, tabId, targetId, place) => edit(moveTab(layout.root, sourceId, tabId, targetId, place)),
+          edge: (id, nextEdge) => {
+            const owner = visit && !liveFillId ? visitOwner(visit.panelIds, id) : null;
+            if (owner && visit) {
+              setVisit({ ...visit, node: setBarEdge(visit.node, owner, nextEdge) });
+              setKept((current) =>
+                current.map((item) => {
+                  if (item.node.id !== owner) return item;
+                  const moved = setBarEdge(item.node, owner, nextEdge);
+                  return moved.type === "panel" ? { ...item, node: moved } : item;
+                }),
+              );
+              if (findPanel(layout.root, owner)) edit(setBarEdge(layout.root, owner, nextEdge));
+              return;
+            }
+            edit(setBarEdge(layout.root, id, nextEdge));
+          },
+          face: (id, names, icons) => {
+            const owner = visit && !liveFillId ? visitOwner(visit.panelIds, id) : null;
+            if (owner && visit) {
+              setVisit({ ...visit, node: setBarFace(visit.node, owner, names, icons) });
+              setKept((current) =>
+                current.map((item) => {
+                  if (item.node.id !== owner) return item;
+                  const moved = setBarFace(item.node, owner, names, icons);
+                  return moved.type === "panel" ? { ...item, node: moved } : item;
+                }),
+              );
+              if (findPanel(layout.root, owner)) edit(setBarFace(layout.root, owner, names, icons));
+              return;
+            }
+            edit(setBarFace(layout.root, id, names, icons));
+          },
+          place: (sourceId, targetId, place) => {
+            const showing = visit;
+            if (showing && showing.panelIds.length >= 2) {
+              const source = visitOwner(showing.panelIds, sourceId);
+              const target = visitOwner(showing.panelIds, targetId);
+              if (source && target) {
+                setVisit((current) =>
+                  current && current.panelIds.length >= 2
+                    ? { ...current, ...placeVisitPanel(current, source, target, place) }
+                    : current,
+                );
+                return;
+              }
+              if (source) return;
+            }
+            edit(movePanel(layout.root, sourceId, targetId, place));
+          },
+          group: (sourceId, targetId) => {
+            const showing = visit;
+            if (showing && showing.panelIds.length >= 2) {
+              const source = visitOwner(showing.panelIds, sourceId);
+              const target = visitOwner(showing.panelIds, targetId);
+              if (source && target) {
+                setVisit((current) =>
+                  current && current.panelIds.length >= 2
+                    ? { ...current, ...placeVisitPanel(current, source, target, "above") }
+                    : current,
+                );
+                return;
+              }
+              if (source) return;
+            }
+            edit(groupOnBar(layout.root, sourceId, targetId));
+          },
+          dropTab: (sourceId, tabId, targetId, place) => {
+            if (visit && visit.panelIds.length >= 2 && visitOwner(visit.panelIds, sourceId)) return;
+            edit(moveTab(layout.root, sourceId, tabId, targetId, place));
+          },
           spawn: (id, direction, panel, title) => {
             const doc = layoutRef.current;
             if (!doc) return;
@@ -1063,10 +1161,41 @@ export function App() {
           },
           rename: (id, title) => edit(mapPanel(layout.root, id, (panel) => ({ ...panel, title: title || null }))),
           icon: (id, icon) => edit(setPanelIcon(layout.root, id, icon)),
-          collapse: (id) => edit(toggleCollapsed(layout.root, id)),
-          openTab: (id, group) => edit(openTab(layout.root, id, group)),
+          collapse: (id) => {
+            const panelId = visit && !liveFillId ? visitOwner(visit.panelIds, id) : null;
+            if (!panelId || !visit) {
+              edit(toggleCollapsed(layout.root, id));
+              return;
+            }
+            const node = toggleCollapsed(visit.node, panelId);
+            setVisit({ ...visit, node });
+            setKept((current) =>
+              current.map((item) => {
+                if (item.node.id !== panelId) return item;
+                const toggled = toggleCollapsed(item.node, panelId);
+                return toggled.type === "panel" ? { ...item, node: toggled } : item;
+              }),
+            );
+          },
+          openTab: (id, group) => {
+            const panelId = visit && !liveFillId ? visitOwner(visit.panelIds, id) : null;
+            if (!panelId || !visit) {
+              edit(openTab(layout.root, id, group));
+              return;
+            }
+            const node = openTab(visit.node, panelId, group);
+            setVisit({ ...visit, node });
+            setKept((current) =>
+              current.map((item) => {
+                if (item.node.id !== panelId) return item;
+                const opened = openTab(item.node, panelId, group);
+                return opened.type === "panel" ? { ...item, node: opened } : item;
+              }),
+            );
+          },
           fill: (id) => {
-            if (visit?.single && visit.panelIds[0] === id) {
+            const owner = visit ? visitOwner(visit.panelIds, id) : null;
+            if (visit && owner && (!visit.single || visit.panelIds[0] === owner)) {
               setVisit(null);
               setKept([]);
               return;
@@ -1074,6 +1203,38 @@ export function App() {
             const result = visitRef.current([deskFillRequest(id, focusedSpaceId)]);
             if ("error" in result) notify(result.error);
           },
+          joinVisit: (panelId) => {
+            if (!visit) return;
+            const choice = visitChoices.find((item) => item.panelId === panelId);
+            const gate = appendVisitPanel(visit, panelId, choice?.spaceId);
+            if ("error" in gate) {
+              notify(gate.error);
+              return;
+            }
+            const found = openVisit(
+              visitMenuSpaces(focusedSpaceId, layout.root, runtime?.workspaces ?? [], readSpaceLayouts()),
+              [{ panelId, spaceId: choice?.spaceId }],
+            );
+            if ("error" in found) {
+              notify(found.error);
+              return;
+            }
+            if (found.node.type !== "panel") return;
+            const next = insertVisitPanel(
+              visit,
+              found.node,
+              found.spaceIds[found.node.id] ?? "",
+              found.origins[found.node.id] ?? "",
+            );
+            if ("error" in next) {
+              notify(next.error);
+              return;
+            }
+            setVisit({ ...next, openedOn: visit.openedOn });
+            keepVisit(next.node, next.origins, next.panelIds);
+          },
+          visitChoices,
+          visitPanelIds: visit?.panelIds ?? [],
           leave: releaseVisit,
           filledId: visit?.single ? (visit.panelIds[0] ?? null) : null,
         }}
@@ -1242,20 +1403,6 @@ export function App() {
           {visit && !liveFillId ? (
             <BrowserRoleProvider role="visit">
             <div className="borrow-visit">
-              {visit.single ? null : (
-                <header className="borrow-visit-bar">
-                  <button
-                    type="button"
-                    className="borrow-back"
-                    onClick={() => {
-                      setVisit(null);
-                      setKept([]);
-                    }}
-                  >
-                    Back
-                  </button>
-                </header>
-              )}
               <LayoutView
                 node={visit.node}
                 root={layout.root}
@@ -1418,4 +1565,46 @@ function unlockPanelTitle(panelId: string, root: LayoutNode, visitNode?: LayoutN
   const panel = findPanel(root, panelId) ?? (visitNode ? findPanel(visitNode, panelId) : null);
   const title = panel?.title?.trim();
   return title || "this panel";
+}
+
+function visitOwner(ids: readonly string[], id: string): string | null {
+  if (ids.includes(id)) return id;
+  const owner = id.split(":")[0];
+  return owner !== id && ids.includes(owner) ? owner : null;
+}
+
+/** Spaces the add menu can offer. The visit opener keeps its own copy of this walk. */
+function visitMenuSpaces(
+  current: string | null,
+  currentRoot: LayoutNode | null,
+  workspaces: { workspaceId: string; label: string }[],
+  stored: Record<string, LayoutNode>,
+): { id: string; label: string; root: LayoutNode; current: boolean }[] {
+  const listed = new Set<string>();
+  const spaces: { id: string; label: string; root: LayoutNode; current: boolean }[] = [];
+  for (const workspace of workspaces) {
+    const key = spaceLayoutKey(workspace.workspaceId);
+    listed.add(key);
+    const root = current === workspace.workspaceId && currentRoot ? currentRoot : (stored[key] ?? null);
+    if (!root) continue;
+    spaces.push({
+      id: workspace.workspaceId,
+      label: workspace.label || workspace.workspaceId,
+      root,
+      current: current === workspace.workspaceId,
+    });
+  }
+  if (current && currentRoot && !spaces.some((space) => space.current)) {
+    spaces.push({
+      id: current,
+      label: workspaces.find((workspace) => workspace.workspaceId === current)?.label || current,
+      root: currentRoot,
+      current: true,
+    });
+  }
+  for (const [key, root] of Object.entries(stored)) {
+    if (listed.has(key) || (current && spaceLayoutKey(current) === key)) continue;
+    spaces.push({ id: key, label: key, root, current: false });
+  }
+  return spaces;
 }

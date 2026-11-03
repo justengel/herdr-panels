@@ -140,7 +140,7 @@ enum PanelCommand {
     Visit {
         /// Panel names or ids. Leave these out to list panels on every space
         panels: Vec<String>,
-        /// row, column, or grid. Two panels sit side by side; three or more use a grid
+        /// row, column, or grid. Two panels sit side by side; three or more use a grid of splits, and a short last row takes the full width
         #[arg(long)]
         arrange: Option<String>,
         /// One weight per panel, for a row or a column. 2,1 makes the first panel twice the second

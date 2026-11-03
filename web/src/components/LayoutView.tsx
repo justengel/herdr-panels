@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import type { AgentView, Attachment, GridNode, LayoutNode, PaneView, PanelConfig, TabsPanel, WorkspaceView } from "../types";
+import type { AgentView, Attachment, GridNode, LayoutNode, PaneView, PanelConfig, TabEdge, TabsPanel, WorkspaceView } from "../types";
 import { api } from "../api";
 import { baseName, samePath } from "../paths";
 import { openFileBeside, panelWhenUnresolved } from "../fileOpen";
@@ -149,6 +149,9 @@ export function LayoutView({
       title={node.title}
       icon={node.icon}
       collapsed={node.collapsed}
+      barEdge={node.edge}
+      showNames={node.showNames}
+      showIcons={node.showIcons}
       panel={node.panel}
       pending={pending[node.id] ?? []}
       fromSpace={spaceCaption(node.id, fromSpace, origins, spaceIds, workspaces)}
@@ -269,6 +272,9 @@ function PanelView(props: {
   title?: string | null;
   icon?: string | null;
   collapsed?: boolean;
+  barEdge?: TabEdge;
+  showNames?: boolean;
+  showIcons?: boolean;
   panel: PanelConfig;
   panes: PaneView[];
   workspaces: WorkspaceView[];
@@ -287,7 +293,7 @@ function PanelView(props: {
   openMenuToken?: number;
   root?: LayoutNode;
 }) {
-  const { id, title, icon, collapsed, panel, panes, workspaces, onPanel, onCloseTab, openMenuId, openMenuToken, root, fromSpace, borrowed, spaceIds } =
+  const { id, title, icon, collapsed, barEdge, showNames, showIcons, panel, panes, workspaces, onPanel, onCloseTab, openMenuId, openMenuToken, root, fromSpace, borrowed, spaceIds } =
     props;
   const design = useDesign();
   const host = useHost();
@@ -342,7 +348,9 @@ function PanelView(props: {
     panelType: content.type,
     menuType: viewed.type,
     pluginId: content.type === "plugin" ? content.plugin : undefined,
-    tabEdge: panel.type === "tabs" ? panel.edge : "top",
+    tabEdge: panel.type === "tabs" ? panel.edge : (barEdge ?? "top"),
+    barNames: showNames !== false,
+    barIcons: showIcons !== false,
     tabs: panel.type === "tabs" ? panel : undefined,
     onTabs: (next: TabsPanel) => onPanel(id, next),
     onCloseTab: (tabId: string) => onCloseTab(id, tabId),

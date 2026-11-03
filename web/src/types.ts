@@ -52,6 +52,12 @@ export interface PanelNode {
   icon?: string | null;
   panel: PanelConfig;
   collapsed?: boolean;
+  /** Title-bar side. Tab groups store this on the group instead. Absent means the top. */
+  edge?: TabEdge;
+  /** Absent means the title is drawn. False hides it, and a side bar narrows. */
+  showNames?: boolean;
+  /** Absent means the icon is drawn. False hides it. */
+  showIcons?: boolean;
 }
 
 export type PanelConfig =

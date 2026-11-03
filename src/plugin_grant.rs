@@ -799,6 +799,7 @@ pub fn require_pane(panes: &[&str], id: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::layout::TabEdge;
     use std::collections::BTreeMap;
     use std::fs;
 
@@ -1181,12 +1182,15 @@ mod tests {
             id: "panel-1".into(),
             title: None,
             collapsed: false,
-        icon: None,
+            icon: None,
             panel: PanelConfig::Markdown {
                 path: "CLAUDE.md".into(),
                 address_bar: None,
                 raw: false,
             },
+            edge: TabEdge::Top,
+            show_names: true,
+            show_icons: true,
         };
         assert!(bridge_allowed_in_layout(
             &control,
@@ -1357,12 +1361,15 @@ mod tests {
             id: id.into(),
             title: Some("CLAUDE.md".into()),
             collapsed: false,
-        icon: None,
+            icon: None,
             panel: PanelConfig::Markdown {
                 path: "CLAUDE.md".into(),
                 address_bar: None,
                 raw: false,
             },
+            edge: TabEdge::Top,
+            show_names: true,
+            show_icons: true,
         }
     }
 
@@ -1371,7 +1378,7 @@ mod tests {
             id: id.into(),
             title: None,
             collapsed: false,
-        icon: None,
+            icon: None,
             panel: PanelConfig::Plugin {
                 plugin: plugin.into(),
                 config: serde_json::Value::Null,
@@ -1382,6 +1389,9 @@ mod tests {
                 address_bar: None,
                 control,
             },
+            edge: TabEdge::Top,
+            show_names: true,
+            show_icons: true,
         }
     }
 
@@ -1400,7 +1410,7 @@ mod tests {
                 id: "report".into(),
                 title: None,
                 collapsed: false,
-        icon: None,
+                icon: None,
                 panel: PanelConfig::Plugin {
                     plugin: "checkin-report".into(),
                     config: serde_json::Value::Null,
@@ -1411,6 +1421,9 @@ mod tests {
                     address_bar: None,
                     control,
                 },
+                edge: TabEdge::Top,
+                show_names: true,
+                show_icons: true,
             },
         );
         DeskDocument {

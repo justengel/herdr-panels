@@ -80,7 +80,8 @@ export function chevronTurn(edge: TabEdge, collapsed: boolean): string {
 }
 
 function barEdge(node: PanelNode): TabEdge {
-  return node.panel.type === "tabs" ? node.panel.edge : "top";
+  if (node.panel.type === "tabs") return node.panel.edge;
+  return node.edge ?? "top";
 }
 
 /** Pixels the parent split should give a collapsed panel, or null when this split cannot shrink that way. */
@@ -97,10 +98,14 @@ export function collapseBasis(node: LayoutNode, split: "row" | "column"): number
   const along = edge === "left" || edge === "right" ? "row" : "column";
   if (along !== split) return null;
   if (edge === "left" || edge === "right") {
-    if (node.panel.type !== "tabs") return 168;
-    const names = node.panel.showNames !== false;
-    const icons = node.panel.showIcons !== false;
-    return railBasis(edge, node.panel.tabs, names, icons) ?? 168;
+    if (node.panel.type === "tabs") {
+      const names = node.panel.showNames !== false;
+      const icons = node.panel.showIcons !== false;
+      return railBasis(edge, node.panel.tabs, names, icons) ?? 168;
+    }
+    // A sideways name is one line thick, the same as the icon rail.
+    if (node.showNames !== false && Boolean(node.title?.trim())) return 42;
+    return node.showIcons !== false && Boolean(node.icon?.trim()) ? 42 : 36;
   }
   return 34;
 }

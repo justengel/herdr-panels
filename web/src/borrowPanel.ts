@@ -1,4 +1,4 @@
-import { listPanels } from "./layoutEdit";
+import { closePanel, listPanels, movePanel, splitPanel, type PanelPlace } from "./layoutEdit";
 import { spaceLayoutKey } from "./spaceLayout";
 import type { LayoutNode, PanelNode } from "./types";
 
@@ -138,6 +138,84 @@ function gridTracks(
   return { columns: nextColumns, rows: nextRows };
 }
 
+export const VISIT_CAP = 6;
+
+export interface VisitChoice {
+  panelId: string;
+  title: string;
+  spaceId: string;
+  space: string;
+}
+
+/** One row per panel id. The copy on the current space wins, matching maximize. */
+export function listVisitChoices(spaces: VisitSpace[]): VisitChoice[] {
+  const chosen = new Map<string, { choice: VisitChoice; current: boolean; order: number }>();
+  let order = 0;
+  for (const space of spaces) {
+    for (const panel of listPanels(space.root)) {
+      const choice: VisitChoice = {
+        panelId: panel.id,
+        title: panel.title?.trim() || panel.id,
+        spaceId: space.id,
+        space: space.label,
+      };
+      const existing = chosen.get(panel.id);
+      if (!existing) {
+        chosen.set(panel.id, { choice, current: space.current, order: order++ });
+        continue;
+      }
+      if (space.current && !existing.current) {
+        chosen.set(panel.id, { choice, current: true, order: existing.order });
+      }
+    }
+  }
+  return [...chosen.values()].sort((left, right) => left.order - right.order).map((item) => item.choice);
+}
+
+export function joinVisit(
+  opened: OpenedVisit,
+  panelId: string,
+  spaceId?: string,
+): { panels: { panelId: string; spaceId?: string }[] } | { error: string } {
+  if (opened.panelIds.includes(panelId)) return { error: "that panel is already in this visit" };
+  if (opened.panelIds.length >= VISIT_CAP) return { error: "a visit can show 6 panels" };
+  const panels: { panelId: string; spaceId?: string }[] = opened.panelIds.map((id) => ({
+    panelId: id,
+    spaceId: opened.spaceIds[id],
+  }));
+  panels.push(spaceId ? { panelId, spaceId } : { panelId });
+  return { panels };
+}
+
+/** Move panels inside the visit. The desk layout stays as it was. */
+export function placeVisitPanel(
+  opened: OpenedVisit,
+  sourceId: string,
+  targetId: string,
+  place: PanelPlace,
+): Pick<OpenedVisit, "node" | "panelIds" | "arrange" | "sizes" | "columns" | "rows"> {
+  const same = {
+    node: opened.node,
+    panelIds: opened.panelIds,
+    arrange: opened.arrange,
+    sizes: opened.sizes,
+    columns: opened.columns,
+    rows: opened.rows,
+  };
+  if (opened.panelIds.length < 2 || sourceId === targetId) return same;
+  if (!opened.panelIds.includes(sourceId) || !opened.panelIds.includes(targetId)) return same;
+  const node = movePanel(opened.node, sourceId, targetId, place);
+  if (node === opened.node) return same;
+  return {
+    node,
+    panelIds: listPanels(node).map((panel) => panel.id),
+    arrange: node.type === "grid" ? "grid" : node.type === "split" && node.direction === "column" ? "column" : "row",
+    sizes: [],
+    columns: [],
+    rows: [],
+  };
+}
+
 /** Maximize the panel on this desk. Naming the space keeps another space's copy of the same id. */
 export function deskFillRequest(
   panelId: string,
@@ -182,16 +260,13 @@ export function openVisit(
   }
   const weighted = visitWeights(visits.length, arrange, weights);
   if ("error" in weighted) return weighted;
+  const nodes = visits.map((visit) => visit.node);
   const node =
-    visits.length === 1
-      ? visits[0].node
+    nodes.length === 1
+      ? nodes[0]
       : arrange === "grid"
-        ? gridOf(visits, weighted.columns, weighted.rows)
-        : stack(
-            visits.map((visit) => visit.node),
-            weighted.sizes,
-            arrange,
-          );
+        ? gridSplits(nodes, weighted.columns, weighted.rows)
+        : stack(nodes, weighted.sizes, arrange);
   return {
     node,
     origins,
@@ -206,26 +281,54 @@ export function openVisit(
   };
 }
 
-/** Remove one panel from a visit. The last panel ends it. A row or column keeps the other weights. */
-export function leaveVisitPanel(
+/** Remove one panel from a visit. The last panel ends it. The split closes up, as it does on the desk. */
+export function leaveVisitPanel(opened: OpenedVisit, panelId: string): OpenedVisit | { done: true } {
+  if (!opened.panelIds.includes(panelId) || opened.panelIds.length <= 1) return { done: true };
+  const node = closePanel(opened.node, panelId);
+  if (!node) return { done: true };
+  const panelIds = listPanels(node).map((panel) => panel.id);
+  const spaceIds = { ...opened.spaceIds };
+  const origins = { ...opened.origins };
+  delete spaceIds[panelId];
+  delete origins[panelId];
+  return {
+    ...opened,
+    node,
+    panelIds,
+    spaceIds,
+    origins,
+    single: panelIds.length === 1,
+    arrange: node.type === "split" && node.direction === "column" ? "column" : "row",
+    sizes: [],
+    columns: [],
+    rows: [],
+  };
+}
+
+/** Split the last panel and put this one on its right, the same as Add panel on the desk. */
+export function insertVisitPanel(
   opened: OpenedVisit,
-  panelId: string,
-):
-  | { done: true }
-  | {
-      panels: { panelId: string; spaceId?: string }[];
-      arrange: VisitArrange;
-      weights?: VisitWeights;
-    } {
-  const index = opened.panelIds.indexOf(panelId);
-  if (index < 0) return { done: true };
-  const rest = opened.panelIds.filter((id) => id !== panelId);
-  if (rest.length === 0) return { done: true };
-  const panels = rest.map((id) => ({ panelId: id, spaceId: opened.spaceIds[id] }));
-  if (rest.length === 1 || opened.arrange === "grid") return { panels, arrange: opened.arrange };
-  const sizes =
-    opened.sizes.length === opened.panelIds.length ? opened.sizes.filter((_, item) => item !== index) : undefined;
-  return { panels, arrange: opened.arrange, weights: sizes ? { sizes } : undefined };
+  panel: PanelNode,
+  spaceId: string,
+  spaceLabel: string,
+): OpenedVisit | { error: string } {
+  if (opened.panelIds.includes(panel.id)) return { error: "that panel is already in this visit" };
+  if (opened.panelIds.length >= VISIT_CAP) return { error: "a visit can show 6 panels" };
+  const host = opened.panelIds[opened.panelIds.length - 1];
+  if (!host) return { error: "panel was not found" };
+  const node = splitPanel(opened.node, host, "row", panel);
+  return {
+    ...opened,
+    node,
+    single: false,
+    arrange: "row",
+    panelIds: listPanels(node).map((item) => item.id),
+    sizes: [],
+    columns: [],
+    rows: [],
+    spaceIds: { ...opened.spaceIds, [panel.id]: spaceId },
+    origins: { ...opened.origins, [panel.id]: spaceLabel },
+  };
 }
 
 /** Keep panels that are already on this visit, and apply a new share to each divider. */
@@ -265,26 +368,21 @@ function stack(nodes: LayoutNode[], weights: number[], direction: "row" | "colum
   };
 }
 
-function gridOf(visits: PanelVisit[], columns: number[], rows: number[]): LayoutNode {
-  const columnCount = columns.length;
-  return {
-    type: "grid",
-    columns,
-    rows,
-    cells: visits.map((visit, index) => {
-      const column = index % columnCount;
-      const row = Math.floor(index / columnCount);
-      return {
-        id: visit.panelId,
-        title: visit.title,
-        column,
-        row,
-        colSpan: 1,
-        rowSpan: 1,
-        node: visit.node,
-      };
-    }),
-  };
+/** A grid's weights become the same splits the desk uses. A short last row takes the whole width. */
+function gridSplits(nodes: LayoutNode[], columns: number[], rows: number[]): LayoutNode {
+  const width = Math.max(1, columns.length);
+  const bands: LayoutNode[] = [];
+  const bandWeights: number[] = [];
+  for (let row = 0; row < rows.length; row += 1) {
+    const start = row * width;
+    if (start >= nodes.length) break;
+    const slice = nodes.slice(start, Math.min(start + width, nodes.length));
+    const weights = columns.slice(0, slice.length);
+    bands.push(slice.length === 1 ? slice[0] : stack(slice, weights, "row"));
+    bandWeights.push(rows[row] ?? 1);
+  }
+  if (bands.length === 1) return bands[0];
+  return stack(bands, bandWeights, "column");
 }
 
 function toVisit(hit: Hit): PanelVisit {

@@ -863,9 +863,9 @@ async fn save_png(headers: HeaderMap, body: Bytes) -> Result<Json<Value>, ApiErr
             .and_then(|value| value.to_str().ok()),
     );
     let saved = tokio::task::spawn_blocking(move || save_png_dialog(bytes, &suggested))
-    .await
-    .map_err(|err| ApiError::bad(err.to_string()))?
-    .map_err(ApiError::bad)?;
+        .await
+        .map_err(|err| ApiError::bad(err.to_string()))?
+        .map_err(ApiError::bad)?;
     Ok(Json(json!({
         "path": saved.map(|path| path.to_string_lossy().into_owned()),
     })))

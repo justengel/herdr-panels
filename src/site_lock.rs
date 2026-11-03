@@ -150,7 +150,7 @@ fn desks(config_dir: &Path) -> Vec<(String, DeskDocument)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::layout::{LayoutNode, PanelConfig};
+    use crate::layout::{LayoutNode, PanelConfig, TabEdge};
     use std::collections::BTreeMap;
 
     fn browser(id: &str, url: &str) -> LayoutNode {
@@ -164,6 +164,9 @@ mod tests {
             },
             collapsed: false,
             icon: None,
+            edge: TabEdge::Top,
+            show_names: true,
+            show_icons: true,
         }
     }
 
@@ -290,8 +293,16 @@ mod tests {
         panel_lock::set_locked(&dir, "default", "wJ", "panel-2", None, true).unwrap();
         let held = holds(&dir, "default", &desk);
         assert!(blocked("https://www.google.com/", &held));
-        assert!(navigation_allowed("panel-2", "https://mail.google.com/", &held));
-        assert!(!navigation_allowed("panel-9", "https://mail.google.com/", &held));
+        assert!(navigation_allowed(
+            "panel-2",
+            "https://mail.google.com/",
+            &held
+        ));
+        assert!(!navigation_allowed(
+            "panel-9",
+            "https://mail.google.com/",
+            &held
+        ));
         let _ = fs::remove_dir_all(&dir);
     }
 }

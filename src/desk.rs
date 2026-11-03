@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{bail, Context};
 use serde::{Deserialize, Serialize};
 
-use crate::layout::{Direction, LayoutNode, PanelConfig};
+use crate::layout::{Direction, LayoutNode, PanelConfig, TabEdge};
 use crate::layout_ops;
 use crate::paths::valid_session_name;
 use crate::store;
@@ -238,6 +238,9 @@ fn named_panel(id: &str, title: &str, panel: PanelConfig) -> LayoutNode {
         panel,
         collapsed: false,
         icon: None,
+        edge: TabEdge::Top,
+        show_names: true,
+        show_icons: true,
     }
 }
 
@@ -389,6 +392,7 @@ impl VisitArrange {
 }
 
 /// Two panels sit side by side. Three or more use a grid unless the caller chose a direction.
+/// The page turns that grid into desk splits, and a short last row takes the full width.
 pub fn choose_arrange(count: usize, requested: Option<&str>) -> Result<VisitArrange, &'static str> {
     if count == 0 {
         return Err("a visit needs at least one panel");
@@ -747,7 +751,10 @@ mod tests {
                 scope: None,
             },
             collapsed: false,
-        icon: None,
+            icon: None,
+            edge: TabEdge::Top,
+            show_names: true,
+            show_icons: true,
         }
     }
 
@@ -850,7 +857,10 @@ mod tests {
                 address_bar: None,
             },
             collapsed: false,
-        icon: None,
+            icon: None,
+            edge: TabEdge::Top,
+            show_names: true,
+            show_icons: true,
         }
     }
 
@@ -932,7 +942,10 @@ mod tests {
                 address_bar: None,
             },
             collapsed: false,
-        icon: None,
+            icon: None,
+            edge: TabEdge::Top,
+            show_names: true,
+            show_icons: true,
         };
         let spaces = [VisitSpace {
             id: "w1",
@@ -961,7 +974,10 @@ mod tests {
                 raw: false,
             },
             collapsed: false,
-        icon: None,
+            icon: None,
+            edge: TabEdge::Top,
+            show_names: true,
+            show_icons: true,
         };
         let google = iframe("panel-1", "google", "https://google.com");
         let spaces = [

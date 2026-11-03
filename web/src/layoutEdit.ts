@@ -37,6 +37,9 @@ export function normalizeLayout(node: LayoutNode): LayoutNode {
     const next: PanelNode = { type: "panel", id: node.id, title: title ?? null, panel };
     if (icon) next.icon = icon;
     if (node.collapsed) next.collapsed = true;
+    if (panel.type !== "tabs" && node.edge && node.edge !== "top") next.edge = node.edge;
+    if (panel.type !== "tabs" && node.showNames === false) next.showNames = false;
+    if (panel.type !== "tabs" && node.showIcons === false) next.showIcons = false;
     return next;
   }
   return {
@@ -182,7 +185,12 @@ export function addPanelTab(node: LayoutNode, id: string): LayoutNode {
   const found = findPanel(node, id);
   if (!found) return node;
   if (found.panel.type === "tabs" && found.panel.tabs.length >= 24) return node;
-  return mapPanel(node, id, (current) => ({ ...current, panel: withAddedTab(current) }));
+  return mapPanel(node, id, (current) => {
+    const next: PanelNode = { ...current, panel: withAddedTab(current) };
+    delete next.showNames;
+    delete next.showIcons;
+    return next;
+  });
 }
 
 export function closePanelTab(node: LayoutNode, panelId: string, tabId: string): LayoutNode {
@@ -204,7 +212,17 @@ export function closePanelTab(node: LayoutNode, panelId: string, tabId: string):
 function panelFromTab(host: PanelNode, only: PanelTab): PanelNode {
   const title = only.title && only.title !== "New tab" ? only.title : host.title;
   const icon = only.icon?.trim() || null;
-  return { ...host, title: title ?? null, icon, panel: only.panel };
+  const edge = host.panel.type === "tabs" ? host.panel.edge : host.edge;
+  const names = host.panel.type === "tabs" ? host.panel.showNames : host.showNames;
+  const icons = host.panel.type === "tabs" ? host.panel.showIcons : host.showIcons;
+  const next: PanelNode = { ...host, title: title ?? null, icon, panel: only.panel };
+  if (edge && edge !== "top") next.edge = edge;
+  else delete next.edge;
+  if (names === false) next.showNames = false;
+  else delete next.showNames;
+  if (icons === false) next.showIcons = false;
+  else delete next.showIcons;
+  return next;
 }
 
 export function assignContent(node: LayoutNode, id: string, panel: PanelConfig, retitle = false): LayoutNode {
@@ -228,10 +246,60 @@ export function assignContent(node: LayoutNode, id: string, panel: PanelConfig, 
   }));
 }
 
-export function setTabEdge(node: LayoutNode, id: string, edge: TabEdge): LayoutNode {
+/** Move a panel's title bar. A tab group keeps the choice on its tab bar. */
+export function setBarEdge(node: LayoutNode, id: string, edge: TabEdge): LayoutNode {
   const current = findPanel(node, id);
-  if (!current || current.panel.type !== "tabs") return node;
-  return setPanel(node, id, { ...current.panel, edge });
+  if (!current) return node;
+  if (current.panel.type === "tabs") {
+    const group = current.panel;
+    if (group.edge === edge && current.edge == null) return node;
+    return mapPanel(node, id, (panel) => {
+      const next: PanelNode = { ...panel, panel: { ...group, edge } };
+      delete next.edge;
+      return next;
+    });
+  }
+  if ((current.edge ?? "top") === edge) return node;
+  return mapPanel(node, id, (panel) => {
+    const next: PanelNode = { ...panel };
+    if (edge === "top") delete next.edge;
+    else next.edge = edge;
+    return next;
+  });
+}
+
+/** Show or hide a panel bar's name and icon. A tab group keeps the choice on its tab bar. */
+export function setBarFace(node: LayoutNode, id: string, names: boolean, icons: boolean): LayoutNode {
+  const current = findPanel(node, id);
+  if (!current) return node;
+  if (current.panel.type === "tabs") {
+    const group = current.panel;
+    if ((group.showNames !== false) === names && (group.showIcons !== false) === icons) return node;
+    return mapPanel(node, id, (panel) => {
+      const tabs: TabsPanel = { ...group };
+      if (names) delete tabs.showNames;
+      else tabs.showNames = false;
+      if (icons) delete tabs.showIcons;
+      else tabs.showIcons = false;
+      const next: PanelNode = { ...panel, panel: tabs };
+      delete next.showNames;
+      delete next.showIcons;
+      return next;
+    });
+  }
+  if ((current.showNames !== false) === names && (current.showIcons !== false) === icons) return node;
+  return mapPanel(node, id, (panel) => {
+    const next: PanelNode = { ...panel };
+    if (names) delete next.showNames;
+    else next.showNames = false;
+    if (icons) delete next.showIcons;
+    else next.showIcons = false;
+    return next;
+  });
+}
+
+export function setTabEdge(node: LayoutNode, id: string, edge: TabEdge): LayoutNode {
+  return setBarEdge(node, id, edge);
 }
 
 function withAddedTab(panel: PanelNode): PanelConfig {
@@ -246,7 +314,10 @@ function withAddedTab(panel: PanelNode): PanelConfig {
   };
   if (panel.icon?.trim()) kept.icon = panel.icon.trim();
   const added = blankTab("tab-2");
-  return { type: "tabs", edge: "top", active: added.id, tabs: [kept, added] };
+  const group: TabsPanel = { type: "tabs", edge: panel.edge ?? "top", active: added.id, tabs: [kept, added] };
+  if (panel.showNames === false) group.showNames = false;
+  if (panel.showIcons === false) group.showIcons = false;
+  return group;
 }
 
 export function listPanels(node: LayoutNode): PanelNode[] {
@@ -486,16 +557,23 @@ export function groupOnBar(node: LayoutNode, sourceId: string, targetId: string)
     taken.add(id);
     return { ...tab, id };
   });
-  const edge = target.panel.type === "tabs" ? target.panel.edge : "top";
-  return mapPanel(closed, targetId, (panel) => ({
-    ...panel,
-    panel: {
+  const edge = target.panel.type === "tabs" ? target.panel.edge : (target.edge ?? "top");
+  const names = target.panel.type === "tabs" ? target.panel.showNames : target.showNames;
+  const icons = target.panel.type === "tabs" ? target.panel.showIcons : target.showIcons;
+  return mapPanel(closed, targetId, (panel) => {
+    const group: TabsPanel = {
       type: "tabs",
       edge,
       active: added[0]?.id ?? existing[0]?.id ?? "tab-1",
       tabs: [...existing, ...added],
-    },
-  }));
+    };
+    if (names === false) group.showNames = false;
+    if (icons === false) group.showIcons = false;
+    const next: PanelNode = { ...panel, panel: group };
+    delete next.showNames;
+    delete next.showIcons;
+    return next;
+  });
 }
 
 /** Move one tab onto a bar or out beside another panel. A plain panel moves as a whole. */

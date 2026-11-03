@@ -303,14 +303,6 @@ button.status:hover:not(:disabled) {
   min-height: 0;
 }
 
-.borrow-visit-bar {
-  display: flex;
-  flex: none;
-  align-items: center;
-  justify-content: flex-end;
-  min-height: 36px;
-}
-
 .borrow-slot {
   width: 100%;
   height: 100%;
@@ -340,16 +332,6 @@ button.status:hover:not(:disabled) {
   width: 100%;
   height: 100%;
 }
-
-.borrow-visit-bar .borrow-back {
-  margin-right: 8px;
-  border: 0;
-  background: transparent;
-  color: var(--accent);
-  padding: 4px 8px;
-}
-
-.borrow-visit-bar .borrow-back:hover { color: var(--text); }
 
 .banner, .boot-error {
   color: var(--blocked);
@@ -472,7 +454,7 @@ button.status:hover:not(:disabled) {
 .panel-header input,
 .panel-header select { cursor: pointer; }
 
-.grip, .panel-close, .panel-expand, .panel-collapse, .panel-lock, .tab-gear-button {
+.grip, .panel-close, .panel-expand, .panel-add, .panel-collapse, .panel-lock, .tab-gear-button {
   flex: 0 0 auto;
   width: 22px;
   height: 22px;
@@ -484,7 +466,7 @@ button.status:hover:not(:disabled) {
 
 .grip { cursor: grab; letter-spacing: -0.15em; }
 .grip::before { content: "⋮⋮"; font-size: 12px; }
-.grip:hover, .panel-close:hover, .panel-expand:hover, .panel-collapse:hover, .panel-lock:hover, .tab-gear-button:hover { color: var(--text); }
+.grip:hover, .panel-close:hover, .panel-expand:hover, .panel-add:hover, .panel-collapse:hover, .panel-lock:hover, .tab-gear-button:hover { color: var(--text); }
 .panel-lock.is-locked { color: var(--accent); }
 .panel-collapse { display: grid; place-items: center; }
 .panel-collapse .chev {
@@ -518,9 +500,52 @@ button.status:hover:not(:disabled) {
 .panel.edge-left > .panel-header { border-right: 1px solid var(--line); }
 .panel.edge-right > .panel-header { border-left: 1px solid var(--line); }
 .panel.edge-left > .panel-header.is-rail,
-.panel.edge-right > .panel-header.is-rail {
+.panel.edge-right > .panel-header.is-rail,
+.panel.edge-left > .panel-header.is-spine,
+.panel.edge-right > .panel-header.is-spine {
   width: 42px;
   flex-basis: 42px;
+}
+/* Grip, icon, sideways name, then empty space, then the buttons. */
+.panel.edge-left > .panel-header.is-spine,
+.panel.edge-right > .panel-header.is-spine {
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+  padding: 4px 2px;
+}
+.panel.edge-left > .panel-header.is-spine > .panel-title,
+.panel.edge-right > .panel-header.is-spine > .panel-title {
+  flex: 1 1 auto;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+  width: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+/* Chromium draws vertical-rl and vertical-lr with the letter bottoms on the left.
+   Turn the whole name so the bottoms face the panel and the first letter sits at the bottom. */
+.panel.edge-left > .panel-header.is-spine .panel-title strong,
+.panel.edge-left > .panel-header.is-spine .panel-title .subtitle {
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+}
+.panel.edge-right > .panel-header.is-spine .panel-title strong,
+.panel.edge-right > .panel-header.is-spine .panel-title .subtitle {
+  writing-mode: vertical-lr;
+}
+.panel.edge-left > .panel-header.is-spine .panel-title strong,
+.panel.edge-left > .panel-header.is-spine .panel-title .subtitle,
+.panel.edge-right > .panel-header.is-spine .panel-title strong,
+.panel.edge-right > .panel-header.is-spine .panel-title .subtitle {
+  flex: 0 1 auto;
+  min-height: 0;
+  max-height: 100%;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .panel.edge-left > .panel-header.is-rail.is-digits,
 .panel.edge-right > .panel-header.is-rail.is-digits {
@@ -636,6 +661,23 @@ body.panel-dragging, body.panel-dragging * { cursor: grabbing !important; user-s
 
 .panel-menu button:hover, .panel-menu button:focus-visible { background: #222833; }
 .panel-menu button:disabled { opacity: 0.4; cursor: default; }
+.visit-add-menu {
+  max-height: min(360px, calc(100vh - 16px));
+  overflow: auto;
+}
+.visit-add-choice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.visit-add-showing { color: var(--muted); font-size: 11px; }
+.menu-note {
+  margin: 0;
+  padding: 6px 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
 .menu-name {
   display: flex;
   flex-direction: column;
@@ -1207,11 +1249,14 @@ body.panel-dragging, body.panel-dragging * { cursor: grabbing !important; user-s
 .plain-actions .tab-gear-button,
 .plain-actions .panel-lock,
 .plain-actions .panel-expand,
+.plain-actions .panel-add,
 .plain-actions .panel-close {
   background: var(--bg-panel);
   border-radius: 4px;
 }
 .panel.is-plain .side-heading { padding-right: 154px; }
+.panel.is-plain.is-filled .side-heading,
+.panel.is-plain.is-visit .side-heading { padding-right: 186px; }
 
 .copy-on-select {
   display: contents;
@@ -1946,6 +1991,7 @@ body.space-dragging, body.space-dragging * { cursor: grabbing !important; user-s
 
 .tab-gear-button,
 .panel-expand,
+.panel-add,
 .panel-close,
 .panel-lock {
   display: inline-flex;
@@ -1955,6 +2001,7 @@ body.space-dragging, body.space-dragging * { cursor: grabbing !important; user-s
 .panel-expand[aria-pressed="true"] { color: var(--accent); }
 .tab-gear-button svg,
 .panel-expand svg,
+.panel-add svg,
 .panel-close svg,
 .panel-lock svg {
   display: block;
@@ -2069,6 +2116,7 @@ body.space-dragging, body.space-dragging * { cursor: grabbing !important; user-s
   flex: 1 1 auto;
   min-width: 0;
 }
+.panel-header.is-rail .panel-title { justify-content: flex-start; }
 .panel-header.is-rail .tab {
   justify-content: center;
   padding: 0;

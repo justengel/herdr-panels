@@ -37,6 +37,23 @@ pub enum LayoutNode {
         /// Preset id, a short legacy mark, or `file:` plus a path.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         icon: Option<String>,
+        /// Title-bar side. Absent and `top` are the same. Tab groups store this on the group.
+        #[serde(default, skip_serializing_if = "is_top_edge")]
+        edge: TabEdge,
+        /// The title stays on the bar. False hides it. Tab groups store this on the group.
+        #[serde(
+            default = "default_true",
+            rename = "showNames",
+            skip_serializing_if = "is_true"
+        )]
+        show_names: bool,
+        /// The icon stays on the bar. False hides it.
+        #[serde(
+            default = "default_true",
+            rename = "showIcons",
+            skip_serializing_if = "is_true"
+        )]
+        show_icons: bool,
     },
 }
 
@@ -72,6 +89,10 @@ fn default_span() -> u32 {
 
 fn is_false(value: &bool) -> bool {
     !*value
+}
+
+fn is_top_edge(edge: &TabEdge) -> bool {
+    *edge == TabEdge::Top
 }
 
 fn default_true() -> bool {
@@ -212,10 +233,18 @@ pub enum PanelConfig {
         #[serde(default)]
         active: String,
         /// Stored names stay on the tabs. False hides them on the bar.
-        #[serde(default = "default_true", rename = "showNames", skip_serializing_if = "is_true")]
+        #[serde(
+            default = "default_true",
+            rename = "showNames",
+            skip_serializing_if = "is_true"
+        )]
         show_names: bool,
         /// Tab icons stay on the bar. False hides them. Both false shows the tab id.
-        #[serde(default = "default_true", rename = "showIcons", skip_serializing_if = "is_true")]
+        #[serde(
+            default = "default_true",
+            rename = "showIcons",
+            skip_serializing_if = "is_true"
+        )]
         show_icons: bool,
         tabs: Vec<PanelTab>,
     },
@@ -810,7 +839,10 @@ mod tests {
         let saved = serde_json::to_value(&doc).unwrap();
         assert_eq!(saved["root"]["icon"], "folder");
         assert_eq!(saved["root"]["panel"]["tabs"][0]["title"], "");
-        assert_eq!(saved["root"]["panel"]["tabs"][0]["icon"], "file:icons/star.png");
+        assert_eq!(
+            saved["root"]["panel"]["tabs"][0]["icon"],
+            "file:icons/star.png"
+        );
 
         let outside = text.replace("file:icons/star.png", "file:../secret.png");
         assert!(LayoutDocument::parse(&outside).is_err());
@@ -896,5 +928,79 @@ mod tests {
         assert_eq!(saved["root"]["panel"]["view"], "edit");
         assert_eq!(saved["root"]["panel"]["path"], "notes/a.md");
         assert!(saved["root"]["panel"].get("directory").is_none());
+    }
+
+    #[test]
+    fn a_panel_bar_edge_roundtrips_and_defaults_to_the_top() {
+        let text = r#"{
+          "id": "desk",
+          "title": "Desk",
+          "root": {
+            "type": "panel",
+            "id": "notes",
+            "edge": "left",
+            "panel": {"type": "markdown", "path": "notes.md"}
+          }
+        }"#;
+        let doc = LayoutDocument::parse(text).unwrap();
+        let LayoutNode::Panel { edge, .. } = &doc.root else {
+            panic!("panel");
+        };
+        assert_eq!(*edge, TabEdge::Left);
+        let stored = serde_json::to_string(&doc).unwrap();
+        assert!(stored.contains("\"edge\":\"left\""));
+        let plain = text.replace("\"edge\": \"left\",\n", "");
+        let open = LayoutDocument::parse(&plain).unwrap();
+        let LayoutNode::Panel { edge, .. } = &open.root else {
+            panic!("panel");
+        };
+        assert_eq!(*edge, TabEdge::Top);
+        assert!(!serde_json::to_string(&open).unwrap().contains("\"edge\""));
+    }
+
+    #[test]
+    fn a_panel_bar_can_hide_its_name_and_icon() {
+        let text = r#"{
+          "id": "desk",
+          "title": "Desk",
+          "root": {
+            "type": "panel",
+            "id": "notes",
+            "showNames": false,
+            "showIcons": false,
+            "panel": {"type": "markdown", "path": "notes.md"}
+          }
+        }"#;
+        let doc = LayoutDocument::parse(text).unwrap();
+        let LayoutNode::Panel {
+            show_names,
+            show_icons,
+            ..
+        } = &doc.root
+        else {
+            panic!("panel");
+        };
+        assert!(!*show_names);
+        assert!(!*show_icons);
+        let stored = serde_json::to_string(&doc).unwrap();
+        assert!(stored.contains("\"showNames\":false"));
+        assert!(stored.contains("\"showIcons\":false"));
+        let plain = text
+            .replace("\"showNames\": false,\n", "")
+            .replace("\"showIcons\": false,\n", "");
+        let open = LayoutDocument::parse(&plain).unwrap();
+        let LayoutNode::Panel {
+            show_names,
+            show_icons,
+            ..
+        } = &open.root
+        else {
+            panic!("panel");
+        };
+        assert!(*show_names);
+        assert!(*show_icons);
+        let saved = serde_json::to_string(&open).unwrap();
+        assert!(!saved.contains("showNames"));
+        assert!(!saved.contains("showIcons"));
     }
 }

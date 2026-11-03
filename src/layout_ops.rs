@@ -1,4 +1,4 @@
-use crate::layout::{Direction, GridCell, HerdrScope, LayoutNode, PanelConfig};
+use crate::layout::{Direction, GridCell, HerdrScope, LayoutNode, PanelConfig, TabEdge};
 
 pub struct PanelInfo {
     pub id: String,
@@ -6,6 +6,9 @@ pub struct PanelInfo {
     pub panel: PanelConfig,
     pub collapsed: bool,
     pub icon: Option<String>,
+    pub edge: TabEdge,
+    pub show_names: bool,
+    pub show_icons: bool,
 }
 
 pub fn list_panels(node: &LayoutNode) -> Vec<PanelInfo> {
@@ -206,6 +209,9 @@ pub fn open_panel_with_id(
         panel,
         collapsed: false,
         icon: None,
+        edge: TabEdge::Top,
+        show_names: true,
+        show_icons: true,
     };
     let next = split_panel(node, anchor_id, direction, created)?;
     Ok((next, id))
@@ -342,12 +348,18 @@ fn walk(node: &LayoutNode, panels: &mut Vec<PanelInfo>) {
             panel,
             collapsed,
             icon,
+            edge,
+            show_names,
+            show_icons,
         } => panels.push(PanelInfo {
             id: id.clone(),
             title: title.clone(),
             panel: panel.clone(),
             collapsed: *collapsed,
             icon: icon.clone(),
+            edge: *edge,
+            show_names: *show_names,
+            show_icons: *show_icons,
         }),
         LayoutNode::Split { first, second, .. } => {
             walk(first, panels);
@@ -376,6 +388,9 @@ fn cell_node(cell: &GridCell) -> LayoutNode {
         }),
         collapsed: false,
         icon: None,
+        edge: TabEdge::Top,
+        show_names: true,
+        show_icons: true,
     }
 }
 
@@ -409,6 +424,9 @@ fn try_split(
             panel,
             collapsed,
             icon,
+            edge,
+            show_names,
+            show_icons,
         } if panel_id == id => Ok(LayoutNode::Split {
             direction,
             ratio: 0.5,
@@ -418,6 +436,9 @@ fn try_split(
                 panel,
                 collapsed,
                 icon,
+                edge,
+                show_names,
+                show_icons,
             }),
             second: Box::new(created),
         }),
@@ -427,6 +448,9 @@ fn try_split(
             panel,
             collapsed,
             icon,
+            edge,
+            show_names,
+            show_icons,
         } => Err(Box::new(SplitMiss {
             node: LayoutNode::Panel {
                 id,
@@ -434,6 +458,9 @@ fn try_split(
                 panel,
                 collapsed,
                 icon,
+                edge,
+                show_names,
+                show_icons,
             },
             created,
         })),
@@ -533,12 +560,18 @@ fn close_rec(node: LayoutNode, id: &str) -> Close {
             panel,
             collapsed,
             icon,
+            edge,
+            show_names,
+            show_icons,
         } => Close::Same(LayoutNode::Panel {
             id,
             title,
             panel,
             collapsed,
             icon,
+            edge,
+            show_names,
+            show_icons,
         }),
         LayoutNode::Split {
             direction,
@@ -649,6 +682,9 @@ fn update_rec(
             panel: current_panel,
             collapsed,
             icon,
+            edge,
+            show_names,
+            show_icons,
         } if panel_id == id => (
             LayoutNode::Panel {
                 id: panel_id,
@@ -656,6 +692,9 @@ fn update_rec(
                 panel: panel.unwrap_or(current_panel),
                 collapsed,
                 icon,
+                edge,
+                show_names,
+                show_icons,
             },
             true,
         ),
@@ -665,6 +704,9 @@ fn update_rec(
             panel,
             collapsed,
             icon,
+            edge,
+            show_names,
+            show_icons,
         } => (
             LayoutNode::Panel {
                 id,
@@ -672,6 +714,9 @@ fn update_rec(
                 panel,
                 collapsed,
                 icon,
+                edge,
+                show_names,
+                show_icons,
             },
             false,
         ),
@@ -746,6 +791,9 @@ fn resize_rec(node: LayoutNode, id: &str, share: f64) -> (LayoutNode, bool) {
             panel,
             collapsed,
             icon,
+            edge,
+            show_names,
+            show_icons,
         } => (
             LayoutNode::Panel {
                 id,
@@ -753,6 +801,9 @@ fn resize_rec(node: LayoutNode, id: &str, share: f64) -> (LayoutNode, bool) {
                 panel,
                 collapsed,
                 icon,
+                edge,
+                show_names,
+                show_icons,
             },
             false,
         ),
@@ -1111,6 +1162,9 @@ pub fn move_panel(
             panel: source.panel.clone(),
             collapsed: source.collapsed,
             icon: source.icon.clone(),
+            edge: source.edge,
+            show_names: source.show_names,
+            show_icons: source.show_icons,
         }
     };
     match place {
@@ -1135,6 +1189,9 @@ fn copy_info(info: &PanelInfo) -> PanelInfo {
         panel: info.panel.clone(),
         collapsed: info.collapsed,
         icon: info.icon.clone(),
+        edge: info.edge,
+        show_names: info.show_names,
+        show_icons: info.show_icons,
     }
 }
 
@@ -1146,6 +1203,9 @@ fn replace_two(node: LayoutNode, source: &PanelInfo, target: &PanelInfo) -> Layo
             panel,
             collapsed,
             icon,
+            edge,
+            show_names,
+            show_icons,
         } => {
             let info = if id == source.id {
                 Some(target)
@@ -1161,6 +1221,9 @@ fn replace_two(node: LayoutNode, source: &PanelInfo, target: &PanelInfo) -> Layo
                     panel: info.panel.clone(),
                     collapsed: info.collapsed,
                     icon: info.icon.clone(),
+                    edge: info.edge,
+                    show_names: info.show_names,
+                    show_icons: info.show_icons,
                 },
                 None => LayoutNode::Panel {
                     id,
@@ -1168,6 +1231,9 @@ fn replace_two(node: LayoutNode, source: &PanelInfo, target: &PanelInfo) -> Layo
                     panel,
                     collapsed,
                     icon,
+                    edge,
+                    show_names,
+                    show_icons,
                 },
             }
         }
@@ -1326,7 +1392,10 @@ mod tests {
                 scope: Some(HerdrScope::Pane),
             },
             collapsed: false,
-        icon: None,
+            icon: None,
+            edge: TabEdge::Top,
+            show_names: true,
+            show_icons: true,
         };
         let html = PanelConfig::Html {
             path: Some("notes/board.html".into()),
@@ -1372,7 +1441,10 @@ mod tests {
                 control: true,
             },
             collapsed: false,
-        icon: None,
+            icon: None,
+            edge: TabEdge::Top,
+            show_names: true,
+            show_icons: true,
         };
         assert!(
             matches!(
@@ -1450,7 +1522,10 @@ mod tests {
             title: Some("Chat".into()),
             panel: PanelConfig::Chat { pane_id: None },
             collapsed: false,
-        icon: None,
+            icon: None,
+            edge: TabEdge::Top,
+            show_names: true,
+            show_icons: true,
         };
         let split = split_panel(sample(), "notes", Direction::Column, created).unwrap();
         assert!(contains(&split, "chat"));
@@ -1553,7 +1628,10 @@ mod tests {
                 address_bar: None,
             },
             collapsed: false,
-        icon: None,
+            icon: None,
+            edge: TabEdge::Top,
+            show_names: true,
+            show_icons: true,
         };
         assert_eq!(stored_name(Some("Panes")), None);
         assert_eq!(stored_name(Some("Notes")).as_deref(), Some("Notes"));
@@ -1575,7 +1653,10 @@ mod tests {
                 scope: None,
             },
             collapsed: false,
-        icon: None,
+            icon: None,
+            edge: TabEdge::Top,
+            show_names: true,
+            show_icons: true,
         };
         let root = LayoutNode::Split {
             direction: Direction::Row,
@@ -1594,7 +1675,10 @@ mod tests {
                 address_bar: None,
             },
             collapsed: false,
-        icon: None,
+            icon: None,
+            edge: TabEdge::Top,
+            show_names: true,
+            show_icons: true,
         };
         let crowded = LayoutNode::Split {
             direction: Direction::Row,
@@ -1607,6 +1691,31 @@ mod tests {
             "more than one panel has that name"
         );
         assert_eq!(resolve_panel_id(&crowded, "pkg").unwrap(), "files");
+    }
+
+    #[test]
+    fn moving_a_panel_keeps_its_bar_edge() {
+        let root = LayoutDocument::parse(
+            r#"{
+              "id": "desk",
+              "title": "Desk",
+              "root": {
+                "type": "split",
+                "direction": "row",
+                "ratio": 0.5,
+                "first": {"type": "panel", "id": "notes", "edge": "right", "panel": {"type": "markdown", "path": "notes.md"}},
+                "second": {"type": "panel", "id": "other", "panel": {"type": "blank"}}
+              }
+            }"#,
+        )
+        .unwrap()
+        .root;
+        let moved = move_panel(root, "notes", "other", "below").unwrap();
+        let notes = list_panels(&moved)
+            .into_iter()
+            .find(|panel| panel.id == "notes")
+            .unwrap();
+        assert_eq!(notes.edge, crate::layout::TabEdge::Right);
     }
 
     fn files_panel(node: &LayoutNode) -> PanelConfig {

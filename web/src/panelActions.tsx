@@ -10,6 +10,8 @@ export interface PanelActions {
   addTab: (id: string) => void;
   use: (id: string, type: PanelConfig["type"], pluginId?: string) => void;
   edge: (id: string, edge: TabEdge) => void;
+  /** Show or hide the title and icon on this panel's bar. */
+  face: (id: string, names: boolean, icons: boolean) => void;
   place: (sourceId: string, targetId: string, place: PanelPlace) => void;
   /** Drop a panel onto another panel's bar and make one tab group. */
   group: (sourceId: string, targetId: string) => void;
@@ -26,6 +28,10 @@ export interface PanelActions {
   fill: (id: string) => void;
   /** Drop this panel from the visit. The panel itself stays where it was. */
   leave: (id: string) => void;
+  /** Add an existing panel to the visit that is filling the screen. */
+  joinVisit?: (panelId: string) => void;
+  visitChoices?: { panelId: string; title: string; spaceId: string; space: string }[];
+  visitPanelIds?: readonly string[];
   filledId: string | null;
 }
 
@@ -89,21 +95,21 @@ export function PanelActionsProvider({
     const point = { x: originX, y: originY };
 
     const sectionOf = (id: string) =>
-      document.querySelector<HTMLElement>(`[data-panel-id="${CSS.escape(id)}"]`);
+      visiblePanel(id) ?? document.querySelector<HTMLElement>(`[data-panel-id="${CSS.escape(id)}"]`);
 
     const targetAt = (x: number, y: number) => {
-      const hit = document.elementsFromPoint(x, y).find((element) => element.closest("[data-panel-id]"));
-      const hitId = hit?.closest("[data-panel-id]")?.getAttribute("data-panel-id") ?? null;
-      if (!hitId) return null;
-      const section = sectionOf(hitId);
+      const section = panelFromPoint(x, y);
       if (!section) return null;
+      const hitId = section.getAttribute("data-panel-id");
+      if (!hitId) return null;
       const rect = clientRect(section);
       const barEl = section.querySelector<HTMLElement>("[data-panel-bar]");
       const bar = barEl ? clientRect(barEl) : null;
-      const place = dropPlace(rect, x, y, bar);
+      const raw = dropPlace(rect, x, y, bar);
+      const place = raw === "bar" && !tabId && document.querySelector(".borrow-visit") ? "above" : raw;
       if (tabId) {
         if (hitId === panelId && (place === "bar" || place === "center")) return null;
-      } else if (hitId === panelId) {
+      } else if (hitId === panelId || panelOwner(hitId) === panelId) {
         return null;
       }
       const zone = place === "bar" && bar ? bar : slotRect(rect, place === "bar" ? "center" : place);
@@ -244,8 +250,32 @@ function DragOverlay({ live }: { live: LiveDrag }) {
   );
 }
 
+function panelOwner(id: string): string {
+  const colon = id.indexOf(":");
+  return colon < 0 ? id : id.slice(0, colon);
+}
+
+/** The desk under a visit, and panels waiting off screen, are not drop targets. */
+function panelFromPoint(x: number, y: number): HTMLElement | null {
+  for (const element of document.elementsFromPoint(x, y)) {
+    const section = element.closest("[data-panel-id]");
+    if (!(section instanceof HTMLElement)) continue;
+    if (section.closest(".desk-held") || section.closest("[hidden]")) continue;
+    return section;
+  }
+  return null;
+}
+
+function visiblePanel(id: string): HTMLElement | null {
+  for (const section of document.querySelectorAll<HTMLElement>(`[data-panel-id="${CSS.escape(id)}"]`)) {
+    if (section.closest(".desk-held") || section.closest("[hidden]")) continue;
+    return section;
+  }
+  return null;
+}
+
 function panelRect(id: string): Rect | null {
-  const section = document.querySelector<HTMLElement>(`[data-panel-id="${CSS.escape(id)}"]`);
+  const section = visiblePanel(id) ?? document.querySelector<HTMLElement>(`[data-panel-id="${CSS.escape(id)}"]`);
   return section ? clientRect(section) : null;
 }
 
