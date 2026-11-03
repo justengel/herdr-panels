@@ -1,6 +1,10 @@
 # Changelog
 
-## Unreleased
+## 0.1.15 - 2026-11-03
+
+On Linux, Ctrl+wheel, Ctrl+plus, Ctrl+minus, and Ctrl+0 over a browser panel reach the desk, and that panel zooms. After the panel shrinks, the native page lays out again and stays inside its panel.
+
+A file opened from Files inside a tab group becomes a tab in that group. A group holds 24 tabs. Pasting into the address bar uses the webview's paste, so Ctrl+V and Shift+Insert work when the page cannot read the clipboard.
 
 Arrow keys, Home, End, Delete, and Insert go to Herdr, with Shift, Ctrl, and Alt still on the key. The panel does not highlight from the keyboard. It shows the screen the program draws, so a shell that selects with Shift+Left shows that selection. A mouse highlight stays in the panel, is copied when the drag ends, and then clears. Typing drops a highlight that is still up, and that key still reaches the program.
 
