@@ -1370,6 +1370,8 @@ async fn a_plugin_bridge_is_refused_without_permission_or_the_panel_flag() {
         r#"{"id":"checkin-report","title":"Check-in report","permissions":["herdr:control"],"entry":"index.html"}"#,
     )
     .unwrap();
+    // Install records the grant. Editing plugin.json alone does not add a permission.
+    grant(&desk.root, "checkin-report", &["herdr:control"]);
     let (status, body) = desk
         .call(
             "POST",
@@ -1444,6 +1446,7 @@ async fn desk_edits_need_panels_permissions_and_cannot_grant_herdr_control() {
         r#"{"id":"desk-tool","title":"Desk tool","permissions":["herdr:control"]}"#,
     )
     .unwrap();
+    grant(&desk.root, "desk-tool", &["herdr:control"]);
     write_named_plugin(&desk.root, "desk-tool", "tool");
 
     let (status, body) = desk
@@ -1541,6 +1544,7 @@ async fn desk_edits_need_panels_permissions_and_cannot_grant_herdr_control() {
         r#"{"id":"desk-tool","title":"Desk tool","permissions":["panels:read","panels:control"]}"#,
     )
     .unwrap();
+    grant(&desk.root, "desk-tool", &["panels:read", "panels:control"]);
     let (status, body) = desk
         .call(
             "POST",
@@ -1691,6 +1695,7 @@ async fn desk_edits_need_panels_permissions_and_cannot_grant_herdr_control() {
         r#"{"id":"desk-tool","title":"Desk tool","permissions":["herdr:control"]}"#,
     )
     .unwrap();
+    grant(&desk.root, "desk-tool", &["herdr:control"]);
     std::fs::write(
         desk.root.join("desks").join("default.json"),
         serde_json::to_vec_pretty(&json!({
@@ -1781,6 +1786,18 @@ fn find_panel(value: &Value, id: &str) -> Value {
         _ => {}
     }
     Value::Null
+}
+
+fn grant(root: &std::path::Path, id: &str, permissions: &[&str]) {
+    herdr_panels::plugin_store::record(
+        root,
+        id,
+        herdr_panels::plugin_store::StoredGrant {
+            permissions: permissions.iter().map(|name| (*name).to_string()).collect(),
+            ..Default::default()
+        },
+    )
+    .unwrap();
 }
 
 fn write_plugin_panel(root: &std::path::Path, control: bool) {
