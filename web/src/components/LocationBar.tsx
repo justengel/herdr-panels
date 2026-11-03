@@ -30,45 +30,9 @@ function realAddress(path: string, hint = ""): string {
   return expandDisplayPath(path, guessHome(hint) || guessHome(path));
 }
 
-let fieldClipboard = "";
-let ownClipboard = false;
-
 function writeClipboard(text: string) {
-  fieldClipboard = text;
-  ownClipboard = true;
   if (!navigator.clipboard?.writeText) return;
   void navigator.clipboard.writeText(text).catch(() => undefined);
-}
-
-async function readClipboard(): Promise<string> {
-  if (ownClipboard) return fieldClipboard;
-  try {
-    const text = await navigator.clipboard?.readText();
-    if (text) return text;
-  } catch {
-    // A blocked clipboard still pastes the last cut or copy from an address bar.
-  }
-  return fieldClipboard;
-}
-
-if (typeof window !== "undefined") {
-  window.addEventListener("blur", () => {
-    ownClipboard = false;
-  });
-  document.addEventListener("copy", () => {
-    ownClipboard = false;
-  });
-  window.addEventListener(
-    "keydown",
-    (event) => {
-      const key = event.key.toLowerCase();
-      if (!(event.ctrlKey || event.metaKey) || (key !== "c" && key !== "x")) return;
-      const target = event.target;
-      if (target instanceof Element && target.closest("input[aria-label='Address']")) return;
-      ownClipboard = false;
-    },
-    true,
-  );
 }
 
 function spliceText(value: string, start: number, end: number, insert: string): { value: string; caret: number } {
@@ -315,14 +279,6 @@ export function LocationBar({
       copySelection(input);
       return;
     }
-    if (!command && event.shiftKey && event.key === "Insert") {
-      event.preventDefault();
-      event.stopPropagation();
-      const start = input.selectionStart ?? 0;
-      const end = input.selectionEnd ?? 0;
-      void readClipboard().then((text) => pasteText(start, end, text));
-      return;
-    }
     if (!command && event.shiftKey && event.key === "Delete") {
       event.preventDefault();
       event.stopPropagation();
@@ -369,14 +325,6 @@ export function LocationBar({
       cutSelection(input);
       return;
     }
-    if (key === "v") {
-      event.preventDefault();
-      event.stopPropagation();
-      const start = input.selectionStart ?? 0;
-      const end = input.selectionEnd ?? 0;
-      void readClipboard().then((text) => pasteText(start, end, text));
-      return;
-    }
     if (key === "z") {
       event.preventDefault();
       event.stopPropagation();
@@ -389,6 +337,15 @@ export function LocationBar({
       event.stopPropagation();
       redo();
     }
+  }
+
+  /** Ctrl+V, Shift+Insert, the menu, and middle click all end here. The page cannot read the clipboard on its own in every webview. */
+  function onAddressPaste(event: React.ClipboardEvent<HTMLInputElement>) {
+    event.preventDefault();
+    event.stopPropagation();
+    const input = event.currentTarget;
+    const text = event.clipboardData.getData("text/plain");
+    pasteText(input.selectionStart ?? 0, input.selectionEnd ?? 0, text);
   }
 
   function go(nextIndex: number, nextHistory = historyRef.current) {
@@ -455,6 +412,7 @@ export function LocationBar({
         onFocus={() => replaceDraft(focusedAddress(value) || value, false)}
         onBlur={() => replaceDraft(fitted(value), false)}
         onKeyDown={onAddressKey}
+        onPaste={onAddressPaste}
         onChange={(event) => edit(event.target.value, event.target.selectionStart ?? event.target.value.length, true)}
       />
       <button

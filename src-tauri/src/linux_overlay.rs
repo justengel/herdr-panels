@@ -42,6 +42,10 @@ fn overlay_in(vbox: &gtk::Box, child: &gtk::Widget) -> Option<gtk::Fixed> {
 fn set_box(child: &gtk::Widget, fixed: &gtk::Fixed, x: f64, y: f64, width: f64, height: f64) {
     child.set_size_request(width.round() as i32, height.round() as i32);
     fixed.move_(child, x.round() as i32, y.round() as i32);
+    // GTK keeps the old allocation after a shrink until the container is laid out again.
+    // The page then paints at its old size over the panels beside it.
+    child.queue_resize();
+    fixed.queue_resize();
 }
 
 /// Move a freshly added child out of the window's box and into the overlay.

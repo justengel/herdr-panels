@@ -15,7 +15,7 @@ import { openTerminalPane, shellPanel, terminalPlacement } from "../openTerminal
 import { claimPaneClose, followTerminalExit, terminalDriver } from "../terminalExit";
 import { cdCommand, terminalHereCwd } from "../terminalHere";
 import { useHost } from "../host";
-import { cellNode, listPanels, writeTab } from "../layoutEdit";
+import { cellNode, contentLabel, freshTabId, listPanels, writeTab } from "../layoutEdit";
 import { collapseBasis, splitPaneFlex } from "../tabFace";
 import { useDesign } from "../design";
 import { useDesk } from "../desk";
@@ -488,6 +488,16 @@ function PanelView(props: {
   }
   const panelTitle = displayTitle(title, panel, plugin?.title ?? "");
   const givenName = isDefaultPanelTitle(title) ? "" : (title ?? "").trim();
+  /** A file opened from Files inside a tab group becomes a new tab in that group. */
+  async function openFileInGroup(group: TabsPanel, target: string) {
+    const opened = await api.resolve(target).catch(() => panelWhenUnresolved(target));
+    if (group.tabs.length >= 24) {
+      host.notify("A tab group holds 24 tabs");
+      return;
+    }
+    const tabId = freshTabId(group.tabs);
+    onPanel(id, { ...group, active: tabId, tabs: [...group.tabs, { id: tabId, title: contentLabel(opened), panel: opened }] });
+  }
   if (panel.type === "tabs") {
     return (
       <>
@@ -501,7 +511,14 @@ function PanelView(props: {
             group={panel}
             onChange={(next) => onPanel(id, next)}
             renderContent={(tab, update) => (
-              <Surface {...props} id={`${id}:${tab.id}`} spaceId={bridgeSpaceId} panel={tab.panel} onPanel={(_id, next) => update(next)} />
+              <Surface
+                {...props}
+                id={`${id}:${tab.id}`}
+                spaceId={bridgeSpaceId}
+                panel={tab.panel}
+                onPanel={(_id, next) => update(next)}
+                onOpenFile={(target) => openFileInGroup(panel, target)}
+              />
             )}
           />
         </PanelChrome>
@@ -570,6 +587,7 @@ function Surface({
   onPanel,
   onFocusPane,
   onOpenSpace,
+  onOpenFile,
   spaceId,
 }: {
   id: string;
@@ -584,6 +602,8 @@ function Surface({
   onPanel: (id: string, panel: PanelConfig, retitle?: boolean) => void;
   onFocusPane: (paneId: string) => void;
   onOpenSpace?: (workspaceId: string) => void;
+  /** Where a file opened from Files goes. Without it the file opens in a split beside the panel. */
+  onOpenFile?: (target: string) => void | Promise<unknown>;
   spaceId: string;
 }) {
   const design = useDesign();
@@ -612,6 +632,7 @@ function Surface({
         workspaces={workspaces}
         spaceId={spaceId}
         onPanel={onPanel}
+        onOpenFile={onOpenFile}
       />
     );
   }
@@ -684,6 +705,7 @@ function DocumentSurface({
   workspaces,
   spaceId,
   onPanel,
+  onOpenFile,
 }: {
   id: string;
   title?: string | null;
@@ -692,6 +714,7 @@ function DocumentSurface({
   workspaces: WorkspaceView[];
   spaceId: string;
   onPanel: (id: string, panel: PanelConfig, retitle?: boolean) => void;
+  onOpenFile?: (target: string) => void | Promise<unknown>;
 }) {
   const design = useDesign();
   const host = useHost();
@@ -801,7 +824,7 @@ function DocumentSurface({
           roots={folderRoots(workspaces, panes)}
           showAddress={false}
           onEnter={enter}
-          onOpenFile={(target) => api.open(openFileBeside(id, target))}
+          onOpenFile={(target) => (onOpenFile ? onOpenFile(target) : api.open(openFileBeside(id, target)))}
           onOpenInTerminal={(directory) => {
             const workspaceId = workspaces.find((item) => item.focused)?.workspaceId;
             void host.openShell(workspaceId).then(async (paneId) => {

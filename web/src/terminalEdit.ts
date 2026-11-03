@@ -20,38 +20,8 @@ export interface SelectSpan {
   length: number;
 }
 
-const SELECT_KEYS = new Set(["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"]);
-
-export function isShiftSelectKey(key: string): boolean {
-  return SELECT_KEYS.has(key);
-}
-
 function columnCount(cols: number): number {
   return Math.max(1, Math.floor(cols) || 1);
-}
-
-function clampRow(y: number, maxRow: number): number {
-  if (maxRow < 0) return 0;
-  return Math.max(0, Math.min(maxRow, y));
-}
-
-/** Move a caret one step. `cols` is the width of a row, and x === cols is the caret after that row. */
-export function moveCaret(caret: Caret, cols: number, key: string, maxRow: number): Caret {
-  const width = columnCount(cols);
-  const y = clampRow(caret.y, maxRow);
-  const x = Math.max(0, Math.min(width, caret.x));
-  if (key === "Home") return { x: 0, y };
-  if (key === "End") return { x: width, y };
-  if (key === "ArrowUp") return { x, y: clampRow(y - 1, maxRow) };
-  if (key === "ArrowDown") return { x, y: clampRow(y + 1, maxRow) };
-  if (key === "ArrowLeft") {
-    if (x > 0) return { x: x - 1, y };
-    if (y <= 0) return { x: 0, y: 0 };
-    return { x: width, y: y - 1 };
-  }
-  if (x < width) return { x: x + 1, y };
-  if (y >= maxRow) return { x: width, y };
-  return { x: 0, y: y + 1 };
 }
 
 function indexOf(caret: Caret, cols: number): number {
@@ -65,48 +35,6 @@ export function spanBetween(anchor: Caret, head: Caret, cols: number): SelectSpa
   const to = Math.max(indexOf(anchor, width), indexOf(head, width));
   if (to === from) return null;
   return { column: from % width, row: Math.floor(from / width), length: to - from };
-}
-
-/**
- * Shift plus an arrow, Home, or End grows the highlight from the caret where it
- * started. The shell cursor stays put; Backspace uses that cursor afterwards.
- */
-export function extendSelection(
-  cols: number,
-  cursor: Caret,
-  anchor: Caret | null,
-  head: Caret | null,
-  key: string,
-  maxRow: number,
-): { anchor: Caret; head: Caret; span: SelectSpan | null } {
-  const start = anchor ?? cursor;
-  const current = head ?? cursor;
-  const next = moveCaret(current, cols, key, maxRow);
-  return { anchor: start, head: next, span: spanBetween(start, next, cols) };
-}
-
-function sameLine(selection: BufferSelection): boolean {
-  return selection.start.y === selection.end.y;
-}
-
-/**
- * Keys that remove a highlight on the cursor's line. Null means the highlight
- * is on another line, so it cannot be deleted from the shell input.
- * The names are the key values `map_key` already understands.
- */
-export function keysToRemoveSelection(cursor: Caret, selection: BufferSelection): string[] | null {
-  if (!sameLine(selection) || selection.start.y !== cursor.y) return null;
-  const start = Math.min(selection.start.x, selection.end.x);
-  const end = Math.max(selection.start.x, selection.end.x);
-  const length = end - start;
-  if (length <= 0) return null;
-  if (cursor.x >= end) return [...repeat("ArrowLeft", cursor.x - end), ...repeat("Backspace", length)];
-  if (cursor.x <= start) return [...repeat("ArrowRight", start - cursor.x), ...repeat("Delete", length)];
-  return [...repeat("ArrowRight", end - cursor.x), ...repeat("Backspace", length)];
-}
-
-function repeat(key: string, count: number): string[] {
-  return Array.from({ length: Math.max(0, count) }, () => key);
 }
 
 /** One physical row of a terminal selection. `wrapped` continues the previous row. */
@@ -181,36 +109,6 @@ export function clipboardAction(event: KeyPress, platform: TerminalPlatform): "c
   if (command && !event.shiftKey && insert) return "copy";
   if (!command && event.shiftKey && insert) return "paste";
   return null;
-}
-
-export type HighlightKey = "remove" | "clear" | "keep";
-
-/**
- * What a key does to a highlight on Linux and macOS. Backspace and Delete
- * remove that text. Shift plus an arrow, Home, or End keeps growing it.
- * Any other key drops the highlight and still reaches the shell.
- */
-export function highlightOnKey(event: KeyPress): HighlightKey {
-  if (event.key === "Shift" || event.key === "Control" || event.key === "Alt" || event.key === "Meta") return "keep";
-  const growing =
-    event.shiftKey &&
-    !event.altKey &&
-    !event.metaKey &&
-    (event.key === "ArrowLeft" || event.key === "ArrowRight" || event.key === "Home" || event.key === "End");
-  if (growing) return "keep";
-  if ((event.key === "Backspace" || event.key === "Delete") && !event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey) {
-    return "remove";
-  }
-  return "clear";
-}
-
-/** The highlight between two carets. Empty when they sit on the same cell. */
-export function selectionFromCarets(anchor: Caret, head: Caret, cols: number): BufferSelection | null {
-  const startIndex = indexOf(anchor, cols);
-  const endIndex = indexOf(head, cols);
-  if (startIndex === endIndex) return null;
-  const [start, end] = startIndex < endIndex ? [anchor, head] : [head, anchor];
-  return { start, end };
 }
 
 /** HTML clipboard body. A pre block keeps the spaces and line breaks a page would otherwise collapse. */

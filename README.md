@@ -193,7 +193,9 @@ The terminal follows each platform's usual keys, so Ctrl+C always stays an inter
 
 On Linux, Ctrl+V goes to the shell as ^V. Off Windows the web view does the paste itself, because some web views refuse to let a page read the clipboard. Copy falls back to the browser's copy command when the clipboard API is refused. macOS follows the same rules, but it has only been checked by reading the code.
 
-Outside Windows, Shift+Left, Shift+Right, Shift+Home, and Shift+End highlight text and move the shell's own cursor with it, so Home and End land where the shell puts them. Ctrl+Shift+Left and Ctrl+Shift+Right do the same a word at a time. Backspace or Delete removes that highlighted text. Other typing leaves the text in place and clears the highlight. On Windows a highlight is replaced when you type. Shift+Up and Shift+Down go to the shell, where they are history keys.
+Arrow keys, Home, End, Delete, and Insert go to Herdr, with Shift, Ctrl, and Alt still on the key. The panel shows the screen the program draws. A shell that selects with Shift+Left shows that selection. A shell that treats the chord as a typed key shows the key. Shift+Up and Shift+Down reach the program, which is where a shell keeps its history.
+
+A mouse highlight stays in the panel. The program never sees it. Releasing the button copies it and clears it. The next typing key drops a highlight that is still showing, and that key reaches the program. Page Up and Page Down scroll this panel's view of the pane. Held with Shift, Ctrl, or Alt, they go to the program.
 
 Terminals have no undo or redo. Ctrl+Z suspends the job. Readline shells such as bash undo with Ctrl+_ and have no redo, and PowerShell undoes with Ctrl+Z and redoes with Ctrl+Y. Text copied from an agent that wraps its own lines keeps those line breaks, because the terminal cannot tell a wrapped line from a real one.
 

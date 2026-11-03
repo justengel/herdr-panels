@@ -2,9 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   caretSelection,
   collectSelectionLines,
-  extendSelection,
   joinTerminalSelection,
-  keysToRemoveSelection,
   plainClipboardText,
   selectionLinesUnchanged,
   shiftSelection,
@@ -20,43 +18,6 @@ const cursor: Caret = { x: 10, y: 3 };
 function selection(startX: number, endX: number, y = 3): BufferSelection {
   return { start: { x: startX, y }, end: { x: endX, y } };
 }
-
-describe("terminal selection editing", () => {
-  it("extends a shift selection from the cursor without moving the other end", () => {
-    const first = extendSelection(80, cursor, null, null, "ArrowLeft", 20);
-    expect(first.anchor).toEqual(cursor);
-    expect(first.head).toEqual({ x: 9, y: 3 });
-    expect(first.span).toEqual({ column: 9, row: 3, length: 1 });
-    const second = extendSelection(80, cursor, first.anchor, first.head, "ArrowLeft", 20);
-    expect(second.span).toEqual({ column: 8, row: 3, length: 2 });
-    const home = extendSelection(80, cursor, null, null, "Home", 20);
-    expect(home.span).toEqual({ column: 0, row: 3, length: 10 });
-    const end = extendSelection(80, cursor, null, null, "End", 20);
-    expect(end.span).toEqual({ column: 10, row: 3, length: 70 });
-  });
-
-  it("removes a highlight on the cursor line and leaves a highlight on another line", () => {
-    expect(keysToRemoveSelection(cursor, selection(4, 8))).toEqual([
-      "ArrowLeft",
-      "ArrowLeft",
-      "Backspace",
-      "Backspace",
-      "Backspace",
-      "Backspace",
-    ]);
-    expect(keysToRemoveSelection({ x: 4, y: 3 }, selection(4, 8))).toEqual(["Delete", "Delete", "Delete", "Delete"]);
-    expect(keysToRemoveSelection({ x: 6, y: 3 }, selection(4, 8))).toEqual([
-      "ArrowRight",
-      "ArrowRight",
-      "Backspace",
-      "Backspace",
-      "Backspace",
-      "Backspace",
-    ]);
-    expect(keysToRemoveSelection(cursor, selection(4, 8, 1))).toBeNull();
-    expect(keysToRemoveSelection(cursor, { start: { x: 0, y: 3 }, end: { x: 4, y: 4 } })).toBeNull();
-  });
-});
 
 describe("terminal copy", () => {
   it("keeps spaces inside a line and a newline between lines", () => {

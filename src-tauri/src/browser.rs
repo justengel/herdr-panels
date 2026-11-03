@@ -174,6 +174,77 @@ fn arm_png_save(webkit: webkit2gtk::WebView, reply: Webview) {
     }
 }
 
+/// A page in a native browser webview owns its own wheel and keys, so the desk never sees Ctrl+wheel
+/// or Ctrl+plus over it. Windows watches the mouse and keyboard from outside. Linux has no such hook,
+/// so the page reports those chords on the `hwpZoom` bridge and `arm_zoom` forwards them to the desk.
+#[cfg(target_os = "linux")]
+const ZOOM_BOOT: &str = r#"(function(){
+if(window.__hwpZoomBound)return;
+window.__hwpZoomBound=true;
+var post=function(message){try{window.webkit.messageHandlers.hwpZoom.postMessage(message);}catch(e){}};
+var acc=0;
+window.addEventListener('wheel',function(e){
+if(!(e.ctrlKey||e.metaKey))return;
+e.preventDefault();e.stopPropagation();
+acc+=e.deltaY;
+if(Math.abs(acc)<40)return;
+post(acc<0?'wheel:1':'wheel:-1');
+acc=0;
+},{capture:true,passive:false});
+window.addEventListener('keydown',function(e){
+if(!(e.ctrlKey||e.metaKey)||e.altKey)return;
+var chord=null;
+if(e.key==='='||e.key==='+')chord='in';
+else if(e.key==='-'||e.key==='_')chord='out';
+else if(e.key==='0')chord='reset';
+if(!chord)return;
+e.preventDefault();e.stopPropagation();
+post(chord);
+},true);
+})();"#;
+
+/// Turn a zoom message from a browser page into the desk event that Windows sends for the same input.
+#[cfg(target_os = "linux")]
+fn zoom_script(label: &str, message: &str) -> Option<String> {
+    let label_json = serde_json::to_string(label).ok()?;
+    let steps = match message {
+        "wheel:1" | "in" => 1,
+        "wheel:-1" | "out" => -1,
+        "reset" => {
+            let panel = serde_json::to_string(panel_id_from_browser(label)?).ok()?;
+            return Some(format!(
+                "window.dispatchEvent(new CustomEvent('herdr-zoom-set',{{detail:{{panelId:{panel},scale:1}}}}))"
+            ));
+        }
+        _ => return None,
+    };
+    Some(format!(
+        "window.dispatchEvent(new CustomEvent('herdr-zoom-step',{{detail:{{label:{label_json},steps:{steps}}}}}))"
+    ))
+}
+
+#[cfg(target_os = "linux")]
+fn arm_zoom(webkit: webkit2gtk::WebView, app: AppHandle, label: String) {
+    use webkit2gtk::{UserContentManagerExt, WebViewExt};
+    let Some(manager) = webkit.user_content_manager() else {
+        return;
+    };
+    if !manager.register_script_message_handler("hwpZoom") {
+        return;
+    }
+    manager.connect_script_message_received(Some("hwpZoom"), move |_, result| {
+        let Some(value) = result.js_value() else {
+            return;
+        };
+        let Some(script) = zoom_script(&label, &value.to_string()) else {
+            return;
+        };
+        if let Some(desk) = app.get_webview("main") {
+            let _ = desk.eval(&script);
+        }
+    });
+}
+
 #[cfg(target_os = "linux")]
 fn png_save_reply(raw: &str) -> String {
     let outcome = decode_png_save(raw).and_then(|(bytes, name)| herdr_panels::server::save_png_dialog(bytes, &name));
@@ -755,6 +826,8 @@ async fn place_browser(
         .get_window("main")
         .ok_or_else(|| "the desktop window is not open".to_string())?;
     let boot = select_boot();
+    #[cfg(target_os = "linux")]
+    let boot = format!("{boot}\n{ZOOM_BOOT}");
     let opener = app.clone();
     let panel_id = Arc::new(Mutex::new(
         panel_id_from_browser(&label).unwrap_or("").to_string(),
@@ -813,7 +886,12 @@ async fn place_browser(
     #[cfg(target_os = "linux")]
     {
         let reply = view.clone();
-        if let Err(err) = view.with_webview(move |platform| arm_png_save(platform.inner(), reply)) {
+        let zoom_app = app.clone();
+        let zoom_label = label.clone();
+        if let Err(err) = view.with_webview(move |platform| {
+            arm_zoom(platform.inner(), zoom_app, zoom_label);
+            arm_png_save(platform.inner(), reply);
+        }) {
             eprintln!("screenshot save: {err}");
         }
     }
@@ -2210,6 +2288,16 @@ mod tests {
         assert_eq!(new_window_link("file:///tmp/x"), LinkNavigation::Refuse);
         assert_eq!(new_window_link("javascript:alert(1)"), LinkNavigation::Refuse);
         assert_eq!(new_window_link("herdr://panel"), LinkNavigation::Refuse);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_page_zoom_message_becomes_the_desk_zoom_event() {
+        let step = zoom_script("browser-panel-3", "wheel:-1").unwrap();
+        assert!(step.contains("herdr-zoom-step") && step.contains("\"browser-panel-3\"") && step.contains("steps:-1"));
+        let reset = zoom_script("browser-panel-3", "reset").unwrap();
+        assert!(reset.contains("herdr-zoom-set") && reset.contains("\"panel-3\"") && reset.contains("scale:1"));
+        assert!(zoom_script("browser-panel-3", "sideways").is_none());
     }
 
     #[test]

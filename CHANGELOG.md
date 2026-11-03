@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+Arrow keys, Home, End, Delete, and Insert go to Herdr, with Shift, Ctrl, and Alt still on the key. The panel does not highlight from the keyboard. It shows the screen the program draws, so a shell that selects with Shift+Left shows that selection. A mouse highlight stays in the panel, is copied when the drag ends, and then clears. Typing drops a highlight that is still up, and that key still reaches the program.
+
 ## 0.1.14 - 2026-11-03
 
 Copy, HTML, and Screenshot turn Select off. The screenshot dialog still asks where to save the file. A browser panel tells the desk with its own page message, so the Select button and the other panels turn off too. The page title is only the fallback: a screenshot replaces that title, and the desk can miss it.

@@ -6,11 +6,8 @@ import { useHost } from "../../host";
 import {
   caretSelection,
   clipboardAction,
-  highlightOnKey,
   collectSelectionLines,
   joinTerminalSelection,
-  keysToRemoveSelection,
-  selectionFromCarets,
   selectionLinesUnchanged,
   spanBetween,
   terminalPlatform,
@@ -144,7 +141,6 @@ export function HerdrTerminal({ paneId, source, lines, home, onGone }: Props) {
   const anchorRef = useRef<Caret | null>(null);
   const headRef = useRef<Caret | null>(null);
   const heldRef = useRef<BufferSelection | null>(null);
-  const keySelectRef = useRef<{ anchor: Caret } | null>(null);
   const anchorCellRef = useRef<GridCell | null>(null);
   const headCellRef = useRef<GridCell | null>(null);
   const draggingRef = useRef(false);
@@ -467,7 +463,6 @@ export function HerdrTerminal({ paneId, source, lines, home, onGone }: Props) {
         finish(token);
         if (gestureRef.current !== gesture || layoutEpoch !== layout) return;
         restoreSelection(before, requested);
-        syncKeyboardSelection(term);
       };
       if (text) term.write(text, () => done());
       else done();
@@ -768,7 +763,6 @@ export function HerdrTerminal({ paneId, source, lines, home, onGone }: Props) {
   }
 
   function dropHeld(term: Terminal) {
-    keySelectRef.current = null;
     anchorCellRef.current = null;
     headCellRef.current = null;
     lineCacheRef.current.clear();
@@ -808,6 +802,12 @@ export function HerdrTerminal({ paneId, source, lines, home, onGone }: Props) {
     event.stopPropagation();
     event.preventDefault();
     term.focus();
+    // As in Herdr, a program that asked for the mouse owns selection and copy. The panel only
+    // forwards the mouse, so there are not two highlights.
+    if (term.modes.mouseTrackingMode !== "none") {
+      dropHeld(term);
+      return;
+    }
     pointerRef.current = { x: event.clientX, y: event.clientY };
     const live = pointerOnTerm(term, event.clientX, event.clientY);
     if (!live) return;
@@ -818,6 +818,7 @@ export function HerdrTerminal({ paneId, source, lines, home, onGone }: Props) {
       draggingRef.current = false;
       applyCells(term, { column: 0, row: cell.row }, { column: Math.max(0, term.cols - 1), row: cell.row });
       copyHeld(term, true);
+      dropHeld(term);
       return;
     }
     if (event.detail === 2) {
@@ -827,6 +828,7 @@ export function HerdrTerminal({ paneId, source, lines, home, onGone }: Props) {
       const word = wordCells(line ? line.translateToString(true) : "", cell.column, cell.row, term.cols);
       applyCells(term, word.anchor, word.head);
       copyHeld(term, true);
+      dropHeld(term);
       return;
     }
     draggingRef.current = true;
@@ -842,62 +844,12 @@ export function HerdrTerminal({ paneId, source, lines, home, onGone }: Props) {
     paintSelection(term, null);
   }
 
-  function cursorCaret(term: Terminal): Caret {
-    const buffer = term.buffer.active;
-    return { x: buffer.cursorX, y: buffer.baseY + buffer.cursorY };
-  }
-
   function deskPlatform(): ReturnType<typeof terminalPlatform> {
     return terminalPlatform(typeof navigator === "undefined" ? "" : navigator.userAgent);
   }
 
-  /** Shift plus an arrow, Home, or End moves the shell cursor and highlights from where it started. */
-  function extendFromKeyboard(term: Terminal, event: { key: string; ctrlKey: boolean }) {
-    const buffer = term.buffer.active;
-    if (!keySelectRef.current) {
-      dropHeld(term);
-      keySelectRef.current = { anchor: { x: buffer.cursorX, y: buffer.cursorY } };
-    }
-    flushText();
-    send({ type: "key", key: event.key, ctrl: event.ctrlKey, alt: false, shift: false, meta: false });
-  }
-
-  function syncKeyboardSelection(term: Terminal) {
-    const state = keySelectRef.current;
-    if (!state) return;
-    const buffer = term.buffer.active;
-    paintSelection(term, selectionFromCarets(state.anchor, { x: buffer.cursorX, y: buffer.cursorY }, term.cols));
-  }
-
   function copySelection(term: Terminal) {
     if (copyHeld(term, false)) host.notify("Copied to clipboard");
-  }
-
-  function selectionOf(term: Terminal): BufferSelection | null {
-    const position = term.getSelectionPosition();
-    if (!position || !term.hasSelection()) return null;
-    return { start: { x: position.start.x, y: position.start.y }, end: { x: position.end.x, y: position.end.y } };
-  }
-
-  function sendKeys(keys: string[]) {
-    for (const key of keys) send({ type: "key", key, ctrl: false, alt: false, shift: false, meta: false });
-  }
-
-  function removeHighlight(term: Terminal, selection: BufferSelection | null): boolean {
-    if (!selection) return false;
-    const buffer = term.buffer.active;
-    const cursor = selection === heldRef.current ? { x: buffer.cursorX, y: buffer.cursorY } : cursorCaret(term);
-    const keys = keysToRemoveSelection(cursor, selection);
-    flushText();
-    if (keys) sendKeys(keys);
-    term.clearSelection();
-    anchorRef.current = null;
-    headRef.current = null;
-    heldRef.current = null;
-    anchorCellRef.current = null;
-    headCellRef.current = null;
-    lineCacheRef.current.clear();
-    return keys !== null;
   }
 
   function commitPlace(next: ScrollPlace) {
@@ -1109,7 +1061,11 @@ export function HerdrTerminal({ paneId, source, lines, home, onGone }: Props) {
           draggingRef.current = false;
           stopEdge();
           const term = termRef.current;
-          if (term && heldRef.current) copyHeld(term, true);
+          if (term && heldRef.current) {
+            // Herdr copies on release and then clears the highlight.
+            copyHeld(term, true);
+            dropHeld(term);
+          }
         }
         const button = pointerButton(event.button) ?? heldButton.current;
         heldButton.current = null;
@@ -1129,7 +1085,6 @@ export function HerdrTerminal({ paneId, source, lines, home, onGone }: Props) {
         const command = event.ctrlKey || event.metaKey;
         const printable = event.key.length === 1 && !command && !event.altKey;
         const action = clipboardAction(event, platform);
-        const arrowSelect = event.shiftKey && !event.altKey && !event.metaKey && (event.key === "ArrowLeft" || event.key === "ArrowRight" || event.key === "Home" || event.key === "End");
         if (term && action === "copy" && term.hasSelection()) {
           copySelection(term);
           event.preventDefault();
@@ -1141,11 +1096,8 @@ export function HerdrTerminal({ paneId, source, lines, home, onGone }: Props) {
           if (platform !== "windows") return;
           event.preventDefault();
           pasteStamp.current = Date.now();
-          const highlighted = heldRef.current ?? selectionOf(term);
+          dropHeld(term);
           void navigator.clipboard?.readText().then((text) => {
-            const current = termRef.current;
-            if (!current) return;
-            if (highlighted) removeHighlight(current, highlighted);
             if (!text) return;
             flushText();
             followInput();
@@ -1153,44 +1105,9 @@ export function HerdrTerminal({ paneId, source, lines, home, onGone }: Props) {
           }).catch(() => undefined);
           return;
         }
-        if (term && platform !== "windows" && (keySelectRef.current || heldRef.current)) {
-          const disposition = highlightOnKey(event);
-          if (disposition === "remove") {
-            const highlighted = heldRef.current ?? selectionOf(term);
-            keySelectRef.current = null;
-            if (highlighted) {
-              event.preventDefault();
-              event.stopPropagation();
-              removeHighlight(term, highlighted);
-              return;
-            }
-          } else if (disposition === "clear") {
-            keySelectRef.current = null;
-            dropHeld(term);
-          }
-        }
-        if (term && platform !== "windows" && arrowSelect) {
-          event.preventDefault();
-          event.stopPropagation();
-          extendFromKeyboard(term, event);
-          return;
-        }
-        if (term && platform === "windows" && (term.hasSelection() || heldRef.current) && !event.altKey && !event.metaKey && (event.key === "Backspace" || event.key === "Delete" || printable)) {
-          const highlighted = heldRef.current ?? selectionOf(term);
-          const removed = highlighted ? keysToRemoveSelection(cursorCaret(term), highlighted) : null;
-          if (event.key === "Backspace" || event.key === "Delete") {
-            event.preventDefault();
-            event.stopPropagation();
-            if (highlighted) removeHighlight(term, highlighted);
-            return;
-          }
-          if (removed) {
-            event.preventDefault();
-            event.stopPropagation();
-            removeHighlight(term, highlighted);
-            queueText(event.key);
-            return;
-          }
+        // The highlight belongs to this panel and the program never sees it. Every key goes to the
+        // program as typed, and the highlight is dropped.
+        if (term && (heldRef.current || term.hasSelection()) && !["Shift", "Control", "Alt", "Meta"].includes(event.key)) {
           dropHeld(term);
         }
         if (host.consume(event.nativeEvent)) {
@@ -1232,15 +1149,7 @@ export function HerdrTerminal({ paneId, source, lines, home, onGone }: Props) {
         if (!text) return;
         event.preventDefault();
         const term = termRef.current;
-        if (term) {
-          if (deskPlatform() === "windows") {
-            const highlighted = heldRef.current ?? selectionOf(term);
-            if (highlighted) removeHighlight(term, highlighted);
-          } else {
-            keySelectRef.current = null;
-            dropHeld(term);
-          }
-        }
+        if (term) dropHeld(term);
         flushText();
         followInput();
         send({ type: "text", text });
