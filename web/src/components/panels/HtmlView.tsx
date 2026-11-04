@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import frameKeys from "../../../../assets/frame-keys.js?raw";
 import frameSelect from "../../../../assets/frame-select.js?raw";
 import bridge from "../../../../assets/panel-bridge.js?raw";
@@ -28,6 +28,9 @@ export function HtmlView({ path, inline, title, control = false, design = false,
   const frameRef = useRef<HTMLIFrameElement>(null);
   const pickRef = useRef(onPick);
   const controlRef = useRef(control);
+  const [failure, setFailure] = useState<{ key: string; message: string } | null>(null);
+  const loadKey = path ? `path:${path}` : "";
+  const loadError = failure?.key === loadKey ? failure.message : null;
   pickRef.current = onPick;
   controlRef.current = control;
 
@@ -55,23 +58,34 @@ export function HtmlView({ path, inline, title, control = false, design = false,
     let cancelled = false;
     if (path) {
       const target = contentUrl(path, false);
+      const key = `path:${path}`;
       void api
         .framePass(target)
         .then(async (src) => {
           const response = await fetch(src);
-          if (!response.ok) throw new Error("The page could not be loaded");
+          if (!response.ok) {
+            const detail = (await response.text()).trim();
+            throw new Error(detail || "The page could not be loaded");
+          }
           return { src, html: await response.text() };
         })
         .then(
           ({ src, html }) => {
             const node = frameRef.current;
             if (cancelled || !node) return;
+            setFailure((current) => (current?.key === key ? null : current));
             node.removeAttribute("src");
             delete node.dataset.selectBridge;
             node.srcdoc = pageWithBridge(html, directoryHref(src));
           },
-          () => {
-            if (!cancelled && frameRef.current) frameRef.current.removeAttribute("src");
+          (error: unknown) => {
+            if (cancelled) return;
+            const message =
+              error instanceof Error && error.message.trim()
+                ? error.message.trim()
+                : "The page could not be loaded";
+            setFailure({ key, message });
+            if (frameRef.current) frameRef.current.removeAttribute("src");
           },
         );
     } else if (inline) {
@@ -94,6 +108,8 @@ export function HtmlView({ path, inline, title, control = false, design = false,
     publish();
     return () => frame.removeEventListener("load", publish);
   }, [design, path, inline]);
+
+  if (loadError) return <div className="empty">{loadError}</div>;
 
   return (
     <iframe

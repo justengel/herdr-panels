@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import type { PluginInfo } from "./desk";
 import type { DeskSnapshot } from "./deskSync";
 import type { Bootstrap, ChatMessage, LayoutDocument, PanelConfig, RuntimeSnapshot } from "./types";
-import { baseName as pathName, contentSegments } from "./paths";
+import { baseName as pathName, contentSegments, isPosixAbsolute } from "./paths";
 
 export interface HerdrChoice {
   value: string;
@@ -355,9 +355,11 @@ export function wsUrl(path: string): string {
 }
 
 export function contentUrl(path: string, bridge = false): string {
-  const encoded = contentSegments(path)
-    .map((part) => encodeURIComponent(part))
-    .join("/");
+  const encoded =
+    (isPosixAbsolute(path) ? "%2F" : "") +
+    contentSegments(path)
+      .map((part) => encodeURIComponent(part))
+      .join("/");
   return bridge ? `/content/${encoded}?bridge=1` : `/content/${encoded}`;
 }
 
