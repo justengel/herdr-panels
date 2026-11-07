@@ -1010,6 +1010,7 @@ dependencies = [
  "mime_guess",
  "notify",
  "psl",
+ "raw-window-handle",
  "reqwest",
  "rfd",
  "serde",

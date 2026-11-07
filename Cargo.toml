@@ -39,3 +39,6 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 url = "2"
 zip = "2"
+
+[target.'cfg(windows)'.dependencies]
+raw-window-handle = "0.6"

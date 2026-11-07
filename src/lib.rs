@@ -18,6 +18,7 @@ pub mod content;
 pub mod desk;
 pub mod desk_gate;
 pub mod external_link;
+pub mod file_dialog;
 pub mod files;
 pub mod frame_pass;
 pub mod herdr;

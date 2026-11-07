@@ -762,7 +762,7 @@ async fn pick_file(Json(body): Json<PickFileBody>) -> Result<Json<Value>, ApiErr
         if let Some(dir) = start {
             dialog = dialog.set_directory(dir);
         }
-        dialog.pick_file()
+        crate::file_dialog::show(dialog, |dialog| dialog.pick_file())
     })
     .await
     .map_err(|err| ApiError::bad(err.to_string()))?;
@@ -801,7 +801,8 @@ pub fn save_png_dialog(bytes: Vec<u8>, suggested: &str) -> Result<Option<PathBuf
     if let Some(start) = screenshot_start_dir() {
         dialog = dialog.set_directory(start);
     }
-    store_png(dialog.save_file(), &bytes)
+    let choice = crate::file_dialog::show(dialog, |dialog| dialog.save_file());
+    store_png(choice, &bytes)
 }
 
 /// The picker starts in the home directory. A missing Downloads folder is not used.

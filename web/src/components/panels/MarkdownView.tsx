@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useState } from "react";
-import { marked } from "marked";
+import { useEffect, useMemo, useRef, useState } from "react";
 import DOMPurify from "dompurify";
 import { useTabSession, wsUrl } from "../../api";
+import { diagramHtml, diagramPixelWidth, renderNote, type NoteScheme } from "../../mermaidNote";
 import { CopyOnSelect } from "../CopyOnSelect";
 import { noteLinkAction, openExternalUrl } from "../../externalLink";
 
@@ -9,6 +9,10 @@ interface Props {
   path: string;
   design?: boolean;
   onPick?: (pick: { tag: string; text: string }) => void;
+}
+
+function noteScheme(): NoteScheme {
+  return document.documentElement.style.colorScheme === "light" ? "light" : "dark";
 }
 
 export function MarkdownView({ path, design = false, onPick }: Props) {
@@ -50,17 +54,54 @@ export function MarkdownView({ path, design = false, onPick }: Props) {
     };
   }, [path, sessionName]);
 
-  const html = useMemo(() => {
-    const parsed = marked.parse(text, { async: false, gfm: true });
-    const source = typeof parsed === "string" ? parsed : "";
-    return DOMPurify.sanitize(source);
-  }, [text]);
+  const prepared = useMemo(() => renderNote(text), [text]);
+  const html = useMemo(() => DOMPurify.sanitize(prepared.html), [prepared]);
+  const [scheme, setScheme] = useState<NoteScheme>(noteScheme);
+  const articleRef = useRef<HTMLElement>(null);
+
+  useEffect(() => {
+    const onTheme = () => setScheme(noteScheme());
+    window.addEventListener("herdr-theme", onTheme);
+    return () => window.removeEventListener("herdr-theme", onTheme);
+  }, []);
+
+  useEffect(() => {
+    const root = articleRef.current;
+    if (!root || prepared.diagrams.length === 0) return;
+    let stopped = false;
+    const fit = () => {
+      const column = root.clientWidth;
+      for (const svg of root.querySelectorAll<SVGSVGElement>("svg[data-natural-width]")) {
+        const target = diagramPixelWidth(Number(svg.dataset.naturalWidth), column);
+        if (!target) continue;
+        svg.style.width = `${target}px`;
+        svg.style.height = "auto";
+      }
+    };
+    void (async () => {
+      for (const diagram of prepared.diagrams) {
+        const rendered = await diagramHtml(diagram.source, scheme);
+        if (stopped) return;
+        const host = root.querySelector(`[data-herdr-mermaid="${diagram.id}"]`);
+        if (!host) continue;
+        host.innerHTML = rendered;
+      }
+      if (!stopped) fit();
+    })();
+    const observer = new ResizeObserver(() => fit());
+    observer.observe(root);
+    return () => {
+      stopped = true;
+      observer.disconnect();
+    };
+  }, [html, prepared, scheme]);
 
   if (error) return <div className="empty">{error}</div>;
   if (missing) return <div className="empty">File not found: {path}</div>;
   return (
     <CopyOnSelect>
       <article
+        ref={articleRef}
         className={design ? "markdown designing" : "markdown"}
         onClick={(event) => {
           if (design) {
