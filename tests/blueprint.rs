@@ -2147,6 +2147,197 @@ async fn a_plugin_opens_with_control_when_its_manifest_or_the_call_asks() {
     );
 }
 
+#[tokio::test]
+async fn a_tab_edit_changes_one_tab_and_the_workspace_lists_the_group() {
+    let desk = desk().await;
+    let (status, updated) = desk
+        .call(
+            "POST",
+            "/api/agent/update",
+            Some(json!({
+                "panelId": "notes",
+                "panel": {
+                    "type": "tabs",
+                    "active": "tab-1",
+                    "tabs": [
+                        {"id": "tab-1", "title": "Notes", "panel": {"type": "markdown", "path": "notes/welcome.md"}},
+                        {"id": "tab-2", "title": "Pin", "panel": {"type": "iframe", "url": "https://example.com/pin", "proxy": false}}
+                    ]
+                }
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{updated}");
+    assert!(desk.panel(&updated, "Shell").get("tabs").is_none());
+    let tabs = desk.panel(&updated, "Notes")["tabs"].as_array().unwrap();
+    assert_eq!(tabs[0]["id"], "tab-1");
+    assert_eq!(tabs[0]["title"], "Notes");
+    assert_eq!(tabs[0]["type"], "markdown");
+    assert_eq!(tabs[0]["url"], "");
+    assert_eq!(tabs[0]["summary"], "notes/welcome.md");
+    assert_eq!(tabs[0]["active"], true);
+    assert_eq!(tabs[1]["id"], "tab-2");
+    assert_eq!(tabs[1]["type"], "iframe");
+    assert_eq!(tabs[1]["url"], "https://example.com/pin");
+    assert_eq!(tabs[1]["active"], false);
+
+    let (status, renamed) = desk
+        .call(
+            "POST",
+            "/api/agent/tab",
+            Some(json!({
+                "panelId": "Notes",
+                "op": "rename",
+                "tab": "tab-2",
+                "title": "pin #64066"
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{renamed}");
+    assert_eq!(renamed["tabId"], "tab-2");
+    let tabs = desk.panel(&renamed["workspace"], "Notes")["tabs"]
+        .as_array()
+        .unwrap();
+    assert_eq!(tabs[0]["title"], "Notes");
+    assert_eq!(tabs[0]["summary"], "notes/welcome.md");
+    assert_eq!(tabs[0]["active"], true);
+    assert_eq!(tabs[1]["title"], "pin #64066");
+    assert_eq!(tabs[1]["url"], "https://example.com/pin");
+
+    let (status, listed) = desk
+        .call(
+            "POST",
+            "/api/agent/tab",
+            Some(json!({"panelId": "Notes", "op": "list"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{listed}");
+    assert_eq!(listed["tabs"][1]["title"], "pin #64066");
+    assert_eq!(listed["tabs"][1]["active"], false);
+
+    let (status, opened) = desk
+        .call(
+            "POST",
+            "/api/agent/open",
+            Some(json!({
+                "target": "https://example.com/other",
+                "tab": "Notes",
+                "title": "Other"
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{opened}");
+    assert_eq!(opened["tabId"], "tab-3");
+    assert_eq!(opened["created"], true);
+    let tabs = desk.panel(&opened["workspace"], "Notes")["tabs"]
+        .as_array()
+        .unwrap();
+    assert_eq!(tabs.len(), 3);
+    assert_eq!(tabs[0]["summary"], "notes/welcome.md");
+    assert_eq!(tabs[1]["title"], "pin #64066");
+    assert_eq!(tabs[1]["url"], "https://example.com/pin");
+    assert_eq!(tabs[2]["title"], "Other");
+    assert_eq!(tabs[2]["url"], "https://example.com/other");
+    assert_eq!(tabs[2]["active"], true);
+
+    let (status, via_tab) = desk
+        .call(
+            "POST",
+            "/api/agent/tab",
+            Some(json!({
+                "panelId": "Notes",
+                "op": "open",
+                "target": "https://example.com/via-tab",
+                "title": "Via tab"
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{via_tab}");
+    assert_eq!(via_tab["tabId"], "tab-4");
+    let tabs = desk.panel(&via_tab["workspace"], "Notes")["tabs"]
+        .as_array()
+        .unwrap();
+    assert_eq!(tabs.len(), 4);
+    assert_eq!(tabs[0]["summary"], "notes/welcome.md");
+    assert_eq!(tabs[1]["title"], "pin #64066");
+    assert_eq!(tabs[1]["url"], "https://example.com/pin");
+    assert_eq!(tabs[3]["url"], "https://example.com/via-tab");
+    assert_eq!(tabs[3]["active"], true);
+
+    let (status, focused) = desk
+        .call(
+            "POST",
+            "/api/agent/tab",
+            Some(json!({"panelId": "Notes", "op": "focus", "tab": "pin #64066"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{focused}");
+    let tabs = desk.panel(&focused["workspace"], "Notes")["tabs"]
+        .as_array()
+        .unwrap();
+    assert_eq!(tabs[1]["active"], true);
+    assert_eq!(tabs[2]["active"], false);
+    assert_eq!(tabs[0]["summary"], "notes/welcome.md");
+
+    let (status, closed) = desk
+        .call(
+            "POST",
+            "/api/agent/tab",
+            Some(json!({"panelId": "Notes", "op": "close", "tab": "Other"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{closed}");
+    let (status, closed) = desk
+        .call(
+            "POST",
+            "/api/agent/tab",
+            Some(json!({"panelId": "Notes", "op": "close", "tab": "tab-4"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{closed}");
+    let tabs = desk.panel(&closed["workspace"], "Notes")["tabs"]
+        .as_array()
+        .unwrap();
+    assert_eq!(tabs.len(), 2);
+    assert_eq!(tabs[1]["title"], "pin #64066");
+    assert_eq!(tabs[1]["active"], true);
+    assert!(tabs
+        .iter()
+        .all(|tab| tab["url"] != "https://example.com/other"));
+
+    let (status, missing) = desk
+        .call(
+            "POST",
+            "/api/agent/tab",
+            Some(json!({"panelId": "Notes", "op": "rename", "tab": "missing", "title": "Nope"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{missing}");
+    let (status, not_tabs) = desk
+        .call(
+            "POST",
+            "/api/agent/tab",
+            Some(json!({"panelId": "Shell", "op": "focus", "tab": "tab-1"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{not_tabs}");
+    assert_eq!(not_tabs["error"], "panel is not a tab group");
+    let (status, both) = desk
+        .call(
+            "POST",
+            "/api/agent/open",
+            Some(json!({"target": "https://example.com", "tab": "Notes", "panelId": "Shell"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{both}");
+
+    let (status, again) = desk.call("GET", "/api/agent/workspace", None).await;
+    assert_eq!(status, StatusCode::OK, "{again}");
+    let tabs = desk.panel(&again, "Notes")["tabs"].as_array().unwrap();
+    assert_eq!(tabs[0]["summary"], "notes/welcome.md");
+    assert_eq!(tabs[1]["title"], "pin #64066");
+}
+
 fn query_url(url: &str) -> String {
     let mut query = url::form_urlencoded::Serializer::new(String::new());
     query.append_pair("url", url);

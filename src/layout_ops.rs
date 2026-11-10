@@ -1,4 +1,4 @@
-use crate::layout::{Direction, GridCell, HerdrScope, LayoutNode, PanelConfig, TabEdge};
+use crate::layout::{Direction, GridCell, HerdrScope, LayoutNode, PanelConfig, PanelTab, TabEdge};
 
 pub struct PanelInfo {
     pub id: String,
@@ -133,6 +133,404 @@ pub fn update_panel(
         Ok(next)
     } else {
         Err("panel was not found")
+    }
+}
+
+/// The id of one tab in a group. A tab id matches exactly. A title matches one tab, ignoring case.
+pub fn tab_id(node: &LayoutNode, panel_id: &str, tab: &str) -> Result<String, &'static str> {
+    let group = tab_group(node, panel_id)?;
+    let index = tab_index(&group, tab)?;
+    Ok(group[index].id.clone())
+}
+
+pub fn rename_tab(
+    node: LayoutNode,
+    panel_id: &str,
+    tab: &str,
+    title: &str,
+) -> Result<LayoutNode, &'static str> {
+    let title = clean_tab_title(title)?;
+    edit_tabs(node, panel_id, |group| {
+        let index = tab_index(&group.tabs, tab)?;
+        group.tabs[index].title = title;
+        Ok(())
+    })
+}
+
+pub fn focus_tab(node: LayoutNode, panel_id: &str, tab: &str) -> Result<LayoutNode, &'static str> {
+    edit_tabs(node, panel_id, |group| {
+        let index = tab_index(&group.tabs, tab)?;
+        group.active = group.tabs[index].id.clone();
+        Ok(())
+    })
+}
+
+/// Append one tab, show it, and leave every tab that was already there as it was.
+pub fn open_tab(
+    node: LayoutNode,
+    panel_id: &str,
+    panel: PanelConfig,
+    title: &str,
+) -> Result<(LayoutNode, String), &'static str> {
+    if matches!(panel, PanelConfig::Tabs { .. }) {
+        return Err("tab groups cannot be nested");
+    }
+    let title = title.trim();
+    if title.chars().count() > 80 {
+        return Err("tab title must be at most 80 characters");
+    }
+    let title = title.to_string();
+    let mut created = String::new();
+    let next = edit_tabs(node, panel_id, |group| {
+        if group.tabs.len() >= 24 {
+            return Err("a tab group needs 1 to 24 tabs");
+        }
+        let id = fresh_tab_id(&group.tabs);
+        created = id.clone();
+        group.active = id.clone();
+        group.tabs.push(PanelTab {
+            id,
+            title,
+            icon: None,
+            panel,
+        });
+        Ok(())
+    })?;
+    Ok((next, created))
+}
+
+/// Remove one tab. Two or more remaining stay a group. One remaining becomes that panel.
+pub fn close_tab(node: LayoutNode, panel_id: &str, tab: &str) -> Result<LayoutNode, &'static str> {
+    edit_panel(node, panel_id, |slot| {
+        let PanelConfig::Tabs {
+            edge,
+            active,
+            show_names,
+            show_icons,
+            tabs,
+        } = std::mem::replace(&mut slot.panel, PanelConfig::Blank)
+        else {
+            return Err("panel is not a tab group");
+        };
+        let index = match tab_index(&tabs, tab) {
+            Ok(index) => index,
+            Err(err) => {
+                slot.panel = PanelConfig::Tabs {
+                    edge,
+                    active,
+                    show_names,
+                    show_icons,
+                    tabs,
+                };
+                return Err(err);
+            }
+        };
+        if tabs.len() == 1 {
+            slot.panel = PanelConfig::Tabs {
+                edge,
+                active,
+                show_names,
+                show_icons,
+                tabs,
+            };
+            return Err("at least one tab stays open");
+        }
+        let mut tabs = tabs;
+        tabs.remove(index);
+        if tabs.len() == 1 {
+            let only = tabs.remove(0);
+            let kept = only.title.trim();
+            if !kept.is_empty() && !kept.eq_ignore_ascii_case("new tab") {
+                slot.title = Some(kept.to_string());
+            }
+            if let Some(icon) = only.icon.filter(|icon| !icon.trim().is_empty()) {
+                slot.icon = Some(icon);
+            }
+            slot.edge = edge;
+            slot.show_names = show_names;
+            slot.show_icons = show_icons;
+            slot.panel = only.panel;
+            return Ok(());
+        }
+        let active = if tabs.iter().any(|item| item.id == active) {
+            active
+        } else {
+            tabs.last().map(|item| item.id.clone()).unwrap_or_default()
+        };
+        slot.panel = PanelConfig::Tabs {
+            edge,
+            active,
+            show_names,
+            show_icons,
+            tabs,
+        };
+        Ok(())
+    })
+}
+
+struct PanelSlot {
+    title: Option<String>,
+    panel: PanelConfig,
+    collapsed: bool,
+    icon: Option<String>,
+    edge: TabEdge,
+    show_names: bool,
+    show_icons: bool,
+}
+
+struct TabGroup {
+    edge: TabEdge,
+    active: String,
+    show_names: bool,
+    show_icons: bool,
+    tabs: Vec<PanelTab>,
+}
+
+fn tab_group(node: &LayoutNode, panel_id: &str) -> Result<Vec<PanelTab>, &'static str> {
+    let panel = list_panels(node)
+        .into_iter()
+        .find(|panel| panel.id == panel_id)
+        .ok_or("panel was not found")?;
+    match panel.panel {
+        PanelConfig::Tabs { tabs, .. } => Ok(tabs),
+        _ => Err("panel is not a tab group"),
+    }
+}
+
+fn tab_index(tabs: &[PanelTab], key: &str) -> Result<usize, &'static str> {
+    let key = key.trim();
+    if key.is_empty() {
+        return Err("tab was not found");
+    }
+    if let Some(index) = tabs.iter().position(|tab| tab.id == key) {
+        return Ok(index);
+    }
+    let mut found = None;
+    for (index, tab) in tabs.iter().enumerate() {
+        if tab.title.eq_ignore_ascii_case(key) {
+            if found.is_some() {
+                return Err("more than one tab has that name");
+            }
+            found = Some(index);
+        }
+    }
+    found.ok_or("tab was not found")
+}
+
+fn clean_tab_title(title: &str) -> Result<String, &'static str> {
+    let title = title.trim();
+    if title.is_empty() {
+        return Err("tab title is empty");
+    }
+    if title.chars().count() > 80 {
+        return Err("tab title must be at most 80 characters");
+    }
+    Ok(title.to_string())
+}
+
+fn fresh_tab_id(tabs: &[PanelTab]) -> String {
+    let mut number = tabs.len() + 1;
+    loop {
+        let id = format!("tab-{number}");
+        if !tabs.iter().any(|tab| tab.id == id) {
+            return id;
+        }
+        number += 1;
+        if number > 500 {
+            return format!("tab-{}", tabs.len() + number);
+        }
+    }
+}
+
+fn edit_tabs<F>(node: LayoutNode, panel_id: &str, edit: F) -> Result<LayoutNode, &'static str>
+where
+    F: FnOnce(&mut TabGroup) -> Result<(), &'static str>,
+{
+    edit_panel(node, panel_id, |slot| {
+        let PanelConfig::Tabs {
+            edge,
+            active,
+            show_names,
+            show_icons,
+            tabs,
+        } = std::mem::replace(&mut slot.panel, PanelConfig::Blank)
+        else {
+            return Err("panel is not a tab group");
+        };
+        let mut group = TabGroup {
+            edge,
+            active,
+            show_names,
+            show_icons,
+            tabs,
+        };
+        if let Err(err) = edit(&mut group) {
+            slot.panel = PanelConfig::Tabs {
+                edge: group.edge,
+                active: group.active,
+                show_names: group.show_names,
+                show_icons: group.show_icons,
+                tabs: group.tabs,
+            };
+            return Err(err);
+        }
+        slot.panel = PanelConfig::Tabs {
+            edge: group.edge,
+            active: group.active,
+            show_names: group.show_names,
+            show_icons: group.show_icons,
+            tabs: group.tabs,
+        };
+        Ok(())
+    })
+}
+
+fn edit_panel<F>(node: LayoutNode, id: &str, edit: F) -> Result<LayoutNode, &'static str>
+where
+    F: FnOnce(&mut PanelSlot) -> Result<(), &'static str>,
+{
+    let mut edit = Some(edit);
+    let mut failure = None;
+    let (next, hit) = edit_panel_rec(node, id, &mut edit, &mut failure);
+    if let Some(err) = failure {
+        return Err(err);
+    }
+    if hit {
+        Ok(next)
+    } else {
+        Err("panel was not found")
+    }
+}
+
+fn edit_panel_rec<F>(
+    node: LayoutNode,
+    id: &str,
+    edit: &mut Option<F>,
+    failure: &mut Option<&'static str>,
+) -> (LayoutNode, bool)
+where
+    F: FnOnce(&mut PanelSlot) -> Result<(), &'static str>,
+{
+    match node {
+        LayoutNode::Panel {
+            id: panel_id,
+            title,
+            panel,
+            collapsed,
+            icon,
+            edge,
+            show_names,
+            show_icons,
+        } if panel_id == id => {
+            let mut slot = PanelSlot {
+                title,
+                panel,
+                collapsed,
+                icon,
+                edge,
+                show_names,
+                show_icons,
+            };
+            if let Some(edit) = edit.take() {
+                if let Err(err) = edit(&mut slot) {
+                    *failure = Some(err);
+                }
+            }
+            (
+                LayoutNode::Panel {
+                    id: panel_id,
+                    title: slot.title,
+                    panel: slot.panel,
+                    collapsed: slot.collapsed,
+                    icon: slot.icon,
+                    edge: slot.edge,
+                    show_names: slot.show_names,
+                    show_icons: slot.show_icons,
+                },
+                true,
+            )
+        }
+        LayoutNode::Panel {
+            id,
+            title,
+            panel,
+            collapsed,
+            icon,
+            edge,
+            show_names,
+            show_icons,
+        } => (
+            LayoutNode::Panel {
+                id,
+                title,
+                panel,
+                collapsed,
+                icon,
+                edge,
+                show_names,
+                show_icons,
+            },
+            false,
+        ),
+        LayoutNode::Split {
+            direction,
+            ratio,
+            first,
+            second,
+        } => {
+            let (first, hit) = edit_panel_rec(*first, id, edit, failure);
+            if hit || failure.is_some() {
+                return (
+                    LayoutNode::Split {
+                        direction,
+                        ratio,
+                        first: Box::new(first),
+                        second,
+                    },
+                    hit,
+                );
+            }
+            let (second, hit) = edit_panel_rec(*second, id, edit, failure);
+            (
+                LayoutNode::Split {
+                    direction,
+                    ratio,
+                    first: Box::new(first),
+                    second: Box::new(second),
+                },
+                hit,
+            )
+        }
+        LayoutNode::Grid {
+            columns,
+            rows,
+            cells,
+        } => {
+            let mut hit = false;
+            let cells = cells
+                .into_iter()
+                .map(|cell| {
+                    if hit || failure.is_some() {
+                        return cell;
+                    }
+                    let (node, found) = edit_panel_rec(cell_node(&cell), id, edit, failure);
+                    hit = found;
+                    GridCell {
+                        node: Some(node),
+                        panel: None,
+                        ..cell
+                    }
+                })
+                .collect();
+            (
+                LayoutNode::Grid {
+                    columns,
+                    rows,
+                    cells,
+                },
+                hit,
+            )
+        }
     }
 }
 
@@ -1716,6 +2114,188 @@ mod tests {
             .find(|panel| panel.id == "notes")
             .unwrap();
         assert_eq!(notes.edge, crate::layout::TabEdge::Right);
+    }
+
+    fn grouped() -> LayoutNode {
+        LayoutDocument::parse(
+            r#"{
+              "id": "desk",
+              "title": "Desk",
+              "root": {
+                "type": "panel",
+                "id": "grouped",
+                "title": "Tabs",
+                "panel": {
+                  "type": "tabs",
+                  "active": "tab-1",
+                  "tabs": [
+                    {"id": "tab-1", "title": "Notes", "panel": {"type": "markdown", "path": "notes/welcome.md"}},
+                    {"id": "tab-2", "title": "Pin", "panel": {"type": "iframe", "url": "https://example.com/pin", "proxy": false}}
+                  ]
+                }
+              }
+            }"#,
+        )
+        .unwrap()
+        .root
+    }
+
+    fn group_tabs(node: &LayoutNode) -> (String, Vec<crate::layout::PanelTab>) {
+        let panel = list_panels(node)
+            .into_iter()
+            .find(|panel| panel.id == "grouped")
+            .unwrap();
+        match panel.panel {
+            PanelConfig::Tabs { active, tabs, .. } => (active, tabs),
+            other => panic!("expected a tab group, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn renaming_one_tab_leaves_the_other_tab_in_place() {
+        let next = rename_tab(grouped(), "grouped", "tab-2", "pin #64066").unwrap();
+        let (active, tabs) = group_tabs(&next);
+        assert_eq!(active, "tab-1");
+        assert_eq!(tabs[0].title, "Notes");
+        assert!(matches!(
+            &tabs[0].panel,
+            PanelConfig::Markdown { path, .. } if path == "notes/welcome.md"
+        ));
+        assert_eq!(tabs[1].id, "tab-2");
+        assert_eq!(tabs[1].title, "pin #64066");
+        assert!(matches!(
+            &tabs[1].panel,
+            PanelConfig::Iframe { url, proxy: false, .. } if url == "https://example.com/pin"
+        ));
+        assert_eq!(list_panels(&next)[0].title.as_deref(), Some("Tabs"));
+    }
+
+    #[test]
+    fn a_tab_can_be_named_by_its_title_and_a_shared_title_is_refused() {
+        let next = focus_tab(grouped(), "grouped", "Pin").unwrap();
+        assert_eq!(group_tabs(&next).0, "tab-2");
+        let duplicated = LayoutDocument::parse(
+            r#"{
+              "id": "desk",
+              "title": "Desk",
+              "root": {
+                "type": "panel",
+                "id": "grouped",
+                "panel": {
+                  "type": "tabs",
+                  "active": "tab-1",
+                  "tabs": [
+                    {"id": "tab-1", "title": "Pin", "panel": {"type": "blank"}},
+                    {"id": "tab-2", "title": "pin", "panel": {"type": "blank"}}
+                  ]
+                }
+              }
+            }"#,
+        )
+        .unwrap()
+        .root;
+        assert_eq!(
+            rename_tab(duplicated, "grouped", "pin", "Other").unwrap_err(),
+            "more than one tab has that name"
+        );
+        assert_eq!(
+            rename_tab(grouped(), "grouped", "missing", "Other").unwrap_err(),
+            "tab was not found"
+        );
+    }
+
+    #[test]
+    fn opening_a_tab_adds_one_and_keeps_the_tabs_already_there() {
+        let (next, id) = open_tab(
+            grouped(),
+            "grouped",
+            PanelConfig::Iframe {
+                url: "https://example.com/new".into(),
+                proxy: false,
+                address_bar: None,
+            },
+            "New pin",
+        )
+        .unwrap();
+        let (active, tabs) = group_tabs(&next);
+        assert_eq!(id, "tab-3");
+        assert_eq!(active, "tab-3");
+        assert_eq!(tabs.len(), 3);
+        assert_eq!(tabs[0].title, "Notes");
+        assert!(matches!(
+            &tabs[0].panel,
+            PanelConfig::Markdown { path, .. } if path == "notes/welcome.md"
+        ));
+        assert_eq!(tabs[1].title, "Pin");
+        assert_eq!(tabs[2].title, "New pin");
+        assert!(matches!(
+            &tabs[2].panel,
+            PanelConfig::Iframe { url, .. } if url == "https://example.com/new"
+        ));
+    }
+
+    #[test]
+    fn a_tab_group_stops_at_24_tabs() {
+        let mut tabs = Vec::new();
+        for number in 1..=24 {
+            tabs.push(format!(
+                r#"{{"id":"tab-{number}","title":"T{number}","panel":{{"type":"blank"}}}}"#
+            ));
+        }
+        let full = LayoutDocument::parse(&format!(
+            r#"{{"id":"desk","title":"Desk","root":{{"type":"panel","id":"grouped","panel":{{"type":"tabs","active":"tab-1","tabs":[{}]}}}}}}"#,
+            tabs.join(",")
+        ))
+        .unwrap()
+        .root;
+        assert_eq!(
+            open_tab(full, "grouped", PanelConfig::Blank, "One more").unwrap_err(),
+            "a tab group needs 1 to 24 tabs"
+        );
+    }
+
+    #[test]
+    fn closing_one_tab_keeps_the_others_and_the_last_tab_becomes_the_panel() {
+        let (opened, _) = open_tab(grouped(), "grouped", PanelConfig::Blank, "Third").unwrap();
+        let closed = close_tab(opened, "grouped", "tab-1").unwrap();
+        let (active, tabs) = group_tabs(&closed);
+        assert_eq!(tabs.len(), 2);
+        assert_eq!(active, "tab-3");
+        assert_eq!(tabs[0].id, "tab-2");
+        assert!(matches!(
+            &tabs[0].panel,
+            PanelConfig::Iframe { url, .. } if url == "https://example.com/pin"
+        ));
+        assert_eq!(tabs[1].id, "tab-3");
+        let unwrapped = close_tab(closed, "grouped", "tab-2").unwrap();
+        let panel = list_panels(&unwrapped).into_iter().next().unwrap();
+        assert!(matches!(panel.panel, PanelConfig::Blank));
+        assert_eq!(panel.title.as_deref(), Some("Third"));
+        let only = LayoutDocument::parse(
+            r#"{
+              "id": "desk",
+              "title": "Desk",
+              "root": {
+                "type": "panel",
+                "id": "grouped",
+                "panel": {
+                  "type": "tabs",
+                  "active": "tab-1",
+                  "tabs": [{"id": "tab-1", "title": "Only", "panel": {"type": "blank"}}]
+                }
+              }
+            }"#,
+        )
+        .unwrap()
+        .root;
+        assert_eq!(
+            close_tab(only, "grouped", "tab-1").unwrap_err(),
+            "at least one tab stays open"
+        );
+        assert_eq!(
+            close_tab(sample(), "notes", "tab-1").unwrap_err(),
+            "panel is not a tab group"
+        );
     }
 
     fn files_panel(node: &LayoutNode) -> PanelConfig {

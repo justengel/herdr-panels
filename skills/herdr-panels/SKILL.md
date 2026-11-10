@@ -82,6 +82,13 @@ herdr-panels panel visit google Notes Agents Files
 herdr-panels panel visit google Notes --arrange column
 herdr-panels panel visit google Notes --size 2,1
 herdr-panels panel visit google Notes Agents Files --columns 2,1 --rows 1,2
+herdr-panels panel tab list
+herdr-panels panel tab list Tabs
+herdr-panels panel tab rename Tabs tab-2 "pin #64066"
+herdr-panels panel tab focus Tabs tab-2
+herdr-panels panel tab open Tabs https://example.com/pin --title "pin #64066"
+herdr-panels panel tab close Tabs tab-2
+herdr-panels panel open https://example.com/pin --tab Tabs
 ```
 
 `open` adds a panel. `--from` is the panel to split. When it is omitted, the new panel is beside the last content panel. `--direction right` places it beside that panel. `--direction down` places it below. `--panel Name` replaces that panel instead of adding one. `--id` chooses the id of a panel that is being added. Do not replace Panes or a Terminal panel unless the user named that panel. See Panes and Terminal above. `panel list` ends with a control column: `on`, `off`, or empty.
@@ -98,7 +105,9 @@ A relative file is the caller's current directory. The command sends that absolu
 - Any other file becomes plain text.
 - A path that starts with `/` is a file, including on Windows. If that file is not on this machine, the panel still opens as text and says the file is missing. Do not open that path as a browser.
 
-A click on a link does not add a panel. In the desktop window an `http` or `https` link opens in the system browser. In a browser tab it opens a new tab. `target="_blank"` is that click. There is no `target` that adds a panel, and the new browser panel is not a tab. `panel open` is how to put the page on the desk.
+A click on a link does not add a panel. In the desktop window an `http` or `https` link opens in the system browser. In a browser tab it opens a new tab. `target="_blank"` is that click. There is no `target` that adds a panel. `panel open` puts the page on the desk as its own panel. `panel open --tab Name` adds that page as a tab inside a tab group that is already open.
+
+A tab group is one panel. `panel list` prints that panel, then one line per tab. A tab line starts with an empty field, then the tab id, title, type, url, summary, and `active` on the tab that is showing. `panel tab list` prints `panel id`, `tab id`, `title`, `type`, `url`, `summary`, and `active`. Omit the panel name to list every group. Address a tab by its id or by its title when that title belongs to one tab. `rename`, `focus`, `open`, and `close` change that tab on the desk as it is now. The other tabs stay as they are. Do not send the whole `tabs` object through `panel update`; a change to another tab between the read and that write would be lost. A group holds at most 24 tabs. Closing a tab while two or more remain keeps the group. Closing the next-to-last tab leaves the remaining tab as the panel itself. The last tab stays open. `--tab` needs a panel that is already a tab group, and it is not combined with `--panel`, `--from`, or `--id`. `panel tab` takes `--space` the same way as the other panel commands.
 
 Change a panel that is already open:
 
@@ -173,10 +182,11 @@ def call(method, path, body=None, base="http://127.0.0.1:4737"):
         return json.load(res)
 ```
 
-`GET /api/agent/workspace` returns each panel's `id`, `title`, `name`, `display`, `kind`, `type`, and `summary`, plus `role` for a herdr panel. `listPanels` returns the same fields. `name` is empty until someone names the panel. `display` is the title bar. `kind` is the panel type. `title` is the stored string and may be an old automatic label; do not treat it as the name. Add `?space=` to read one workspace. `*` is only valid for `say.to` and means every chat. The panel routes below take an optional `space` set to a Herdr workspace id. Omit it to edit the focused space.
+`GET /api/agent/workspace` returns each panel's `id`, `title`, `name`, `display`, `kind`, `type`, and `summary`, plus `role` for a herdr panel. A tab group also has `tabs`: each entry is `id`, `title`, `type`, `url`, `summary`, and `active`. `active` is true for the tab that is showing. `url` is empty when the tab is not a page. `listPanels` returns the same fields. `name` is empty until someone names the panel. `display` is the title bar. `kind` is the panel type. `title` is the stored string and may be an old automatic label; do not treat it as the name. Add `?space=` to read one workspace. `*` is only valid for `say.to` and means every chat. The panel routes below take an optional `space` set to a Herdr workspace id. Omit it to edit the focused space.
 
-- `POST /api/agent/open` `{"target","panelId?","from?","direction?":"right"|"down","reuse?":false,"title?"}`. `reuse: true` updates a note, file, HTML, or browser panel already on that side instead of adding another one.
-- `POST /api/agent/update` `{"panelId","title?","panel?"}` when the new panel needs a field the command cannot set.
+- `POST /api/agent/open` `{"target","panelId?","from?","direction?":"right"|"down","reuse?":false,"title?","tab?"}`. `reuse: true` updates a note, file, HTML, or browser panel already on that side instead of adding another one. `tab` is a tab group, by id or name. The target opens as a new tab in that group and the reply adds `tabId`. Leave out `panelId`, `from`, and `id` when `tab` is set.
+- `POST /api/agent/update` `{"panelId","title?","panel?"}` when the new panel needs a field the command cannot set. Replacing a tab group's `panel` writes every tab. Use `POST /api/agent/tab` to change one tab.
+- `POST /api/agent/tab` `{"panelId","op":"list"|"rename"|"focus"|"open"|"close","tab?","title?","target?"}`. `list` needs no `tab`. `rename` needs `tab` and `title`. `focus` and `close` need `tab`. `open` needs `target` and takes `title`. `tab` is a tab id or a title that belongs to one tab. The reply for a change has `panelId`, `tabId`, and `workspace`. These edits read the current group and change that one tab.
 - `POST /api/agent/split` `{"panelId","direction":"right"|"down","title?","panel?","herdr?":true}`
 - `POST /api/agent/close` `{"panelId"}`
 - `POST /api/agent/resize` `{"panelId","ratio"}`

@@ -118,6 +118,7 @@ pub fn router() -> Router<AppState> {
         .route("/api/agent/close", post(close))
         .route("/api/agent/resize", post(resize))
         .route("/api/agent/update", post(update_panel))
+        .route("/api/agent/tab", post(edit_tab))
         .route("/api/agent/move", post(move_panel))
         .route("/api/agent/zoom", post(zoom))
         .route("/api/agent/visit", post(visit))
@@ -144,11 +145,12 @@ async fn index(State(state): State<AppState>) -> Json<Value> {
         "close": "POST /api/agent/close {panelId, space?}",
         "resize": "POST /api/agent/resize {panelId, ratio, space?}",
         "update": "POST /api/agent/update {panelId, title?, panel?, space?, control?}",
+        "tab": "POST /api/agent/tab {panelId, op: list|rename|focus|open|close, tab?, title?, target?, space?}",
         "move": "POST /api/agent/move {panelId, target, place?: swap|right|below, space?}",
         "zoom": "POST /api/agent/zoom {panelId?, space?}",
         "visit": "POST /api/agent/visit {panelId | panelIds, arrange?} -> {arrange, panels: [{panelId, title, spaceId, space}]}",
         "spaces": "GET /api/agent/spaces",
-        "open": "POST /api/agent/open {target, panelId?, id?, from?, direction?: right|down, reuse?: bool, title?, space?, control?}",
+        "open": "POST /api/agent/open {target, panelId?, id?, from?, direction?: right|down, reuse?: bool, title?, space?, control?, tab?}",
         "resolve": "POST /api/agent/resolve {target}",
         "read": "GET /api/agent/panels/{id}?selector=&text=&png= needs agent control",
         "write": "POST /api/agent/panels/{id}/write {text?, keys?} needs agent control",
@@ -392,6 +394,9 @@ struct OpenBody {
     /// Id for a new panel. `panelId` still names an existing panel to replace.
     #[serde(default)]
     id: Option<String>,
+    /// Tab group that receives the target as a new tab.
+    #[serde(default)]
+    tab: Option<String>,
 }
 
 fn open_direction() -> String {
@@ -419,6 +424,7 @@ async fn open_target(
             space: body.space,
             control: body.control,
             id: body.id,
+            tab: body.tab,
         },
     )
     .await
@@ -435,6 +441,7 @@ pub(crate) struct DeskOpen {
     pub space: Option<String>,
     pub control: Option<bool>,
     pub id: Option<String>,
+    pub tab: Option<String>,
 }
 
 pub(crate) async fn open_desk(
@@ -442,6 +449,35 @@ pub(crate) async fn open_desk(
     link: &SessionLink,
     body: DeskOpen,
 ) -> Result<Value, AgentError> {
+    let group = body
+        .tab
+        .as_deref()
+        .map(str::trim)
+        .filter(|group| !group.is_empty())
+        .map(str::to_string);
+    if let Some(group) = group {
+        if body
+            .panel_id
+            .as_deref()
+            .is_some_and(|id| !id.trim().is_empty())
+            || body.from.as_deref().is_some_and(|id| !id.trim().is_empty())
+            || body.id.as_deref().is_some_and(|id| !id.trim().is_empty())
+        {
+            return Err(AgentError::bad(
+                "tab opens inside a tab group; leave out panel, from, and id",
+            ));
+        }
+        return add_tab(
+            state,
+            link,
+            &group,
+            &body.target,
+            body.title,
+            named_space(body.space.as_deref()),
+            body.control,
+        )
+        .await;
+    }
     let direction = match body.direction.as_str() {
         "right" => Direction::Row,
         "down" => Direction::Column,
@@ -700,6 +736,197 @@ pub(crate) async fn update_desk(
         layout_ops::update_panel(doc.root, &panel_id, title, panel).map_err(AgentError::bad)?;
     let doc = commit(state, link, &source, doc).await?;
     Ok(workspace_json(state, &doc))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TabBody {
+    panel_id: String,
+    op: String,
+    #[serde(default)]
+    tab: Option<String>,
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    target: Option<String>,
+    #[serde(default)]
+    space: Option<String>,
+    #[serde(default)]
+    control: Option<bool>,
+}
+
+async fn edit_tab(
+    State(state): State<AppState>,
+    HerdrSession(link): HerdrSession,
+    Json(body): Json<TabBody>,
+) -> Result<Json<Value>, AgentError> {
+    let space = named_space(body.space.as_deref());
+    match body.op.as_str() {
+        "list" => list_one_tabs(&state, &link, &body.panel_id, space)
+            .await
+            .map(Json),
+        "rename" => {
+            let tab = required_tab(body.tab)?;
+            let title = body
+                .title
+                .filter(|title| !title.trim().is_empty())
+                .ok_or_else(|| AgentError::bad("title is required"))?;
+            let tab_key = tab.clone();
+            mutate_tab(
+                &state,
+                &link,
+                &body.panel_id,
+                &tab_key,
+                space,
+                |root, panel_id| layout_ops::rename_tab(root, panel_id, &tab, &title),
+            )
+            .await
+            .map(Json)
+        }
+        "focus" => {
+            let tab = required_tab(body.tab)?;
+            let tab_key = tab.clone();
+            mutate_tab(
+                &state,
+                &link,
+                &body.panel_id,
+                &tab_key,
+                space,
+                |root, panel_id| layout_ops::focus_tab(root, panel_id, &tab),
+            )
+            .await
+            .map(Json)
+        }
+        "close" => {
+            let tab = required_tab(body.tab)?;
+            let tab_key = tab.clone();
+            mutate_tab(
+                &state,
+                &link,
+                &body.panel_id,
+                &tab_key,
+                space,
+                |root, panel_id| layout_ops::close_tab(root, panel_id, &tab),
+            )
+            .await
+            .map(Json)
+        }
+        "open" => {
+            let target = body
+                .target
+                .filter(|target| !target.trim().is_empty())
+                .ok_or_else(|| AgentError::bad("target is required"))?;
+            add_tab(
+                &state,
+                &link,
+                &body.panel_id,
+                &target,
+                body.title,
+                space,
+                body.control,
+            )
+            .await
+            .map(Json)
+        }
+        _ => Err(AgentError::bad(
+            "op must be list, rename, focus, open, or close",
+        )),
+    }
+}
+
+fn required_tab(tab: Option<String>) -> Result<String, AgentError> {
+    tab.map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| AgentError::bad("tab is required"))
+}
+
+async fn list_one_tabs(
+    state: &AppState,
+    link: &SessionLink,
+    panel_id: &str,
+    space: Option<&str>,
+) -> Result<Value, AgentError> {
+    let (_, doc) = begin(state, link, space).await?;
+    let panel_id = resolve_key(state, &doc.root, panel_id)?;
+    let panel = list_panels(&doc.root)
+        .into_iter()
+        .find(|panel| panel.id == panel_id)
+        .ok_or_else(|| AgentError::missing("panel was not found"))?;
+    let tabs =
+        tab_entries(&panel.panel).ok_or_else(|| AgentError::bad("panel is not a tab group"))?;
+    Ok(json!({
+        "panelId": panel_id,
+        "tabs": tabs,
+    }))
+}
+
+async fn mutate_tab(
+    state: &AppState,
+    link: &SessionLink,
+    panel_key: &str,
+    tab: &str,
+    space: Option<&str>,
+    edit: impl FnOnce(LayoutNode, &str) -> Result<LayoutNode, &'static str>,
+) -> Result<Value, AgentError> {
+    let (source, mut doc) = begin(state, link, space).await?;
+    let panel_id = resolve_key(state, &doc.root, panel_key)?;
+    ensure_unlocked(state, link, &source, &doc.root, &panel_id)?;
+    let tab_id = layout_ops::tab_id(&doc.root, &panel_id, tab).map_err(tab_error)?;
+    doc.root = edit(doc.root, &panel_id).map_err(tab_error)?;
+    let doc = commit(state, link, &source, doc).await?;
+    Ok(json!({
+        "panelId": panel_id,
+        "tabId": tab_id,
+        "workspace": workspace_json(state, &doc),
+    }))
+}
+
+async fn add_tab(
+    state: &AppState,
+    link: &SessionLink,
+    group: &str,
+    target: &str,
+    title: Option<String>,
+    space: Option<&str>,
+    control: Option<bool>,
+) -> Result<Value, AgentError> {
+    let roots = crate::server::allowed_roots(state, link).await;
+    let located = locate_target(target, &roots);
+    let kind = crate::open_target::classify_target(&located, |path| file_kind(path))
+        .map_err(AgentError::bad)?;
+    let panel = finish_plugin_control(state, kind_to_panel(&kind), control, true)?;
+    forbid_browser_panel(state, link, &panel)?;
+    let title = title
+        .map(|value| value.trim().chars().take(80).collect::<String>())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| {
+            crate::open_target::open_title(&kind)
+                .chars()
+                .take(80)
+                .collect()
+        });
+    let (source, mut doc) = begin(state, link, space).await?;
+    let panel_id = resolve_key(state, &doc.root, group)?;
+    ensure_unlocked(state, link, &source, &doc.root, &panel_id)?;
+    let (root, tab_id) =
+        layout_ops::open_tab(doc.root, &panel_id, panel, &title).map_err(tab_error)?;
+    doc.root = root;
+    let doc = commit(state, link, &source, doc).await?;
+    Ok(json!({
+        "panelId": panel_id,
+        "tabId": tab_id,
+        "title": title,
+        "created": true,
+        "workspace": workspace_json(state, &doc),
+    }))
+}
+
+fn tab_error(err: &'static str) -> AgentError {
+    if err == "panel was not found" || err == "tab was not found" {
+        AgentError::missing(err)
+    } else {
+        AgentError::bad(err)
+    }
 }
 
 #[derive(Deserialize)]
@@ -1910,6 +2137,9 @@ fn panel_rows(state: &AppState, root: &LayoutNode) -> Vec<Value> {
             if let Some(role) = herdr_role(&panel.panel) {
                 row["role"] = json!(role);
             }
+            if let Some(tabs) = tab_entries(&panel.panel) {
+                row["tabs"] = json!(tabs);
+            }
             row
         })
         .collect()
@@ -2226,6 +2456,40 @@ fn herdr_role(panel: &PanelConfig) -> Option<&'static str> {
         } => Some("terminal"),
         PanelConfig::Herdr { .. } => Some("panes"),
         _ => None,
+    }
+}
+
+fn tab_entries(panel: &PanelConfig) -> Option<Vec<Value>> {
+    let PanelConfig::Tabs { tabs, active, .. } = panel else {
+        return None;
+    };
+    let shown = tabs
+        .iter()
+        .find(|tab| tab.id == *active)
+        .or_else(|| tabs.first())
+        .map(|tab| tab.id.as_str())
+        .unwrap_or("");
+    Some(
+        tabs.iter()
+            .map(|tab| {
+                json!({
+                    "id": tab.id,
+                    "title": tab.title,
+                    "type": panel_type(&tab.panel),
+                    "url": panel_url(&tab.panel),
+                    "summary": panel_summary(&tab.panel),
+                    "active": tab.id == shown,
+                })
+            })
+            .collect(),
+    )
+}
+
+fn panel_url(panel: &PanelConfig) -> String {
+    match panel {
+        PanelConfig::Iframe { url, .. } => url.clone(),
+        PanelConfig::Plugin { url: Some(url), .. } => url.clone(),
+        _ => String::new(),
     }
 }
 

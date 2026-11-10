@@ -174,6 +174,9 @@ enum PanelCommand {
         /// Id for the new panel. Omit to use the next panel-N in this space
         #[arg(long)]
         id: Option<String>,
+        /// Add the target as a tab in this tab group instead of a new panel
+        #[arg(long)]
+        tab: Option<String>,
     },
     /// Read a panel's text. Add --png to save a screenshot. Needs Agent control
     Read {
@@ -212,6 +215,56 @@ enum PanelCommand {
         key: Option<String>,
         #[arg(long)]
         url: Option<String>,
+    },
+    /// List, rename, focus, open, or close one tab in a tab group
+    Tab {
+        #[command(subcommand)]
+        command: TabCommand,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum TabCommand {
+    /// List tabs. Omit the panel to list every tab group
+    List {
+        /// Tab group, by name or id
+        panel: Option<String>,
+    },
+    /// Rename one tab
+    Rename {
+        /// Tab group, by name or id
+        panel: String,
+        /// Tab id or title
+        tab: String,
+        /// New title
+        #[arg(allow_hyphen_values = true)]
+        title: String,
+    },
+    /// Show one tab
+    Focus {
+        /// Tab group, by name or id
+        panel: String,
+        /// Tab id or title
+        tab: String,
+    },
+    /// Open a file, directory, or http URL as a new tab
+    Open {
+        /// Tab group, by name or id
+        panel: String,
+        /// File path, directory, or http(s) URL
+        target: String,
+        #[arg(long)]
+        title: Option<String>,
+        /// Turn on control when the target is a plugin
+        #[arg(long)]
+        control: bool,
+    },
+    /// Close one tab. The last tab stays open
+    Close {
+        /// Tab group, by name or id
+        panel: String,
+        /// Tab id or title
+        tab: String,
     },
 }
 
@@ -395,6 +448,45 @@ fn panel_line(panel: &Value) -> String {
     )
 }
 
+fn tab_active(tab: &Value) -> &'static str {
+    if tab.get("active").and_then(Value::as_bool) == Some(true) {
+        "active"
+    } else {
+        ""
+    }
+}
+
+/// A tab line leaves the panel id empty so it stays under the panel row above it.
+fn print_panel_tabs(panel: &Value, prefix: &str) {
+    let Some(tabs) = panel.get("tabs").and_then(Value::as_array) else {
+        return;
+    };
+    for tab in tabs {
+        println!(
+            "{prefix}\t{}\t{}\t{}\t{}\t{}\t{}",
+            panel_field(tab, "id"),
+            panel_field(tab, "title"),
+            panel_field(tab, "type"),
+            panel_field(tab, "url"),
+            panel_field(tab, "summary"),
+            tab_active(tab)
+        );
+    }
+}
+
+fn print_tab_record(panel_id: &str, tab: &Value) {
+    println!(
+        "{}\t{}\t{}\t{}\t{}\t{}\t{}",
+        panel_id,
+        panel_field(tab, "id"),
+        panel_field(tab, "title"),
+        panel_field(tab, "type"),
+        panel_field(tab, "url"),
+        panel_field(tab, "summary"),
+        tab_active(tab)
+    );
+}
+
 async fn panel_command(
     base: &str,
     token: &str,
@@ -413,6 +505,7 @@ async fn panel_command(
                 .flatten()
             {
                 println!("{}", panel_line(panel));
+                print_panel_tabs(panel, "");
             }
             Ok(())
         }
@@ -559,6 +652,7 @@ async fn panel_command(
                         .flatten()
                     {
                         println!("{mark}\t{space_id}\t{label}\t{}", panel_line(panel));
+                        print_panel_tabs(panel, &format!("{mark}\t{space_id}\t{label}"));
                     }
                 }
                 return Ok(());
@@ -591,9 +685,15 @@ async fn panel_command(
             title,
             control,
             id,
+            tab,
         } => {
             if control && !target.trim().starts_with("plugin:") {
                 anyhow::bail!("--control is only for a plugin panel");
+            }
+            if tab.is_some() && (panel.is_some() || from.is_some() || id.is_some()) {
+                anyhow::bail!(
+                    "--tab opens a tab in that panel; leave out --panel, --from, and --id"
+                );
             }
             let mut body = json!({
                 "target": cli_open_target(&std::env::current_dir().context("reading the working directory")?, &target),
@@ -610,6 +710,9 @@ async fn panel_command(
             }
             if let Some(id) = id {
                 body["id"] = json!(id);
+            }
+            if let Some(tab) = tab {
+                body["tab"] = json!(tab);
             }
             attach_space(&mut body, space);
             attach_control(&mut body, control);
@@ -680,6 +783,129 @@ async fn panel_command(
                     "key": key,
                     "url": url,
                 })),
+            )
+            .await?;
+            println!("{response}");
+            Ok(())
+        }
+        PanelCommand::Tab { command } => tab_command(base, token, space, command).await,
+    }
+}
+
+async fn tab_command(
+    base: &str,
+    token: &str,
+    space: Option<String>,
+    command: TabCommand,
+) -> anyhow::Result<()> {
+    match command {
+        TabCommand::List { panel } => {
+            if let Some(panel) = panel {
+                let response = call(
+                    base,
+                    token,
+                    "POST",
+                    "/api/agent/tab",
+                    Some(with_space(json!({ "panelId": panel, "op": "list" }), space)),
+                )
+                .await?;
+                let value: Value = serde_json::from_str(&response)?;
+                let panel_id = value.get("panelId").and_then(Value::as_str).unwrap_or("");
+                for tab in value
+                    .get("tabs")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                {
+                    print_tab_record(panel_id, tab);
+                }
+                return Ok(());
+            }
+            let path = format!("/api/agent/workspace{}", space_query(space));
+            let body = call(base, token, "GET", &path, None).await?;
+            let value: Value = serde_json::from_str(&body)?;
+            for panel in value
+                .get("panels")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+            {
+                let panel_id = panel_field(panel, "id");
+                let Some(tabs) = panel.get("tabs").and_then(Value::as_array) else {
+                    continue;
+                };
+                for tab in tabs {
+                    print_tab_record(&panel_id, tab);
+                }
+            }
+            Ok(())
+        }
+        TabCommand::Rename { panel, tab, title } => {
+            let response = call(
+                base,
+                token,
+                "POST",
+                "/api/agent/tab",
+                Some(with_space(
+                    json!({ "panelId": panel, "op": "rename", "tab": tab, "title": title }),
+                    space,
+                )),
+            )
+            .await?;
+            println!("{response}");
+            Ok(())
+        }
+        TabCommand::Focus { panel, tab } => {
+            let response = call(
+                base,
+                token,
+                "POST",
+                "/api/agent/tab",
+                Some(with_space(
+                    json!({ "panelId": panel, "op": "focus", "tab": tab }),
+                    space,
+                )),
+            )
+            .await?;
+            println!("{response}");
+            Ok(())
+        }
+        TabCommand::Open {
+            panel,
+            target,
+            title,
+            control,
+        } => {
+            if control && !target.trim().starts_with("plugin:") {
+                anyhow::bail!("--control is only for a plugin panel");
+            }
+            let mut body = json!({
+                "panelId": panel,
+                "op": "open",
+                "target": cli_open_target(
+                    &std::env::current_dir().context("reading the working directory")?,
+                    &target,
+                ),
+            });
+            if let Some(title) = title {
+                body["title"] = json!(title);
+            }
+            attach_space(&mut body, space);
+            attach_control(&mut body, control);
+            let response = call(base, token, "POST", "/api/agent/tab", Some(body)).await?;
+            println!("{response}");
+            Ok(())
+        }
+        TabCommand::Close { panel, tab } => {
+            let response = call(
+                base,
+                token,
+                "POST",
+                "/api/agent/tab",
+                Some(with_space(
+                    json!({ "panelId": panel, "op": "close", "tab": tab }),
+                    space,
+                )),
             )
             .await?;
             println!("{response}");

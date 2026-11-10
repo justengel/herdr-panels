@@ -241,6 +241,7 @@ POST /api/agent/split     {"panelId","direction":"right"|"down","title?","panel?
 POST /api/agent/close     {"panelId"}
 POST /api/agent/resize    {"panelId","ratio"}
 POST /api/agent/update    {"panelId","title?","panel?"}
+POST /api/agent/tab       {"panelId","op":"list"|"rename"|"focus"|"open"|"close","tab?","title?","target?"}
 POST /api/agent/move      {"panelId","target","place":"swap"|"right"|"below"}
 POST /api/agent/zoom      {"panelId":null}
 POST /api/agent/visit     {"panelId"} or {"panelIds","arrange?","sizes?","columns?","rows?"}
@@ -254,7 +255,7 @@ GET  /api/agent-access
 POST /api/agent-access    {"enabled":false}
 ```
 
-`panelId`, `{id}`, and `say.to` accept a panel id or its unique name, compared without case. `*` still means every chat. `visit` shows one panel, or several, from any space over the one that is open. `panelIds` lists them. Two sit side by side. Three or more use a grid. `arrange` is `row`, `column`, or `grid`. `sizes` is one positive weight per panel for a row or a column, so `2,1` makes the first panel twice the second. A grid uses `columns` and `rows`, one weight per track. The same call again resizes the visit already on screen and leaves what those panels are showing. When `columns` and `rows` are omitted, the grid grows with the panel count. The square button on a panel returns to the desk. During a visit the corner is an underscore, which stops visiting that panel and does not close it. On a visit of one panel it returns to the desk, the same as the square. On a visit of several panels it removes that panel, and the others in the row or column fill the space. A visit of several panels keeps one Back, and Escape leaves the visit when the desk has the keyboard. The reply has `arrange` and `panels`, and a single panel also keeps `panelId`, `title`, `spaceId`, and `space` at the top. A name that is not on any space is `panel was not found`, and the error names that panel when the visit lists more than one. Two different panels with the same name are refused. A repeated panel is refused. One failure opens nothing. `spaces` lists every saved space, which is how to find a title that `workspace` does not show. `workspace` stays the focused space. `viewer` is true when a page is connected. The overlay appears in that page. A page built before the visit ignores the message. [The skill](skills/herdr-panels/SKILL.md) is the procedure an agent should follow for these calls.
+`panelId`, `{id}`, and `say.to` accept a panel id or its unique name, compared without case. `*` still means every chat. `visit` shows one panel, or several, from any space over the one that is open. `panelIds` lists them. Two sit side by side. Three or more use a grid. `arrange` is `row`, `column`, or `grid`. `sizes` is one positive weight per panel for a row or a column, so `2,1` makes the first panel twice the second. A grid uses `columns` and `rows`, one weight per track. The same call again resizes the visit already on screen and leaves what those panels are showing. When `columns` and `rows` are omitted, the grid grows with the panel count. The square button on a panel returns to the desk. During a visit the corner is an underscore, which stops visiting that panel and does not close it. On a visit of one panel it returns to the desk, the same as the square. On a visit of several panels it removes that panel, and the others in the row or column fill the space. A visit of several panels keeps one Back, and Escape leaves the visit when the desk has the keyboard. The reply has `arrange` and `panels`, and a single panel also keeps `panelId`, `title`, `spaceId`, and `space` at the top. A name that is not on any space is `panel was not found`, and the error names that panel when the visit lists more than one. Two different panels with the same name are refused. A repeated panel is refused. One failure opens nothing. `spaces` lists every saved space, which is how to find a title that `workspace` does not show. `workspace` stays the focused space. A tab group in that list includes `tabs`, each with `id`, `title`, `type`, `url`, `summary`, and `active`. `POST /api/agent/tab` changes one of those tabs and leaves the others as they are. `open` with `tab` adds a page to a group that is already open. `viewer` is true when a page is connected. The overlay appears in that page. A page built before the visit ignores the message. [The skill](skills/herdr-panels/SKILL.md) is the procedure an agent should follow for these calls.
 
 `ratio` is that panel's share of the nearest divider, from 0.12 to 0.88. `herdr: true` also calls Herdr `pane.split` and binds the new terminal. `move` swaps two panels or places one to the right of or below the other. `say` appends to a chat panel; `to` is a panel id, a unique panel name, or `*` for every chat. A chat linked to a pane also types the message into that pane. `write` types into a terminal panel. `select` outlines the match in the open page. Browser HTML that is loopback or served from `/content` can be fetched directly; a same-origin frame, or a custom HTML panel, also returns the live elements and computed style. The proxy still refuses anything that is not loopback.
 
@@ -327,6 +328,12 @@ herdr-panels panel visit google Notes Agents Files
 herdr-panels panel visit google Notes --arrange column
 herdr-panels panel visit google Notes --size 2,1
 herdr-panels panel visit google Notes Agents Files --columns 2,1 --rows 1,2
+herdr-panels panel tab list Tabs
+herdr-panels panel tab rename Tabs tab-2 "pin #64066"
+herdr-panels panel tab focus Tabs tab-2
+herdr-panels panel tab open Tabs https://example.com --title Example
+herdr-panels panel tab close Tabs tab-2
+herdr-panels panel open https://example.com --tab Tabs
 herdr-panels plugin list
 herdr-panels plugin install --example
 herdr-panels plugin install <directory>

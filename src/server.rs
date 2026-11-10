@@ -1720,6 +1720,7 @@ async fn plugin_bridge(
                     space: None,
                     control: None,
                     id: param_opt(&body.params, "id"),
+                    tab: None,
                 },
             )
             .await
