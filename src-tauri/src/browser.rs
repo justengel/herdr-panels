@@ -17,6 +17,10 @@ pub const VIEWER: &str = "http://127.0.0.1:4737";
 
 struct Slot {
     url: String,
+    /// The last address the desk sent for this webview.
+    asked: String,
+    /// The last http(s) navigation this webview was allowed to start.
+    opened: String,
     view: Webview,
     generation: u64,
     shown: bool,
@@ -32,6 +36,29 @@ struct Slot {
 /// `0` is an unsequenced place and always applies. A smaller number is stale.
 fn place_is_current(applied: u64, next: u64) -> bool {
     next == 0 || next >= applied
+}
+
+/// A place repeats the address on every move. Navigate for a reload or a new address.
+/// Once the page has moved on, a place that still carries the previous address must not pull it back.
+fn desk_should_navigate(current: &str, asked: &str, target: &str, reload: bool) -> bool {
+    reload || (current != target && asked != target)
+}
+
+/// A finished load replaces the recorded address when it is the navigation we allowed
+/// and the desk does not already show it.
+fn landed_address(current: &str, opened: &str, landed: &str) -> Option<String> {
+    if opened.is_empty() || landed != opened || current == landed {
+        return None;
+    }
+    Some(landed.to_string())
+}
+
+fn browser_page_script(label: &str, url: &str) -> String {
+    let label = serde_json::to_string(label).unwrap_or_else(|_| "\"\"".into());
+    let url = serde_json::to_string(url).unwrap_or_else(|_| "\"\"".into());
+    format!(
+        "window.dispatchEvent(new CustomEvent('herdr-browser-page',{{detail:{{label:{label},url:{url}}}}}))"
+    )
 }
 
 #[derive(Clone, Copy, serde::Deserialize)]
@@ -763,6 +790,49 @@ fn clip_platform_webview(platform: &tauri::webview::PlatformWebview, page: CssBo
     let _ = (platform, page, cuts);
 }
 
+fn remember_opened(app: &AppHandle, label: &str, url: &str) {
+    let Some(host) = app.try_state::<BrowserHost>() else {
+        return;
+    };
+    let Ok(mut slots) = host.slots.try_lock() else {
+        return;
+    };
+    if let Some(slot) = slots.get_mut(label) {
+        slot.opened = url.to_string();
+    }
+}
+
+fn tell_desk(app: &AppHandle, script: String) {
+    let app = app.clone();
+    let _ = app.clone().run_on_main_thread(move || {
+        if let Some(main) = app.get_webview("main") {
+            let _ = main.eval(&script);
+        }
+    });
+}
+
+/// A finished main-frame load can arrive while a place still holds the slot lock.
+/// Waiting on another thread keeps that place from deadlocking on its own navigation.
+fn report_finished_page(app: AppHandle, label: String, landed: Url) {
+    std::thread::spawn(move || {
+        let Some(host) = app.try_state::<BrowserHost>() else {
+            return;
+        };
+        let Ok(mut slots) = host.slots.lock() else {
+            return;
+        };
+        let Some(slot) = slots.get_mut(&label) else {
+            return;
+        };
+        let Some(next) = landed_address(&slot.url, &slot.opened, landed.as_str()) else {
+            return;
+        };
+        slot.url = next.clone();
+        drop(slots);
+        tell_desk(&app, browser_page_script(&label, &next));
+    });
+}
+
 #[tauri::command]
 async fn place_browser(
     app: AppHandle,
@@ -801,7 +871,11 @@ async fn place_browser(
         }
         // A reload, or a page that never landed, has to navigate again. Moving the
         // window is not enough: the address-bar reload used to leave a blank webview.
-        if slot.url != target || reload {
+        // A link that already left this address must not be sent back by a later place.
+        let navigate_now = desk_should_navigate(&slot.url, &slot.asked, &target, reload);
+        slot.asked = target.clone();
+        if navigate_now {
+            slot.opened = target.clone();
             slot.view.navigate(parsed).map_err(|err| err.to_string())?;
             slot.url = target;
         }
@@ -829,6 +903,8 @@ async fn place_browser(
     #[cfg(target_os = "linux")]
     let boot = format!("{boot}\n{ZOOM_BOOT}");
     let opener = app.clone();
+    let navigation_app = app.clone();
+    let navigation_label = label.clone();
     let panel_id = Arc::new(Mutex::new(
         panel_id_from_browser(&label).unwrap_or("").to_string(),
     ));
@@ -840,8 +916,12 @@ async fn place_browser(
                 .lock()
                 .map(|id| id.clone())
                 .unwrap_or_default();
-            browser_panel_link(url.as_str()) == LinkNavigation::Stay
-                && navigation_permitted(&id, url.as_str())
+            let allowed = browser_panel_link(url.as_str()) == LinkNavigation::Stay
+                && navigation_permitted(&id, url.as_str());
+            if allowed {
+                remember_opened(&navigation_app, &navigation_label, url.as_str());
+            }
+            allowed
         })
         .on_new_window(move |url, _features| {
             respond_to_new_window(&opener, &url);
@@ -860,19 +940,26 @@ async fn place_browser(
                 answer_snap(&view, &title);
             }
         })
-        .on_page_load(|webview, payload| {
-            if payload.event() != PageLoadEvent::Finished {
-                return;
+        .on_page_load({
+            let page_app = app.clone();
+            move |webview, payload| {
+                if payload.event() != PageLoadEvent::Finished {
+                    return;
+                }
+                let host = webview.state::<BrowserHost>();
+                let scale = panel_content_zoom(&host, webview.label());
+                if let Err(err) = webview.eval(browser_page_zoom(scale)) {
+                    eprintln!("browser zoom: {err}");
+                }
+                let landed = payload.url();
+                if landed.scheme() == "http" || landed.scheme() == "https" {
+                    report_finished_page(page_app.clone(), webview.label().to_string(), landed.clone());
+                }
+                if !host.selecting.load(Ordering::Relaxed) {
+                    return;
+                }
+                let _ = webview.eval(select_on());
             }
-            let host = webview.state::<BrowserHost>();
-            let scale = panel_content_zoom(&host, webview.label());
-            if let Err(err) = webview.eval(browser_page_zoom(scale)) {
-                eprintln!("browser zoom: {err}");
-            }
-            if !host.selecting.load(Ordering::Relaxed) {
-                return;
-            }
-            let _ = webview.eval(select_on());
         });
     let view = window
         .add_child(
@@ -914,7 +1001,9 @@ async fn place_browser(
     guard.insert(
         label,
         Slot {
-            url: target,
+            url: target.clone(),
+            asked: target.clone(),
+            opened: target,
             view,
             generation,
             shown: true,
@@ -2313,6 +2402,35 @@ mod tests {
         assert_eq!(zoom_chord_vk(0x30, true, false, false), Some("reset"));
         assert_eq!(zoom_chord_vk(0x30, true, true, false), None);
         assert_eq!(zoom_chord_vk(0x41, true, false, false), None);
+    }
+
+    #[test]
+    fn a_finished_page_replaces_the_address_the_desk_opened() {
+        assert_eq!(
+            landed_address("https://example.com/a", "https://example.com/b", "https://example.com/b").as_deref(),
+            Some("https://example.com/b")
+        );
+        assert_eq!(landed_address("https://example.com/a", "https://example.com/a", "https://example.com/a"), None);
+        assert_eq!(landed_address("https://example.com/b", "https://example.com/a", "https://example.com/b"), None);
+        assert_eq!(landed_address("https://example.com/a", "https://example.com/b", "https://example.com/c"), None);
+        assert_eq!(landed_address("https://example.com/a", "", "https://example.com/a"), None);
+    }
+
+    #[test]
+    fn a_later_place_does_not_pull_back_a_page_that_navigated() {
+        assert!(!desk_should_navigate("https://example.com/b", "https://example.com/a", "https://example.com/a", false));
+        assert!(!desk_should_navigate("https://example.com/b", "https://example.com/a", "https://example.com/b", false));
+        assert!(desk_should_navigate("https://example.com/b", "https://example.com/b", "https://example.com/c", false));
+        assert!(desk_should_navigate("https://example.com/b", "https://example.com/a", "https://example.com/a", true));
+        assert!(!desk_should_navigate("https://example.com/a", "https://example.com/a", "https://example.com/a", false));
+    }
+
+    #[test]
+    fn a_landed_page_is_told_to_the_desk_as_that_panel() {
+        let script = browser_page_script("browser-panel-1:tab-2", "https://example.com/a?q=1");
+        assert!(script.contains("herdr-browser-page"));
+        assert!(script.contains("\"browser-panel-1:tab-2\""));
+        assert!(script.contains("\"https://example.com/a?q=1\""));
     }
 
     #[test]

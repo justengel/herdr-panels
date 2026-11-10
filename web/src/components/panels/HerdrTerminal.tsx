@@ -194,7 +194,8 @@ export function HerdrTerminal({ paneId, source, lines, home, onGone }: Props) {
       cursorStyle: "block",
       fontFamily: '"Cascadia Mono", "Cascadia Code", Consolas, ui-monospace, monospace',
       fontSize: fontFor(),
-      lineHeight: 1,
+      // The DOM renderer clips a glyph that sits on the bottom of the font box, including "_".
+      lineHeight: 1.2,
       scrollback: 0,
       theme: {
         background: "#101318",

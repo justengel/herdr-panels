@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { AgentView, Attachment, GridNode, LayoutNode, PaneView, PanelConfig, TabEdge, TabsPanel, WorkspaceView } from "../types";
 import { api } from "../api";
 import { baseName, samePath } from "../paths";
@@ -735,6 +735,19 @@ function DocumentSurface({
   const address = panel.type === "plugin" && override !== null ? override : addressOf(panel);
   const modify = panel.type === "plugin" && bar.modify;
   const liveCommand = command && command.pluginId === pluginId ? command : null;
+
+  useEffect(() => {
+    if (panel.type !== "iframe") return;
+    const label = `browser-${id}`;
+    const page = panel;
+    const onPage = (event: Event) => {
+      const detail = (event as CustomEvent<{ label?: string; url?: string }>).detail;
+      if (!detail || detail.label !== label || typeof detail.url !== "string" || detail.url === page.url) return;
+      onPanel(id, { ...page, url: detail.url });
+    };
+    window.addEventListener("herdr-browser-page", onPage);
+    return () => window.removeEventListener("herdr-browser-page", onPage);
+  }, [id, panel, onPanel]);
 
   function enter(next: string) {
     void api.resolve(next).then(
