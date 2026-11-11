@@ -207,6 +207,7 @@ pub fn close_tab(node: LayoutNode, panel_id: &str, tab: &str) -> Result<LayoutNo
             active,
             show_names,
             show_icons,
+            vertical_names,
             tabs,
         } = std::mem::replace(&mut slot.panel, PanelConfig::Blank)
         else {
@@ -220,6 +221,7 @@ pub fn close_tab(node: LayoutNode, panel_id: &str, tab: &str) -> Result<LayoutNo
                     active,
                     show_names,
                     show_icons,
+                    vertical_names,
                     tabs,
                 };
                 return Err(err);
@@ -231,6 +233,7 @@ pub fn close_tab(node: LayoutNode, panel_id: &str, tab: &str) -> Result<LayoutNo
                 active,
                 show_names,
                 show_icons,
+                vertical_names,
                 tabs,
             };
             return Err("at least one tab stays open");
@@ -262,6 +265,7 @@ pub fn close_tab(node: LayoutNode, panel_id: &str, tab: &str) -> Result<LayoutNo
             active,
             show_names,
             show_icons,
+            vertical_names,
             tabs,
         };
         Ok(())
@@ -283,6 +287,7 @@ struct TabGroup {
     active: String,
     show_names: bool,
     show_icons: bool,
+    vertical_names: bool,
     tabs: Vec<PanelTab>,
 }
 
@@ -352,6 +357,7 @@ where
             active,
             show_names,
             show_icons,
+            vertical_names,
             tabs,
         } = std::mem::replace(&mut slot.panel, PanelConfig::Blank)
         else {
@@ -362,6 +368,7 @@ where
             active,
             show_names,
             show_icons,
+            vertical_names,
             tabs,
         };
         if let Err(err) = edit(&mut group) {
@@ -370,6 +377,7 @@ where
                 active: group.active,
                 show_names: group.show_names,
                 show_icons: group.show_icons,
+                vertical_names: group.vertical_names,
                 tabs: group.tabs,
             };
             return Err(err);
@@ -379,6 +387,7 @@ where
             active: group.active,
             show_names: group.show_names,
             show_icons: group.show_icons,
+            vertical_names: group.vertical_names,
             tabs: group.tabs,
         };
         Ok(())

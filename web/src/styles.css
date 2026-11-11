@@ -552,6 +552,35 @@ button.status:hover:not(:disabled) {
   width: 36px;
   flex-basis: 36px;
 }
+/* Side tabs with names turned down the bar stay as wide as one line of text. */
+.panel.edge-left > .panel-header.is-vertical-names,
+.panel.edge-right > .panel-header.is-vertical-names {
+  width: 42px;
+  flex: 0 0 42px;
+  align-items: center;
+  padding: 4px 2px;
+}
+.panel-header.is-vertical-names .tab-strip.vertical .tab {
+  flex-direction: column;
+  justify-content: flex-start;
+  height: auto;
+  max-height: 10rem;
+  padding: 6px 2px;
+  gap: 4px;
+}
+.panel.edge-left > .panel-header.is-vertical-names .tab-label {
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+}
+.panel.edge-right > .panel-header.is-vertical-names .tab-label {
+  writing-mode: vertical-lr;
+}
+.panel-header.is-vertical-names .tab-label {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: 8rem;
+  max-width: 100%;
+}
 .panel.edge-bottom > .panel-header { border-bottom: 0; border-top: 1px solid var(--line); }
 .panel.edge-left .panel-actions,
 .panel.edge-right .panel-actions {

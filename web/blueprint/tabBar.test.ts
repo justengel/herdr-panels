@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { addPanelTab, assignContent, closePanelTab, findPanel, groupOnBar, moveTab, normalizeLayout, openTab } from "../src/layoutEdit";
 import { dropPlace } from "../src/panelDrop";
-import { chevronTurn, collapseBasis, iconRail, railBasis, showTabClose, splitPaneFlex, tabFace, tabNumber } from "../src/tabFace";
+import { chevronTurn, collapseBasis, iconRail, namesRunDown, railBasis, showTabClose, splitPaneFlex, tabFace, tabNumber } from "../src/tabFace";
 import { TAB_ICONS } from "../src/tabIcons";
 import { showViewer } from "../src/viewMenu";
 import type { LayoutNode } from "../src/types";
@@ -187,6 +187,34 @@ describe("what a tab shows", () => {
     expect(tabFace({ id: "tab-4", title: "Notes", icon: "note" }).label).toBe("Notes");
   });
 
+  it("names an unnamed tab after the panel it shows", () => {
+    const files = {
+      id: "tab-4",
+      title: "",
+      panel: { type: "explorer" as const, path: "" },
+    };
+    expect(tabFace(files).label).toBe("Files");
+    expect(tabFace({ ...files, panel: { type: "explorer", path: "C:\\work\\pkg" } }).label).toBe("pkg");
+    expect(tabFace({ ...files, title: "Project" }).label).toBe("Project");
+    expect(
+      tabFace({ ...files, panel: { type: "iframe", url: "https://example.com/docs", proxy: false } }).label,
+    ).toBe("example.com");
+    expect(
+      tabFace({ ...files, panel: { type: "herdr", paneId: "w1:p1", scope: "pane" } }).label,
+    ).toBe("Terminal");
+    expect(
+      tabFace(
+        { ...files, id: "tab-2", panel: { type: "plugin", plugin: "checkin-report" } },
+        true,
+        true,
+        "Check-in report",
+      ).label,
+    ).toBe("Check-in report");
+    expect(tabFace(files, false, false).label).toBe("4");
+    expect(iconRail("left", [files])).toBe(false);
+    expect(iconRail("left", [files], false, false)).toBe(true);
+  });
+
   it("is a rail only on the side when every tab is an icon", () => {
     const icons = [
       { title: "", icon: "chat" },
@@ -260,7 +288,7 @@ describe("what a tab shows", () => {
         tabs: [{ id: "a", title: "", icon: "chat", panel: { type: "chat", paneId: null } }],
       },
     };
-    expect(collapseBasis(rail, "row")).toBe(42);
+    expect(collapseBasis(rail, "row")).toBe(168);
     const named: LayoutNode = {
       type: "panel",
       id: "p",
@@ -273,6 +301,24 @@ describe("what a tab shows", () => {
       },
     };
     expect(collapseBasis(named, "row")).toBe(168);
+    const upright: LayoutNode = {
+      type: "panel",
+      id: "p",
+      collapsed: true,
+      panel: {
+        type: "tabs",
+        edge: "left",
+        active: "a",
+        verticalNames: true,
+        tabs: [{ id: "a", title: "Chat", icon: "chat", panel: { type: "chat", paneId: null } }],
+      },
+    };
+    expect(namesRunDown("left", true)).toBe(true);
+    expect(namesRunDown("right", true)).toBe(true);
+    expect(namesRunDown("top", true)).toBe(false);
+    expect(namesRunDown("left", true, false)).toBe(false);
+    expect(namesRunDown("left")).toBe(false);
+    expect(collapseBasis(upright, "row")).toBe(42);
     const hiddenNames: LayoutNode = {
       type: "panel",
       id: "p",
@@ -318,7 +364,8 @@ describe("names and icons survive saving", () => {
     expect(panel?.panel.type).toBe("tabs");
     if (panel?.panel.type !== "tabs") return;
     expect(panel.panel.tabs[0].title).toBe("");
-    expect(tabFace(panel.panel.tabs[0]).label).toBe("1");
+    expect(tabFace(panel.panel.tabs[0]).label).toBe("Panel");
+    expect(tabFace(panel.panel.tabs[0], false, false).label).toBe("1");
     expect(panel.panel.tabs[1].title).toBe("");
   });
 

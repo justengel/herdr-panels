@@ -1,7 +1,8 @@
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import type { PanelConfig, TabEdge, TabsPanel } from "../types";
-import { chevronTurn, iconRail, railBasis, tabFace } from "../tabFace";
+import { isDefaultPanelTitle } from "../openTitle";
+import { chevronTurn, iconRail, namesRunDown, railBasis, tabFace, tabName, tabPluginTitle } from "../tabFace";
 import { IconField } from "./IconField";
 import { TabMark } from "./TabMark";
 import { TabStrip } from "./TabStrip";
@@ -113,6 +114,15 @@ export function BarFaceItems({
         Show names
       </button>
     </>
+  );
+}
+
+export function VerticalNamesItem({ checked, onToggle }: { checked: boolean; onToggle: () => void }) {
+  return (
+    <button type="button" role="menuitemcheckbox" className="menu-radio" aria-checked={checked} onClick={onToggle}>
+      <span className="menu-check">{checked ? "✓" : ""}</span>
+      Vertical names
+    </button>
   );
 }
 
@@ -363,6 +373,7 @@ export function PanelChrome({
   const showNames = tabs ? tabs.showNames !== false : barNames;
   const showIcons = tabs ? tabs.showIcons !== false : barIcons;
   const sideBar = edge === "left" || edge === "right";
+  const verticalNames = Boolean(tabs && namesRunDown(edge, tabs.verticalNames, showNames));
   const rail = tabs
     ? iconRail(edge, tabs.tabs, showNames, showIcons)
     : sideBar && !(showNames && Boolean(title.trim()));
@@ -517,7 +528,9 @@ export function PanelChrome({
   }
 
   const activeTab = tabs?.tabs.find((tab) => tab.id === tabs.active) ?? tabs?.tabs[0];
-  const closeName = activeTab ? tabFace(activeTab, showNames, showIcons).label || activeTab.id : title;
+  const closeName = activeTab
+    ? tabFace(activeTab, showNames, showIcons, tabPluginTitle(activeTab.panel, desk.plugins)).label || activeTab.id
+    : title;
   const barTools = (
     <>
       <LockButton kind={panelType} locked={locked} onToggle={toggleLock} />
@@ -584,7 +597,7 @@ export function PanelChrome({
         </div>
       ) : (
         <header
-          className={["panel-header", rail ? "is-rail" : "", digitRail ? "is-digits" : "", sideBar && !tabs ? "is-spine" : ""].filter(Boolean).join(" ")}
+          className={["panel-header", rail ? "is-rail" : "", digitRail ? "is-digits" : "", sideBar && !tabs ? "is-spine" : "", verticalNames ? "is-vertical-names" : ""].filter(Boolean).join(" ")}
           data-panel-bar=""
           data-edge={edge}
           onContextMenu={(event) => openMenu(event)}
@@ -663,10 +676,18 @@ export function PanelChrome({
                   />
                   <NameField
                     panelId={panelId}
-                    name={menuTab ? menuTab.title : (name ?? title)}
+                    name={
+                      menuTab
+                        ? isDefaultPanelTitle(menuTab.title)
+                          ? ""
+                          : menuTab.title.trim()
+                        : (name ?? title)
+                    }
                     placeholder={
-                      menuTab && !menuTab.title.trim()
-                        ? menuTab.id
+                      menuTab
+                        ? isDefaultPanelTitle(menuTab.title)
+                          ? tabName(menuTab, tabPluginTitle(menuTab.panel, desk.plugins))
+                          : undefined
                         : name !== undefined && name !== title
                           ? title
                           : undefined
@@ -687,9 +708,11 @@ export function PanelChrome({
                   <TabMenu
                     names={showNames}
                     icons={showIcons}
+                    vertical={tabs.verticalNames === true}
                     edge={edge}
                     onNames={(shown) => onTabs({ ...tabs, showNames: shown ? undefined : false })}
                     onIcons={(shown) => onTabs({ ...tabs, showIcons: shown ? undefined : false })}
+                    onVertical={(shown) => onTabs({ ...tabs, verticalNames: shown ? true : undefined })}
                     onEdge={(next) => {
                       if (panelId) run(() => panelActions.edge(panelId, next));
                     }}
@@ -719,6 +742,14 @@ export function PanelChrome({
                     <span className="menu-check">{addressBar ? "✓" : ""}</span>
                     Address bar
                   </button>
+                ) : null}
+                {tabs && onTabs && sideBar ? (
+                  <VerticalNamesItem
+                    checked={tabs.verticalNames === true}
+                    onToggle={() =>
+                      run(() => onTabs({ ...tabs, verticalNames: tabs.verticalNames ? undefined : true }))
+                    }
+                  />
                 ) : null}
                 <button
                   type="button"
@@ -1368,18 +1399,22 @@ function CloseIcon() {
 function TabMenu({
   names,
   icons,
+  vertical,
   edge,
   onNames,
   onIcons,
+  onVertical,
   onEdge,
   onAdd,
   onClose,
 }: {
   names: boolean;
   icons: boolean;
+  vertical: boolean;
   edge: TabEdge;
   onNames: (shown: boolean) => void;
   onIcons: (shown: boolean) => void;
+  onVertical: (shown: boolean) => void;
   onEdge: (edge: TabEdge) => void;
   onAdd: () => void;
   onClose?: () => void;
@@ -1411,6 +1446,9 @@ function TabMenu({
         <span className="menu-check">{names ? "✓" : ""}</span>
         Show names
       </button>
+      {edge === "left" || edge === "right" ? (
+        <VerticalNamesItem checked={vertical} onToggle={() => onVertical(!vertical)} />
+      ) : null}
       <div className="menu-rule" />
       <div className="menu-label">Bar</div>
       {EDGES.map((item) => (

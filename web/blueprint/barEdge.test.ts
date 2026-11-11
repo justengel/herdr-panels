@@ -1,7 +1,7 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { BarFaceItems, BarPlaceItems } from "../src/components/PanelChrome";
+import { BarFaceItems, BarPlaceItems, VerticalNamesItem } from "../src/components/PanelChrome";
 import { addPanelTab, closePanelTab, findPanel, movePanel, normalizeLayout, setBarEdge, setBarFace } from "../src/layoutEdit";
 import { collapseBasis } from "../src/tabFace";
 import type { LayoutNode } from "../src/types";
@@ -99,6 +99,14 @@ describe("the panel bar name and icon", () => {
     expect(collapseBasis(iconOnly, "row")).toBe(42);
     const bare: LayoutNode = { ...named, showNames: false, showIcons: false };
     expect(collapseBasis(bare, "row")).toBe(36);
+  });
+
+  it("offers vertical names as a checked menu item", () => {
+    const on = renderToStaticMarkup(createElement(VerticalNamesItem, { checked: true, onToggle: () => undefined }));
+    expect(on).toContain("Vertical names");
+    expect(on).toContain('aria-checked="true"');
+    const off = renderToStaticMarkup(createElement(VerticalNamesItem, { checked: false, onToggle: () => undefined }));
+    expect(off).toContain('aria-checked="false"');
   });
 
   it("offers show icons and show names ahead of the bar sides", () => {

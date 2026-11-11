@@ -246,6 +246,9 @@ pub enum PanelConfig {
             skip_serializing_if = "is_true"
         )]
         show_icons: bool,
+        /// Side tabs draw names down the bar. Absent and false keep names across it.
+        #[serde(default, rename = "verticalNames", skip_serializing_if = "is_false")]
+        vertical_names: bool,
         tabs: Vec<PanelTab>,
     },
     Chat {
@@ -767,6 +770,47 @@ mod tests {
             panic!("panel");
         };
         assert!(*show_names);
+    }
+
+    #[test]
+    fn vertical_side_tab_names_stay_stored() {
+        let text = r#"{
+          "id": "tabs",
+          "title": "Tabs",
+          "root": {
+            "type": "panel",
+            "id": "group",
+            "panel": {
+              "type": "tabs",
+              "edge": "left",
+              "verticalNames": true,
+              "active": "one",
+              "tabs": [{"id": "one", "title": "Notes", "panel": {"type": "blank"}}]
+            }
+          }
+        }"#;
+        let doc = LayoutDocument::parse(text).unwrap();
+        let LayoutNode::Panel {
+            panel: PanelConfig::Tabs { vertical_names, .. },
+            ..
+        } = &doc.root
+        else {
+            panic!("panel");
+        };
+        assert!(*vertical_names);
+        let stored = serde_json::to_string(&doc).unwrap();
+        assert!(stored.contains("\"verticalNames\":true"));
+        let across = text.replace("\"verticalNames\": true,\n", "");
+        let open = LayoutDocument::parse(&across).unwrap();
+        let LayoutNode::Panel {
+            panel: PanelConfig::Tabs { vertical_names, .. },
+            ..
+        } = &open.root
+        else {
+            panic!("panel");
+        };
+        assert!(!*vertical_names);
+        assert!(!serde_json::to_string(&open).unwrap().contains("verticalNames"));
     }
 
     #[test]

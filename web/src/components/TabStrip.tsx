@@ -1,7 +1,9 @@
 import { useRef, useState } from "react";
+import { useDesk } from "../desk";
 import { blankTab, freshTabId } from "../layoutEdit";
+import { isDefaultPanelTitle } from "../openTitle";
 import { movedSpaceOrder, sameSpaceOrder } from "../spaceDrag";
-import { iconRail, showTabClose, tabFace, tabNumber } from "../tabFace";
+import { iconRail, showTabClose, tabFace, tabName, tabNumber, tabPluginTitle } from "../tabFace";
 import { useStripDrag } from "../useStripDrag";
 import type { PanelTab, TabsPanel } from "../types";
 import { TabMark } from "./TabMark";
@@ -22,6 +24,7 @@ export function TabStrip({
   onContextMenu: (tabId: string, event: React.MouseEvent) => void;
   onDragAway: (tabId: string, event: PointerEvent) => void;
 }) {
+  const plugins = useDesk().plugins;
   const vertical = group.edge === "left" || group.edge === "right";
   const rail = iconRail(group.edge, group.tabs, group.showNames !== false, group.showIcons !== false);
   const close = showTabClose(group.edge, rail);
@@ -74,6 +77,7 @@ export function TabStrip({
           tab={tab}
           showNames={group.showNames !== false}
           showIcons={group.showIcons !== false}
+          pluginTitle={tabPluginTitle(tab.panel, plugins)}
           close={close}
           active={tab.id === active?.id}
           editing={editing === tab.id}
@@ -118,6 +122,7 @@ function TabFace({
   tab,
   showNames,
   showIcons,
+  pluginTitle,
   close,
   active,
   editing,
@@ -134,6 +139,7 @@ function TabFace({
   tab: PanelTab;
   showNames: boolean;
   showIcons: boolean;
+  pluginTitle: string;
   close: boolean;
   active: boolean;
   editing: boolean;
@@ -147,8 +153,9 @@ function TabFace({
   onClose: () => void;
   onContextMenu: (event: React.MouseEvent) => void;
 }) {
-  const face = tabFace(tab, showNames, showIcons);
-  const name = tab.title.trim() || tabNumber(tab.id);
+  const face = tabFace(tab, showNames, showIcons, pluginTitle);
+  const stored = isDefaultPanelTitle(tab.title) ? "" : tab.title.trim();
+  const name = face.label || tabName(tab, pluginTitle) || tabNumber(tab.id);
   return (
     <div
       data-reorder-id={tab.id}
@@ -189,7 +196,8 @@ function TabFace({
         <input
           aria-label="Tab name"
           className="tab-rename"
-          defaultValue={tab.title}
+          defaultValue={stored}
+          placeholder={stored ? undefined : tabName(tab, pluginTitle) || undefined}
           autoFocus
           onClick={(event) => event.stopPropagation()}
           onPointerDown={(event) => event.stopPropagation()}

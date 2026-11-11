@@ -569,6 +569,7 @@ export function groupOnBar(node: LayoutNode, sourceId: string, targetId: string)
     };
     if (names === false) group.showNames = false;
     if (icons === false) group.showIcons = false;
+    if (target.panel.type === "tabs" && target.panel.verticalNames) group.verticalNames = true;
     const next: PanelNode = { ...panel, panel: group };
     delete next.showNames;
     delete next.showIcons;

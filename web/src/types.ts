@@ -162,6 +162,8 @@ export interface TabsPanel {
   showNames?: boolean;
   /** Absent means a tab's icon is drawn. Both off shows the tab number, so `tab-1` reads `1`. */
   showIcons?: boolean;
+  /** Side bars draw names down the strip. Absent keeps the names across the bar. */
+  verticalNames?: boolean;
   tabs: PanelTab[];
 }
 

@@ -1,4 +1,5 @@
-import type { LayoutNode, PanelNode, TabEdge } from "./types";
+import { displayTitle, isDefaultPanelTitle } from "./openTitle";
+import type { LayoutNode, PanelConfig, PanelNode, TabEdge } from "./types";
 
 /** The number on a generated tab id. `tab-2` is shown as `2`. Any other id stays as it is. */
 export function tabNumber(id: string): string {
@@ -14,22 +15,58 @@ export interface TabFace {
   iconOnly: boolean;
 }
 
+/**
+ * Words for a tab that has no name of its own. A saved name is kept.
+ * A blank or automatic title follows the panel, the same way a panel title bar does.
+ * With no panel, only a saved name is returned.
+ */
+export function tabName(
+  tab: { title: string; panel?: PanelConfig },
+  pluginTitle = "",
+): string {
+  if (tab.panel) return displayTitle(tab.title, tab.panel, pluginTitle);
+  const stored = tab.title.trim();
+  return isDefaultPanelTitle(stored) ? "" : stored;
+}
+
+/** Manifest title for a plugin tab. Other panels have none. */
+export function tabPluginTitle(
+  panel: PanelConfig | undefined,
+  plugins: ReadonlyArray<{ id: string; title: string }>,
+): string {
+  if (!panel || panel.type !== "plugin") return "";
+  return plugins.find((plugin) => plugin.id === panel.plugin)?.title?.trim() ?? "";
+}
+
 export function tabFace(
-  tab: { id: string; title: string; icon?: string | null },
+  tab: { id: string; title: string; icon?: string | null; panel?: PanelConfig },
   showNames = true,
   showIcons = true,
+  pluginTitle = "",
 ): TabFace {
   const icon = showIcons ? tab.icon?.trim() || null : null;
-  const name = tab.title.trim();
   if (!showNames && !showIcons) return { label: tabNumber(tab.id), icon: null, iconOnly: false };
+  const name = tabName(tab, pluginTitle);
   if (showNames && name) return { label: name, icon, iconOnly: false };
   if (icon) return { label: "", icon, iconOnly: true };
   return { label: tabNumber(tab.id), icon: null, iconOnly: false };
 }
 
+/** A side bar can draw names down the strip so the bar stays one line wide. */
+export function namesRunDown(edge: TabEdge, verticalNames?: boolean, showNames = true): boolean {
+  if (!showNames || verticalNames !== true) return false;
+  return edge === "left" || edge === "right";
+}
+
 /** A side tab is showing its name, so the bar stays wide enough for that name and its close button. */
-export function tabShowsName(title: string, showNames = true): boolean {
-  return showNames && Boolean(title.trim());
+export function tabShowsName(
+  title: string,
+  showNames = true,
+  panel?: PanelConfig,
+  pluginTitle = "",
+): boolean {
+  if (!showNames) return false;
+  return Boolean(tabName({ title, panel }, pluginTitle).trim());
 }
 
 /**
@@ -38,19 +75,19 @@ export function tabShowsName(title: string, showNames = true): boolean {
  */
 export function iconRail(
   edge: TabEdge,
-  tabs: Array<{ id?: string; title: string; icon?: string | null }>,
+  tabs: Array<{ id?: string; title: string; icon?: string | null; panel?: PanelConfig }>,
   showNames = true,
   // Icons and id numbers share this bar. The width of each is `railBasis`.
   _showIcons = true,
 ): boolean {
   if ((edge !== "left" && edge !== "right") || tabs.length === 0) return false;
-  return tabs.every((tab) => !tabShowsName(tab.title, showNames));
+  return tabs.every((tab) => !tabShowsName(tab.title, showNames, tab.panel));
 }
 
 /** Pixels for a narrow side bar. An icon needs 42. A lone number needs less. */
 export function railBasis(
   edge: TabEdge,
-  tabs: Array<{ id?: string; title: string; icon?: string | null }>,
+  tabs: Array<{ id?: string; title: string; icon?: string | null; panel?: PanelConfig }>,
   showNames = true,
   showIcons = true,
 ): number | null {
@@ -101,6 +138,7 @@ export function collapseBasis(node: LayoutNode, split: "row" | "column"): number
     if (node.panel.type === "tabs") {
       const names = node.panel.showNames !== false;
       const icons = node.panel.showIcons !== false;
+      if (namesRunDown(edge, node.panel.verticalNames, names)) return 42;
       return railBasis(edge, node.panel.tabs, names, icons) ?? 168;
     }
     // A sideways name is one line thick, the same as the icon rail.
