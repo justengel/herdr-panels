@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.17 - 2026-11-10
+
+`herdr-panels panel list` prints each tab under its group. `panel tab list`, `rename`, `focus`, `open`, and `close` change that one tab on the desk as it is now, so a rename does not drop a tab that changed in between. A group holds at most 24 tabs. The last tab stays open.
+
+A desktop browser panel's address bar follows a link or a redirect after the page finishes loading.
+
+A terminal row is tall enough that the underscore is not clipped.
+
 ## 0.1.16 - 2026-11-06
 
 A `mermaid` fence in a note is drawn as a diagram. It stays at the size it was laid out, so a wide panel does not stretch a label until the text wraps, and panel zoom scales the diagram with the text. A fence in another language stays a code block. A diagram that cannot be read keeps its source and one error line. `examples/notes/flowchart.md` is that example.
