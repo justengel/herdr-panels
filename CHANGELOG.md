@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.18 - 2026-11-11
+
+A tab bar on the left or right can draw names down the strip. Right-click the bar and choose Vertical names. The bar stays as wide as one line of text. Top and bottom bars stay horizontal.
+
+An unnamed tab shows the file, folder, site, plugin, or panel type it is displaying, the same way a panel title bar does. A name someone typed stays. The tab number, such as 4, is shown only when Show icons and Show names are both off. Herdr's own pane tabs are unchanged.
+
 ## 0.1.17 - 2026-11-10
 
 `herdr-panels panel list` prints each tab under its group. `panel tab list`, `rename`, `focus`, `open`, and `close` change that one tab on the desk as it is now, so a rename does not drop a tab that changed in between. A group holds at most 24 tabs. The last tab stays open.
