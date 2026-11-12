@@ -187,12 +187,18 @@ pub fn open_tab(
         }
         let id = fresh_tab_id(&group.tabs);
         created = id.clone();
+        let edge = group
+            .tabs
+            .iter()
+            .find(|tab| tab.id == group.active)
+            .and_then(|tab| tab.edge);
         group.active = id.clone();
         group.tabs.push(PanelTab {
             id,
             title,
             icon: None,
             panel,
+            edge,
         });
         Ok(())
     })?;
@@ -208,6 +214,7 @@ pub fn close_tab(node: LayoutNode, panel_id: &str, tab: &str) -> Result<LayoutNo
             show_names,
             show_icons,
             vertical_names,
+            strips,
             tabs,
         } = std::mem::replace(&mut slot.panel, PanelConfig::Blank)
         else {
@@ -222,6 +229,7 @@ pub fn close_tab(node: LayoutNode, panel_id: &str, tab: &str) -> Result<LayoutNo
                     show_names,
                     show_icons,
                     vertical_names,
+                    strips,
                     tabs,
                 };
                 return Err(err);
@@ -234,6 +242,7 @@ pub fn close_tab(node: LayoutNode, panel_id: &str, tab: &str) -> Result<LayoutNo
                 show_names,
                 show_icons,
                 vertical_names,
+                strips,
                 tabs,
             };
             return Err("at least one tab stays open");
@@ -249,7 +258,7 @@ pub fn close_tab(node: LayoutNode, panel_id: &str, tab: &str) -> Result<LayoutNo
             if let Some(icon) = only.icon.filter(|icon| !icon.trim().is_empty()) {
                 slot.icon = Some(icon);
             }
-            slot.edge = edge;
+            slot.edge = only.edge.unwrap_or(edge);
             slot.show_names = show_names;
             slot.show_icons = show_icons;
             slot.panel = only.panel;
@@ -260,13 +269,24 @@ pub fn close_tab(node: LayoutNode, panel_id: &str, tab: &str) -> Result<LayoutNo
         } else {
             tabs.last().map(|item| item.id.clone()).unwrap_or_default()
         };
-        slot.panel = PanelConfig::Tabs {
+        let mut kept = TabGroup {
             edge,
             active,
             show_names,
             show_icons,
             vertical_names,
+            strips,
             tabs,
+        };
+        settle_tabs(&mut kept);
+        slot.panel = PanelConfig::Tabs {
+            edge: kept.edge,
+            active: kept.active,
+            show_names: kept.show_names,
+            show_icons: kept.show_icons,
+            vertical_names: kept.vertical_names,
+            strips: kept.strips,
+            tabs: kept.tabs,
         };
         Ok(())
     })
@@ -288,6 +308,7 @@ struct TabGroup {
     show_names: bool,
     show_icons: bool,
     vertical_names: bool,
+    strips: Vec<TabEdge>,
     tabs: Vec<PanelTab>,
 }
 
@@ -299,6 +320,34 @@ fn tab_group(node: &LayoutNode, panel_id: &str) -> Result<Vec<PanelTab>, &'stati
     match panel.panel {
         PanelConfig::Tabs { tabs, .. } => Ok(tabs),
         _ => Err("panel is not a tab group"),
+    }
+}
+
+fn effective_edge(tab: &PanelTab, group: TabEdge) -> TabEdge {
+    tab.edge.unwrap_or(group)
+}
+
+/// One occupied strip becomes the group edge. A tab that repeats the group edge drops its own.
+fn settle_tabs(group: &mut TabGroup) {
+    let Some(first) = group.tabs.first() else {
+        return;
+    };
+    let only = effective_edge(first, group.edge);
+    let mixed = group
+        .tabs
+        .iter()
+        .any(|tab| effective_edge(tab, group.edge) != only);
+    if mixed {
+        for tab in &mut group.tabs {
+            if tab.edge == Some(group.edge) {
+                tab.edge = None;
+            }
+        }
+        return;
+    }
+    group.edge = only;
+    for tab in &mut group.tabs {
+        tab.edge = None;
     }
 }
 
@@ -358,6 +407,7 @@ where
             show_names,
             show_icons,
             vertical_names,
+            strips,
             tabs,
         } = std::mem::replace(&mut slot.panel, PanelConfig::Blank)
         else {
@@ -369,6 +419,7 @@ where
             show_names,
             show_icons,
             vertical_names,
+            strips,
             tabs,
         };
         if let Err(err) = edit(&mut group) {
@@ -378,16 +429,19 @@ where
                 show_names: group.show_names,
                 show_icons: group.show_icons,
                 vertical_names: group.vertical_names,
+                strips: group.strips,
                 tabs: group.tabs,
             };
             return Err(err);
         }
+        settle_tabs(&mut group);
         slot.panel = PanelConfig::Tabs {
             edge: group.edge,
             active: group.active,
             show_names: group.show_names,
             show_icons: group.show_icons,
             vertical_names: group.vertical_names,
+            strips: group.strips,
             tabs: group.tabs,
         };
         Ok(())
@@ -2305,6 +2359,48 @@ mod tests {
             close_tab(sample(), "notes", "tab-1").unwrap_err(),
             "panel is not a tab group"
         );
+    }
+
+    #[test]
+    fn a_new_tab_joins_the_active_strip_and_the_last_tab_keeps_it() {
+        let root = LayoutDocument::parse(
+            r#"{
+              "id": "desk",
+              "title": "Desk",
+              "root": {
+                "type": "panel",
+                "id": "grouped",
+                "panel": {
+                  "type": "tabs",
+                  "edge": "top",
+                  "active": "side",
+                  "tabs": [
+                    {"id": "page", "title": "Page", "panel": {"type": "blank"}},
+                    {"id": "side", "title": "Side", "edge": "right", "panel": {"type": "blank"}}
+                  ]
+                }
+              }
+            }"#,
+        )
+        .unwrap()
+        .root;
+        let (opened, id) = open_tab(root, "grouped", PanelConfig::Blank, "More").unwrap();
+        let (active, tabs) = group_tabs(&opened);
+        assert_eq!(id, "tab-3");
+        assert_eq!(active, "tab-3");
+        assert_eq!(tabs[0].edge, None);
+        assert_eq!(tabs[1].edge, Some(TabEdge::Right));
+        assert_eq!(tabs[2].edge, Some(TabEdge::Right));
+        let closed = close_tab(opened, "grouped", "page").unwrap();
+        let (active, tabs) = group_tabs(&closed);
+        assert_eq!(active, "tab-3");
+        assert!(tabs.iter().all(|tab| tab.edge.is_none()));
+        let panel = list_panels(&close_tab(closed, "grouped", "side").unwrap())
+            .into_iter()
+            .next()
+            .unwrap();
+        assert!(matches!(panel.panel, PanelConfig::Blank));
+        assert_eq!(panel.edge, TabEdge::Right);
     }
 
     fn files_panel(node: &LayoutNode) -> PanelConfig {

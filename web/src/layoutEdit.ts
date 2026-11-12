@@ -1,4 +1,5 @@
 import { isDefaultPanelTitle, titleFromPanel } from "./openTitle";
+import { gatherTabs, placeTabOn, retainStrips, settleEdges, tabEdgeOf } from "./tabFrame";
 import type { GridCell, LayoutNode, PanelConfig, PanelNode, PanelTab, TabEdge, TabsPanel } from "./types";
 
 function clamp(value: number, min: number, max: number): number {
@@ -27,8 +28,10 @@ export function normalizeLayout(node: LayoutNode): LayoutNode {
     let title = node.title;
     let icon = node.icon?.trim() || null;
     let panel = node.panel;
+    let barEdge = node.edge;
     if (panel.type === "tabs" && panel.tabs.length === 1) {
       const only = panel.tabs[0];
+      barEdge = tabEdgeOf(only, panel.edge);
       panel = only.panel;
       if (only.title && !isDefaultPanelTitle(only.title)) title = only.title;
       if (only.icon?.trim()) icon = only.icon.trim();
@@ -37,7 +40,7 @@ export function normalizeLayout(node: LayoutNode): LayoutNode {
     const next: PanelNode = { type: "panel", id: node.id, title: title ?? null, panel };
     if (icon) next.icon = icon;
     if (node.collapsed) next.collapsed = true;
-    if (panel.type !== "tabs" && node.edge && node.edge !== "top") next.edge = node.edge;
+    if (panel.type !== "tabs" && barEdge && barEdge !== "top") next.edge = barEdge;
     if (panel.type !== "tabs" && node.showNames === false) next.showNames = false;
     if (panel.type !== "tabs" && node.showIcons === false) next.showIcons = false;
     return next;
@@ -212,7 +215,7 @@ export function closePanelTab(node: LayoutNode, panelId: string, tabId: string):
 function panelFromTab(host: PanelNode, only: PanelTab): PanelNode {
   const title = only.title && only.title !== "New tab" ? only.title : host.title;
   const icon = only.icon?.trim() || null;
-  const edge = host.panel.type === "tabs" ? host.panel.edge : host.edge;
+  const edge = host.panel.type === "tabs" ? tabEdgeOf(only, host.panel.edge) : host.edge;
   const names = host.panel.type === "tabs" ? host.panel.showNames : host.showNames;
   const icons = host.panel.type === "tabs" ? host.panel.showIcons : host.showIcons;
   const next: PanelNode = { ...host, title: title ?? null, icon, panel: only.panel };
@@ -251,10 +254,16 @@ export function setBarEdge(node: LayoutNode, id: string, edge: TabEdge): LayoutN
   const current = findPanel(node, id);
   if (!current) return node;
   if (current.panel.type === "tabs") {
-    const group = current.panel;
-    if (group.edge === edge && current.edge == null) return node;
+    const currentTabs = current.panel.tabs;
+    const group = gatherTabs(current.panel, edge);
+    const same =
+      group.edge === current.panel.edge &&
+      current.edge == null &&
+      group.tabs.length === currentTabs.length &&
+      group.tabs.every((tab, index) => tab === currentTabs[index]);
+    if (same) return node;
     return mapPanel(node, id, (panel) => {
-      const next: PanelNode = { ...panel, panel: { ...group, edge } };
+      const next: PanelNode = { ...panel, panel: group };
       delete next.edge;
       return next;
     });
@@ -302,10 +311,23 @@ export function setTabEdge(node: LayoutNode, id: string, edge: TabEdge): LayoutN
   return setBarEdge(node, id, edge);
 }
 
+/** Move one tab onto a strip. The other tabs stay on their strips. */
+export function placeTabEdge(node: LayoutNode, panelId: string, tabId: string, edge: TabEdge): LayoutNode {
+  const current = findPanel(node, panelId);
+  if (!current || current.panel.type !== "tabs") return node;
+  const next = placeTabOn(current.panel, tabId, edge);
+  if (next === current.panel) return node;
+  return setPanel(node, panelId, next);
+}
+
 function withAddedTab(panel: PanelNode): PanelConfig {
   if (panel.panel.type === "tabs") {
-    const tab = blankTab(freshTabId(panel.panel.tabs));
-    return { ...panel.panel, active: tab.id, tabs: [...panel.panel.tabs, tab] };
+    const group = panel.panel;
+    const tab = blankTab(freshTabId(group.tabs));
+    const active = group.tabs.find((item) => item.id === group.active) ?? group.tabs[0];
+    const edge = active ? tabEdgeOf(active, group.edge) : group.edge;
+    if (edge !== group.edge) tab.edge = edge;
+    return settleEdges({ ...group, active: tab.id, tabs: [...group.tabs, tab] });
   }
   const kept: PanelTab = {
     id: "tab-1",
@@ -541,7 +563,7 @@ export function openTab(node: LayoutNode, id: string, group: TabsPanel): LayoutN
 }
 
 /** Drop one panel onto another's bar. A dragged group is flattened into the target. */
-export function groupOnBar(node: LayoutNode, sourceId: string, targetId: string): LayoutNode {
+export function groupOnBar(node: LayoutNode, sourceId: string, targetId: string, onto?: TabEdge): LayoutNode {
   if (sourceId === targetId) return node;
   const source = findPanel(node, sourceId);
   const target = findPanel(node, targetId);
@@ -552,21 +574,26 @@ export function groupOnBar(node: LayoutNode, sourceId: string, targetId: string)
   const closed = closePanel(node, sourceId);
   if (!closed || !findPanel(closed, targetId)) return node;
   const taken = new Set(existing.map((tab) => tab.id));
+  const edge = target.panel.type === "tabs" ? target.panel.edge : (target.edge ?? "top");
+  const strip = onto ?? edge;
   const added = incoming.map((tab) => {
     const id = uniqueTabId(tab.id, taken);
     taken.add(id);
-    return { ...tab, id };
+    const next: PanelTab = { ...tab, id };
+    if (strip === edge) delete next.edge;
+    else next.edge = strip;
+    return next;
   });
-  const edge = target.panel.type === "tabs" ? target.panel.edge : (target.edge ?? "top");
   const names = target.panel.type === "tabs" ? target.panel.showNames : target.showNames;
   const icons = target.panel.type === "tabs" ? target.panel.showIcons : target.showIcons;
   return mapPanel(closed, targetId, (panel) => {
-    const group: TabsPanel = {
+    const grouped = settleEdges({
       type: "tabs",
       edge,
       active: added[0]?.id ?? existing[0]?.id ?? "tab-1",
       tabs: [...existing, ...added],
-    };
+    });
+    const group = retainStrips(grouped, target.panel.type === "tabs" ? target.panel.strips : undefined, strip);
     if (names === false) group.showNames = false;
     if (icons === false) group.showIcons = false;
     if (target.panel.type === "tabs" && target.panel.verticalNames) group.verticalNames = true;
@@ -584,6 +611,7 @@ export function moveTab(
   tabId: string,
   targetId: string,
   place: PanelPlace | "bar",
+  onto?: TabEdge,
 ): LayoutNode {
   const source = findPanel(node, sourceId);
   const target = findPanel(node, targetId);
@@ -593,7 +621,7 @@ export function moveTab(
   if (place === "bar" && tabCount(target) + (whole ? tabCount(source) : 1) > TAB_LIMIT) return node;
   const pulled = pullTab(node, sourceId, tabId);
   if (!pulled) return node;
-  if (place === "bar") return groupOnBar(pulled.node, pulled.id, targetId);
+  if (place === "bar") return groupOnBar(pulled.node, pulled.id, targetId, onto);
   return movePanel(pulled.node, pulled.id, targetId, place);
 }
 
@@ -652,6 +680,10 @@ function pullTab(node: LayoutNode, sourceId: string, tabId: string): { node: Lay
     icon: tab.icon?.trim() || null,
     panel: tab.panel,
   };
+  if (source.panel.type === "tabs") {
+    const edge = tabEdgeOf(tab, source.panel.edge);
+    if (edge !== "top") created.edge = edge;
+  }
   return { node: insertBeside(stripped, sourceId, created, "right"), id };
 }
 

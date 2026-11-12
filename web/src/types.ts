@@ -152,6 +152,8 @@ export interface PanelTab {
   title: string;
   icon?: string | null;
   panel: PanelConfig;
+  /** Strip this tab sits on. Absent means the group's edge. */
+  edge?: TabEdge;
 }
 
 export interface TabsPanel {
@@ -164,6 +166,11 @@ export interface TabsPanel {
   showIcons?: boolean;
   /** Side bars draw names down the strip. Absent keeps the names across the bar. */
   verticalNames?: boolean;
+  /**
+   * Strips that stay open, including ones with no tabs.
+   * Absent means only the strips that have tabs.
+   */
+  strips?: TabEdge[];
   tabs: PanelTab[];
 }
 

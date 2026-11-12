@@ -120,6 +120,9 @@ pub struct PanelTab {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub icon: Option<String>,
     pub panel: PanelConfig,
+    /// Which strip this tab sits on. Absent uses the group's edge.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub edge: Option<TabEdge>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -249,6 +252,9 @@ pub enum PanelConfig {
         /// Side tabs draw names down the bar. Absent and false keep names across it.
         #[serde(default, rename = "verticalNames", skip_serializing_if = "is_false")]
         vertical_names: bool,
+        /// Strips that stay open when they have no tabs. Empty means only occupied strips.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        strips: Vec<TabEdge>,
         tabs: Vec<PanelTab>,
     },
     Chat {
@@ -730,6 +736,74 @@ mod tests {
             r#"{"type": "tabs", "tabs": [{"id": "inner", "title": "Inner", "panel": {"type": "iframe", "url": "https://example.com"}}]}"#,
         );
         assert!(LayoutDocument::parse(&nested).is_err());
+    }
+
+    #[test]
+    fn a_tab_keeps_its_own_edge() {
+        let text = r#"{
+          "id": "tabs",
+          "title": "Tabs",
+          "root": {
+            "type": "panel",
+            "id": "group",
+            "panel": {
+              "type": "tabs",
+              "edge": "top",
+              "active": "side",
+              "tabs": [
+                {"id": "page", "title": "Page", "panel": {"type": "blank"}},
+                {"id": "side", "title": "Side", "edge": "right", "panel": {"type": "blank"}}
+              ]
+            }
+          }
+        }"#;
+        let doc = LayoutDocument::parse(text).unwrap();
+        let LayoutNode::Panel {
+            panel: PanelConfig::Tabs { edge, tabs, .. },
+            ..
+        } = &doc.root
+        else {
+            panic!("panel");
+        };
+        assert_eq!(*edge, TabEdge::Top);
+        assert_eq!(tabs[0].edge, None);
+        assert_eq!(tabs[1].edge, Some(TabEdge::Right));
+        let saved = serde_json::to_value(&doc).unwrap();
+        assert!(saved["root"]["panel"]["tabs"][0].get("edge").is_none());
+        assert_eq!(saved["root"]["panel"]["tabs"][1]["edge"], "right");
+        assert!(saved["root"]["panel"].get("strips").is_none());
+    }
+
+    #[test]
+    fn an_empty_strip_stays_stored() {
+        let text = r#"{
+          "id": "tabs",
+          "title": "Tabs",
+          "root": {
+            "type": "panel",
+            "id": "group",
+            "panel": {
+              "type": "tabs",
+              "edge": "top",
+              "active": "page",
+              "strips": ["top", "right"],
+              "tabs": [
+                {"id": "page", "title": "Page", "panel": {"type": "blank"}}
+              ]
+            }
+          }
+        }"#;
+        let doc = LayoutDocument::parse(text).unwrap();
+        let LayoutNode::Panel {
+            panel: PanelConfig::Tabs { strips, .. },
+            ..
+        } = &doc.root
+        else {
+            panic!("panel");
+        };
+        assert_eq!(strips, &vec![TabEdge::Top, TabEdge::Right]);
+        let saved = serde_json::to_value(&doc).unwrap();
+        assert_eq!(saved["root"]["panel"]["strips"], serde_json::json!(["top", "right"]));
     }
 
     #[test]

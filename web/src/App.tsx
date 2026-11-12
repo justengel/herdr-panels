@@ -25,6 +25,7 @@ import {
   groupOnBar,
   movePanel,
   moveTab,
+  placeTabEdge,
   reopenPanel,
   setPanelIcon,
   openTab,
@@ -1132,7 +1133,7 @@ export function App() {
             }
             edit(movePanel(layout.root, sourceId, targetId, place));
           },
-          group: (sourceId, targetId) => {
+          group: (sourceId, targetId, onto) => {
             const showing = visit;
             if (showing && showing.panelIds.length >= 2) {
               const source = visitOwner(showing.panelIds, sourceId);
@@ -1147,11 +1148,15 @@ export function App() {
               }
               if (source) return;
             }
-            edit(groupOnBar(layout.root, sourceId, targetId));
+            edit(groupOnBar(layout.root, sourceId, targetId, onto));
           },
-          dropTab: (sourceId, tabId, targetId, place) => {
+          dropTab: (sourceId, tabId, targetId, place, onto) => {
             if (visit && visit.panelIds.length >= 2 && visitOwner(visit.panelIds, sourceId)) return;
-            edit(moveTab(layout.root, sourceId, tabId, targetId, place));
+            if (sourceId === targetId && place === "bar" && onto) {
+              edit(placeTabEdge(layout.root, sourceId, tabId, onto));
+              return;
+            }
+            edit(moveTab(layout.root, sourceId, tabId, targetId, place, onto));
           },
           spawn: (id, direction, panel, title) => {
             const doc = layoutRef.current;

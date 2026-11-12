@@ -2472,14 +2472,18 @@ fn tab_entries(panel: &PanelConfig) -> Option<Vec<Value>> {
     Some(
         tabs.iter()
             .map(|tab| {
-                json!({
+                let mut row = json!({
                     "id": tab.id,
                     "title": tab.title,
                     "type": panel_type(&tab.panel),
                     "url": panel_url(&tab.panel),
                     "summary": panel_summary(&tab.panel),
                     "active": tab.id == shown,
-                })
+                });
+                if let Some(edge) = tab.edge {
+                    row["edge"] = json!(edge);
+                }
+                row
             })
             .collect(),
     )

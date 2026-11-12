@@ -13,10 +13,10 @@ export interface PanelActions {
   /** Show or hide the title and icon on this panel's bar. */
   face: (id: string, names: boolean, icons: boolean) => void;
   place: (sourceId: string, targetId: string, place: PanelPlace) => void;
-  /** Drop a panel onto another panel's bar and make one tab group. */
-  group: (sourceId: string, targetId: string) => void;
-  /** Drag one tab onto a bar, or out beside a panel. */
-  dropTab: (sourceId: string, tabId: string, targetId: string, place: DropPlace) => void;
+  /** Drop a panel onto another panel's bar and make one tab group. `edge` is the strip under the pointer. */
+  group: (sourceId: string, targetId: string, edge?: TabEdge) => void;
+  /** Drag one tab onto a bar, or out beside a panel. `edge` places it on that strip. */
+  dropTab: (sourceId: string, tabId: string, targetId: string, place: DropPlace, edge?: TabEdge) => void;
   /** Split a new panel beside this one. */
   spawn: (id: string, direction: "row" | "column", panel: PanelConfig, title: string) => void;
   rename: (id: string, title: string) => void;
@@ -55,7 +55,7 @@ interface LiveDrag {
   x: number;
   y: number;
   origin: Rect;
-  hint: { panelId: string; place: DropPlace; rect: Rect } | null;
+  hint: { panelId: string; place: DropPlace; rect: Rect; edge?: TabEdge } | null;
 }
 
 const ActionsContext = createContext<PanelActions | null>(null);
@@ -69,9 +69,14 @@ const PLACE_LABEL: Record<PanelPlace, string> = {
   center: "Swap",
 };
 
-function placeLabel(place: DropPlace): string {
-  if (place === "bar") return "Group on this bar";
+function placeLabel(place: DropPlace, edge?: TabEdge): string {
+  if (place === "bar") return edge ? `Place on the ${edge}` : "Group on this bar";
   return PLACE_LABEL[place];
+}
+
+function readEdge(value: string | null | undefined): TabEdge | undefined {
+  if (value === "top" || value === "right" || value === "bottom" || value === "left") return value;
+  return undefined;
 }
 
 export function PanelActionsProvider({
@@ -103,17 +108,25 @@ export function PanelActionsProvider({
       const hitId = section.getAttribute("data-panel-id");
       if (!hitId) return null;
       const rect = clientRect(section);
-      const barEl = section.querySelector<HTMLElement>("[data-panel-bar]");
+      const barEl = barUnder(section, x, y);
       const bar = barEl ? clientRect(barEl) : null;
       const raw = dropPlace(rect, x, y, bar);
       const place = raw === "bar" && !tabId && document.querySelector(".borrow-visit") ? "above" : raw;
+      const hitEdge = readEdge(barEl?.getAttribute("data-edge"));
       if (tabId) {
-        if (hitId === panelId && (place === "bar" || place === "center")) return null;
+        if (hitId === panelId) {
+          const from = sourceEdge(panelId, tabId);
+          if (place === "bar" && hitEdge && from && hitEdge !== from) {
+            const zone = bar ?? slotRect(rect, "center");
+            return { panelId: hitId, place, rect: zone, edge: hitEdge };
+          }
+          return null;
+        }
       } else if (hitId === panelId || panelOwner(hitId) === panelId) {
         return null;
       }
       const zone = place === "bar" && bar ? bar : slotRect(rect, place === "bar" ? "center" : place);
-      return { panelId: hitId, place, rect: zone };
+      return { panelId: hitId, place, rect: zone, edge: place === "bar" ? hitEdge : undefined };
     };
 
     const publish = (x: number, y: number) => {
@@ -160,8 +173,8 @@ export function PanelActionsProvider({
       if (commit && moved) {
         const next = targetAt(point.x, point.y);
         if (next) {
-          if (tabId) actionsRef.current.dropTab(panelId, tabId, next.panelId, next.place);
-          else if (next.place === "bar") actionsRef.current.group(panelId, next.panelId);
+          if (tabId) actionsRef.current.dropTab(panelId, tabId, next.panelId, next.place, next.edge);
+          else if (next.place === "bar") actionsRef.current.group(panelId, next.panelId, next.edge);
           else actionsRef.current.place(panelId, next.panelId, next.place);
         }
       }
@@ -243,7 +256,7 @@ function DragOverlay({ live }: { live: LiveDrag }) {
         style={{ left: band.left, top: band.top, width: band.width, height: band.height }}
       >
         <span>{live.title}</span>
-        {live.hint ? <small>{placeLabel(live.hint.place)}</small> : null}
+        {live.hint ? <small>{placeLabel(live.hint.place, live.hint.edge)}</small> : null}
       </div>
     </div>,
     document.body,
@@ -253,6 +266,22 @@ function DragOverlay({ live }: { live: LiveDrag }) {
 function panelOwner(id: string): string {
   const colon = id.indexOf(":");
   return colon < 0 ? id : id.slice(0, colon);
+}
+
+/** The strip under the pointer. A drag layer sitting on top of the desk is skipped. */
+function barUnder(section: HTMLElement, x: number, y: number): HTMLElement | null {
+  for (const element of document.elementsFromPoint(x, y)) {
+    if (!(element instanceof Element) || element.closest(".drag-layer")) continue;
+    const bar = element.closest("[data-panel-bar]");
+    if (bar instanceof HTMLElement && section.contains(bar)) return bar;
+  }
+  return section.querySelector<HTMLElement>("[data-panel-bar]");
+}
+
+function sourceEdge(panelId: string, tabId: string): TabEdge | undefined {
+  const section = visiblePanel(panelId);
+  const tab = section?.querySelector(`[data-reorder-id="${CSS.escape(tabId)}"]`);
+  return readEdge(tab?.closest("[data-panel-bar]")?.getAttribute("data-edge"));
 }
 
 /** The desk under a visit, and panels waiting off screen, are not drop targets. */

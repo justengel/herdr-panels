@@ -1,7 +1,7 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { BarFaceItems, BarPlaceItems, VerticalNamesItem } from "../src/components/PanelChrome";
+import { BarFaceItems, BarPlaceItems, TabPlaceItems, VerticalNamesItem } from "../src/components/PanelChrome";
 import { addPanelTab, closePanelTab, findPanel, movePanel, normalizeLayout, setBarEdge, setBarFace } from "../src/layoutEdit";
 import { collapseBasis } from "../src/tabFace";
 import type { LayoutNode } from "../src/types";
@@ -134,5 +134,18 @@ describe("the layout menu bar choices", () => {
       "Bar on left",
     );
     expect(checked).not.toContain("Bar on top");
+  });
+
+  it("offers the four places for one tab and marks the current one", () => {
+    const html = renderToStaticMarkup(createElement(TabPlaceItems, { edge: "right", onEdge: () => undefined }));
+    expect(html).toContain("Place on top");
+    expect(html).toContain("Place on bottom");
+    expect(html).toContain("Place on left");
+    expect(html).toContain("Place on right");
+    expect(html.indexOf("Place on top")).toBeLessThan(html.indexOf("Place on bottom"));
+    expect(html.slice(html.indexOf('aria-checked="true"'), html.indexOf('aria-checked="true"') + 200)).toContain(
+      "Place on right",
+    );
+    expect(html).toContain("Move this tab onto the right. The other tabs stay where they are.");
   });
 });

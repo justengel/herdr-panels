@@ -58,6 +58,33 @@ export function namesRunDown(edge: TabEdge, verticalNames?: boolean, showNames =
   return edge === "left" || edge === "right";
 }
 
+/**
+ * One tab's name runs down the bar.
+ * The bar it is drawn on has to be a side, and the tab itself has to sit on a side.
+ * A top or bottom tab stays horizontal, including while a collapsed side bar is showing it.
+ */
+export function tabNameRunsDown(
+  tab: { edge?: TabEdge },
+  groupEdge: TabEdge,
+  displayedEdge: TabEdge,
+  verticalNames?: boolean,
+  showNames = true,
+): boolean {
+  if (displayedEdge !== "left" && displayedEdge !== "right") return false;
+  return namesRunDown(tab.edge ?? groupEdge, verticalNames, showNames);
+}
+
+/** The strip is one line wide when every name on it runs down. */
+export function stripNamesDown(
+  tabs: Array<{ edge?: TabEdge }>,
+  groupEdge: TabEdge,
+  displayedEdge: TabEdge,
+  verticalNames?: boolean,
+  showNames = true,
+): boolean {
+  return tabs.length > 0 && tabs.every((tab) => tabNameRunsDown(tab, groupEdge, displayedEdge, verticalNames, showNames));
+}
+
 /** A side tab is showing its name, so the bar stays wide enough for that name and its close button. */
 export function tabShowsName(
   title: string,
@@ -138,7 +165,7 @@ export function collapseBasis(node: LayoutNode, split: "row" | "column"): number
     if (node.panel.type === "tabs") {
       const names = node.panel.showNames !== false;
       const icons = node.panel.showIcons !== false;
-      if (namesRunDown(edge, node.panel.verticalNames, names)) return 42;
+      if (stripNamesDown(node.panel.tabs, edge, edge, node.panel.verticalNames, names)) return 42;
       return railBasis(edge, node.panel.tabs, names, icons) ?? 168;
     }
     // A sideways name is one line thick, the same as the icon rail.

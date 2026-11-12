@@ -319,6 +319,22 @@ describe("what a tab shows", () => {
     expect(namesRunDown("left", true, false)).toBe(false);
     expect(namesRunDown("left")).toBe(false);
     expect(collapseBasis(upright, "row")).toBe(42);
+    const mixed: LayoutNode = {
+      type: "panel",
+      id: "p",
+      collapsed: true,
+      panel: {
+        type: "tabs",
+        edge: "right",
+        active: "down",
+        verticalNames: true,
+        tabs: [
+          { id: "down", title: "Down", panel: { type: "blank" } },
+          { id: "across", title: "Across", edge: "top", panel: { type: "blank" } },
+        ],
+      },
+    };
+    expect(collapseBasis(mixed, "row")).toBe(168);
     const hiddenNames: LayoutNode = {
       type: "panel",
       id: "p",

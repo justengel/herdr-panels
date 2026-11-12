@@ -2,9 +2,11 @@ import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type 
 import { createPortal } from "react-dom";
 import type { PanelConfig, TabEdge, TabsPanel } from "../types";
 import { isDefaultPanelTitle } from "../openTitle";
-import { chevronTurn, iconRail, namesRunDown, railBasis, tabFace, tabName, tabPluginTitle } from "../tabFace";
+import { chevronTurn, iconRail, railBasis, stripNamesDown, tabFace, tabName, tabPluginTitle } from "../tabFace";
+import { frameSplits, openEdges, placeTabOn, tabEdgeOf, tabFrame, toggleStrip, toolEdge } from "../tabFrame";
 import { IconField } from "./IconField";
 import { TabMark } from "./TabMark";
+import { TabFrameLayout } from "./TabFrameLayout";
 import { TabStrip } from "./TabStrip";
 import type { MenuEntry } from "../viewMenu";
 import { fitFlyout, fitMenu, useKeepMenuOnScreen, type FlyoutBox } from "../menuPlace";
@@ -138,6 +140,38 @@ export function BarPlaceItems({ edge, onEdge }: { edge: TabEdge; onEdge: (edge: 
           role="menuitemradio"
           className="menu-radio"
           aria-checked={edge === item.edge}
+          onClick={() => onEdge(item.edge)}
+        >
+          <span className="menu-check">{edge === item.edge ? "✓" : ""}</span>
+          {item.label}
+        </button>
+      ))}
+    </>
+  );
+}
+
+const TAB_PLACES: { edge: TabEdge; label: string }[] = [
+  { edge: "top", label: "Place on top" },
+  { edge: "bottom", label: "Place on bottom" },
+  { edge: "left", label: "Place on left" },
+  { edge: "right", label: "Place on right" },
+];
+
+export function TabPlaceItems({ edge, onEdge }: { edge: TabEdge; onEdge: (edge: TabEdge) => void }) {
+  return (
+    <>
+      <div className="menu-rule" />
+      <div className="menu-label" title="Move this tab onto a strip. The other tabs stay where they are.">
+        Place
+      </div>
+      {TAB_PLACES.map((item) => (
+        <button
+          key={item.edge}
+          type="button"
+          role="menuitemradio"
+          className="menu-radio"
+          aria-checked={edge === item.edge}
+          title={`Move this tab onto the ${item.edge}. The other tabs stay where they are.`}
           onClick={() => onEdge(item.edge)}
         >
           <span className="menu-check">{edge === item.edge ? "✓" : ""}</span>
@@ -370,10 +404,22 @@ export function PanelChrome({
   }, [flyout]);
   const dragging = Boolean(panelId && drag.draggingId === panelId);
   const edge = tabs?.edge ?? tabEdge;
+  const frame = tabs ? tabFrame(tabs) : null;
+  const opened = tabs ? openEdges(tabs) : [];
+  const framed = Boolean(opened.length > 1 && tabs && onTabs && onCloseTab && !plain && !collapsed);
   const showNames = tabs ? tabs.showNames !== false : barNames;
   const showIcons = tabs ? tabs.showIcons !== false : barIcons;
-  const sideBar = edge === "left" || edge === "right";
-  const verticalNames = Boolean(tabs && namesRunDown(edge, tabs.verticalNames, showNames));
+  const sideBar = edge === "left" || edge === "right" || Boolean(frame && (frame.left.length > 0 || frame.right.length > 0));
+  const namesDown = Boolean(
+    tabs &&
+      stripNamesDown(
+        collapsed && frame && frameSplits(frame) ? tabs.tabs : tabs.tabs.filter((item) => (item.edge ?? edge) === edge),
+        edge,
+        edge,
+        tabs.verticalNames,
+        showNames,
+      ),
+  );
   const rail = tabs
     ? iconRail(edge, tabs.tabs, showNames, showIcons)
     : sideBar && !(showNames && Boolean(title.trim()));
@@ -384,7 +430,7 @@ export function PanelChrome({
   const barMenu = Boolean(tabs && onTabs && !menuTab);
   const classes = [
     "panel",
-    `edge-${edge}`,
+    framed ? "is-framed" : `edge-${edge}`,
     collapsed ? "is-collapsed" : "",
     className,
     plain ? "is-plain" : "",
@@ -570,21 +616,45 @@ export function PanelChrome({
       ? { left: menu.left, right: menu.right, top: menu.top }
       : undefined;
 
-  return (
-    <section
-      className={classes}
-      data-panel-id={panelId}
-      data-type={panelType}
-      data-kind={kind}
-      data-edge={edge}
-      data-collapsed={collapsed ? "true" : "false"}
-      tabIndex={-1}
-      onClick={(event) => {
-        onClick?.(event);
-        if (panelId) keyed.set(panelId);
-      }}
-    >
-      {plain ? (
+  function stripHeader(stripEdge: TabEdge) {
+    if (!tabs || !onTabs || !onCloseTab || !frame) return null;
+    const side = stripEdge === "left" || stripEdge === "right";
+    const stripTabs = frame[stripEdge];
+    const stripRail = side && iconRail(stripEdge, stripTabs, showNames, showIcons);
+    const stripDigits = Boolean(stripRail && railBasis(stripEdge, stripTabs, showNames, showIcons) === 36);
+    const stripVertical = stripNamesDown(stripTabs, tabs.edge, stripEdge, tabs.verticalNames, showNames);
+    const tools = toolEdge(tabs) === stripEdge;
+    return (
+      <header
+        className={["panel-header", `edge-${stripEdge}`, stripRail ? "is-rail" : "", stripDigits ? "is-digits" : "", stripVertical ? "is-vertical-names" : ""].filter(Boolean).join(" ")}
+        data-panel-bar=""
+        data-edge={stripEdge}
+        onContextMenu={(event) => openMenu(event)}
+        onPointerDown={beginDrag}
+      >
+        <button
+          type="button"
+          className="grip"
+          aria-label="Drag to rearrange"
+          title="Drag the title bar onto a side to place this panel, or the middle to swap"
+        />
+        <TabStrip
+          group={tabs}
+          edge={stripEdge}
+          onChange={onTabs}
+          onActivate={(next) => onTabs(next)}
+          onClose={onCloseTab}
+          onContextMenu={(tabId, event) => openMenu(event, tabId)}
+          onDragAway={(tabId, event) => {
+            if (panelId) drag.startTab(panelId, tabId, event);
+          }}
+        />
+        {tools ? <div className="panel-actions">{barTools}</div> : null}
+      </header>
+    );
+  }
+
+  const bars = plain ? (
         <div className="plain-actions" data-panel-bar="">
           <button
             type="button"
@@ -597,7 +667,7 @@ export function PanelChrome({
         </div>
       ) : (
         <header
-          className={["panel-header", rail ? "is-rail" : "", digitRail ? "is-digits" : "", sideBar && !tabs ? "is-spine" : "", verticalNames ? "is-vertical-names" : ""].filter(Boolean).join(" ")}
+          className={["panel-header", rail ? "is-rail" : "", digitRail ? "is-digits" : "", sideBar && !tabs ? "is-spine" : "", namesDown ? "is-vertical-names" : ""].filter(Boolean).join(" ")}
           data-panel-bar=""
           data-edge={edge}
           onContextMenu={(event) => openMenu(event)}
@@ -612,6 +682,8 @@ export function PanelChrome({
           {tabs && onTabs && onCloseTab ? (
             <TabStrip
               group={tabs}
+              edge={edge}
+              flatten={collapsed && frameSplits(tabFrame(tabs))}
               onChange={onTabs}
               onActivate={(next) => {
                 if (collapsed && panelId) panelActions.openTab(panelId, next);
@@ -638,10 +710,38 @@ export function PanelChrome({
             {barTools}
           </div>
         </header>
+  );
+
+  const body = (
+    <PanelBody panelId={panelId} panelType={panelType}>
+      {children}
+    </PanelBody>
+  );
+
+  return (
+    <section
+      className={classes}
+      data-panel-id={panelId}
+      data-type={panelType}
+      data-kind={kind}
+      data-edge={edge}
+      data-collapsed={collapsed ? "true" : "false"}
+      tabIndex={-1}
+      onClick={(event) => {
+        onClick?.(event);
+        if (panelId) keyed.set(panelId);
+      }}
+    >
+      {framed && frame ? (
+        <TabFrameLayout frame={frame} open={opened} strip={stripHeader}>
+          {body}
+        </TabFrameLayout>
+      ) : (
+        <>
+          {bars}
+          {body}
+        </>
       )}
-      <PanelBody panelId={panelId} panelType={panelType}>
-        {children}
-      </PanelBody>
       {menu && panelId
         ? createPortal(
             <>
@@ -709,13 +809,11 @@ export function PanelChrome({
                     names={showNames}
                     icons={showIcons}
                     vertical={tabs.verticalNames === true}
-                    edge={edge}
+                    open={opened}
                     onNames={(shown) => onTabs({ ...tabs, showNames: shown ? undefined : false })}
                     onIcons={(shown) => onTabs({ ...tabs, showIcons: shown ? undefined : false })}
                     onVertical={(shown) => onTabs({ ...tabs, verticalNames: shown ? true : undefined })}
-                    onEdge={(next) => {
-                      if (panelId) run(() => panelActions.edge(panelId, next));
-                    }}
+                    onToggle={(next) => onTabs(toggleStrip(tabs, next))}
                     onAdd={() => {
                       if (panelId) run(() => panelActions.addTab(panelId));
                     }}
@@ -743,7 +841,7 @@ export function PanelChrome({
                     Address bar
                   </button>
                 ) : null}
-                {tabs && onTabs && sideBar ? (
+                {tabs && onTabs && menuTab && (tabEdgeOf(menuTab, edge) === "left" || tabEdgeOf(menuTab, edge) === "right") ? (
                   <VerticalNamesItem
                     checked={tabs.verticalNames === true}
                     onToggle={() =>
@@ -962,7 +1060,14 @@ export function PanelChrome({
                       onNames={(shown) => run(() => panelActions.face(panelId, shown, showIcons))}
                       onIcons={(shown) => run(() => panelActions.face(panelId, showNames, shown))}
                     />
-                    <BarPlaceItems edge={edge} onEdge={(next) => run(() => panelActions.edge(panelId, next))} />
+                    {menuTab && tabs && onTabs ? (
+                      <TabPlaceItems
+                        edge={tabEdgeOf(menuTab, edge)}
+                        onEdge={(next) => run(() => onTabs(placeTabOn(tabs, menuTab.id, next)))}
+                      />
+                    ) : (
+                      <BarPlaceItems edge={edge} onEdge={(next) => run(() => panelActions.edge(panelId, next))} />
+                    )}
                   </div>
                 ) : null}
                 {flyout === "plugins" ? (
@@ -1400,25 +1505,26 @@ function TabMenu({
   names,
   icons,
   vertical,
-  edge,
+  open,
   onNames,
   onIcons,
   onVertical,
-  onEdge,
+  onToggle,
   onAdd,
   onClose,
 }: {
   names: boolean;
   icons: boolean;
   vertical: boolean;
-  edge: TabEdge;
+  open: readonly TabEdge[];
   onNames: (shown: boolean) => void;
   onIcons: (shown: boolean) => void;
   onVertical: (shown: boolean) => void;
-  onEdge: (edge: TabEdge) => void;
+  onToggle: (edge: TabEdge) => void;
   onAdd: () => void;
   onClose?: () => void;
 }) {
+  const side = open.includes("left") || open.includes("right");
   return (
     <>
       <button type="button" role="menuitem" className="menu-radio" onClick={onAdd}>
@@ -1446,24 +1552,28 @@ function TabMenu({
         <span className="menu-check">{names ? "✓" : ""}</span>
         Show names
       </button>
-      {edge === "left" || edge === "right" ? (
-        <VerticalNamesItem checked={vertical} onToggle={() => onVertical(!vertical)} />
-      ) : null}
+      {side ? <VerticalNamesItem checked={vertical} onToggle={() => onVertical(!vertical)} /> : null}
       <div className="menu-rule" />
-      <div className="menu-label">Bar</div>
-      {EDGES.map((item) => (
-        <button
-          key={item.edge}
-          type="button"
-          role="menuitemradio"
-          className="menu-radio"
-          aria-checked={edge === item.edge}
-          onClick={() => onEdge(item.edge)}
-        >
-          <span className="menu-check">{edge === item.edge ? "✓" : ""}</span>
-          {item.label}
-        </button>
-      ))}
+      <div className="menu-label" title="Open a strip on that side. A strip can be empty, and a tab can be dropped on it.">
+        Bar
+      </div>
+      {EDGES.map((item) => {
+        const checked = open.includes(item.edge);
+        return (
+          <button
+            key={item.edge}
+            type="button"
+            role="menuitemcheckbox"
+            className="menu-radio"
+            aria-checked={checked}
+            title="Show this strip, even when it has no tabs. Drag a tab onto it."
+            onClick={() => onToggle(item.edge)}
+          >
+            <span className="menu-check">{checked ? "✓" : ""}</span>
+            {item.label}
+          </button>
+        );
+      })}
       {onClose ? (
         <>
           <div className="menu-rule menu-rule-strong" />
