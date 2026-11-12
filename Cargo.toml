@@ -1,6 +1,6 @@
 [package]
 name = "herdr-panels"
-version = "0.1.18"
+version = "0.1.19"
 edition = "2021"
 description = "Local multi-panel browser client for Herdr"
 license = "MIT"

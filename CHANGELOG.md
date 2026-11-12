@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.19 - 2026-11-12
+
+A tab group can keep strips on more than one side at once, with one page in the middle. The gear menu checks Tabs on top, bottom, left, and right. Several can be on, including a strip with no tabs, so a tab can be dropped there.
+
+Right-click a tab, then Layout, then Place on top, bottom, left, or right. That moves only that tab. The other tabs stay where they are. A panel that is not a tab group still uses Bar on, which moves the whole bar.
+
+A side strip hides its scrollbar. The wheel still scrolls, and … marks a clipped end. Vertical names apply to tabs on the left or right.
+
 ## 0.1.18 - 2026-11-11
 
 A tab bar on the left or right can draw names down the strip. Right-click the bar and choose Vertical names. The bar stays as wide as one line of text. Top and bottom bars stay horizontal.
