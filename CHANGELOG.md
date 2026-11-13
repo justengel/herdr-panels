@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.20 - 2026-11-13
+
+The address bar follows the page a desktop browser landed on, including a redirect, on Windows and Linux. Reload and Enter open the address in the field. A shortened path, or a path that starts with ~, still opens the stored address until that text is edited. The reload mark and the field acknowledge the visit.
+
+Select works in a plugin whether or not the plugin has a permission. The highlight sits on the element when the page is zoomed, and in a browser panel when tab strips are on the top and a side.
+
 ## 0.1.19 - 2026-11-12
 
 A tab group can keep strips on more than one side at once, with one page in the middle. The gear menu checks Tabs on top, bottom, left, and right. Several can be on, including a strip with no tabs, so a tab can be dropped there.
