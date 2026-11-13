@@ -1932,24 +1932,54 @@ mod tests {
         );
     }
 
+    #[test]
+    fn the_program_is_found_beside_either_test_layout() {
+        let root = scratch();
+        let debug = root.join("debug");
+        let bin = debug.join("herdr-panels");
+        std::fs::create_dir_all(debug.join("deps")).unwrap();
+        std::fs::write(&bin, b"x").unwrap();
+        let old = debug.join("deps").join("herdr_panels-abc");
+        std::fs::write(&old, b"t").unwrap();
+        assert_eq!(program_beside(&old, "herdr-panels").unwrap(), bin);
+        let nested = debug
+            .join("build")
+            .join("herdr-panels")
+            .join("hash")
+            .join("out");
+        std::fs::create_dir_all(&nested).unwrap();
+        let new_exe = nested.join("herdr_panels-hash");
+        std::fs::write(&new_exe, b"t").unwrap();
+        assert_eq!(program_beside(&new_exe, "herdr-panels").unwrap(), bin);
+    }
+
+    /// The test harness sits in `target/debug/deps`, or under the build-script
+    /// output directory. The program itself stays in `target/debug`.
+    fn program_beside(current: &std::path::Path, name: &str) -> Option<std::path::PathBuf> {
+        let mut dir = current.parent()?;
+        loop {
+            let candidate = dir.join(name);
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+            dir = dir.parent()?;
+        }
+    }
+
     #[tokio::test]
     async fn a_running_server_is_replaced_by_a_new_process() {
         let current = std::env::current_exe().unwrap();
-        let exe = current
-            .parent()
-            .unwrap()
-            .parent()
-            .unwrap()
-            .join(if cfg!(windows) {
-                "herdr-panels.exe"
-            } else {
-                "herdr-panels"
-            });
-        assert!(
-            exe.is_file(),
-            "missing {} — build herdr-panels before this test",
-            exe.display()
-        );
+        let name = if cfg!(windows) {
+            "herdr-panels.exe"
+        } else {
+            "herdr-panels"
+        };
+        let exe = program_beside(&current, name).unwrap_or_else(|| {
+            panic!(
+                "missing {name} near {} — build herdr-panels before this test",
+                current.display()
+            )
+        });
         let dir = scratch();
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
