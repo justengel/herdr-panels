@@ -412,7 +412,8 @@ fn arm_page_url(webkit: webkit2gtk::WebView, app: AppHandle) {
         let Some(value) = result.js_value() else {
             return;
         };
-        let Some((label, live)) = page_message(&value.to_string()) else {
+        let text = value.to_string();
+        let Some((label, live)) = page_message(&text) else {
             return;
         };
         if !valid_browser_label(label) {
