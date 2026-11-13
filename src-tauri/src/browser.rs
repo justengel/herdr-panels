@@ -19,8 +19,12 @@ struct Slot {
     url: String,
     /// The last address the desk sent for this webview.
     asked: String,
-    /// The last http(s) navigation this webview was allowed to start.
-    opened: String,
+    /// The page a desk navigation just left. Empty once that navigation has committed.
+    left: String,
+    /// Labels this webview used before it was adopted. The map key is the current one.
+    known: Vec<String>,
+    /// The label to report. Adopt updates it; the webview's own label stays the one it was created with.
+    report_label: Arc<Mutex<String>>,
     view: Webview,
     generation: u64,
     shown: bool,
@@ -44,13 +48,138 @@ fn desk_should_navigate(current: &str, asked: &str, target: &str, reload: bool) 
     reload || (current != target && asked != target)
 }
 
-/// A finished load replaces the recorded address when it is the navigation we allowed
-/// and the desk does not already show it.
-fn landed_address(current: &str, opened: &str, landed: &str) -> Option<String> {
-    if opened.is_empty() || landed != opened || current == landed {
+#[derive(Debug, PartialEq, Eq)]
+enum PlaceNav {
+    Stay,
+    /// The webview is already at this address. `navigate` to the same URL does not load it again.
+    Reload,
+    Navigate,
+}
+
+fn place_navigation(current: &str, asked: &str, target: &str, reload: bool) -> PlaceNav {
+    if !desk_should_navigate(current, asked, target, reload) {
+        return PlaceNav::Stay;
+    }
+    if reload && current == target {
+        return PlaceNav::Reload;
+    }
+    PlaceNav::Navigate
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum LivePage {
+    Same,
+    /// The navigation the desk started has committed, and the address is already current.
+    Settled,
+    Moved(String),
+}
+
+fn is_http_page(url: &str) -> bool {
+    url.starts_with("http://") || url.starts_with("https://")
+}
+
+/// The address bar follows the main-frame URL the webview is actually showing.
+/// A redirect's final URL often differs from the URL the navigation callback saw.
+/// `left` is set while a desk navigation is in flight, so a late report of the page
+/// being left is not recorded as a new step.
+fn live_page(current: &str, left: &str, live: &str) -> LivePage {
+    let live = live.trim();
+    if !is_http_page(live) {
+        return LivePage::Same;
+    }
+    if !left.is_empty() && live == left && live != current {
+        return LivePage::Same;
+    }
+    if !left.is_empty() && (live == current || live != left) {
+        if live == current {
+            return LivePage::Settled;
+        }
+        return LivePage::Moved(live.to_string());
+    }
+    if live == current {
+        return LivePage::Same;
+    }
+    LivePage::Moved(live.to_string())
+}
+
+fn apply_live_page(slot: &mut Slot, live: &str) -> Option<String> {
+    match live_page(&slot.url, &slot.left, live) {
+        LivePage::Same => None,
+        LivePage::Settled => {
+            slot.left.clear();
+            None
+        }
+        LivePage::Moved(next) => {
+            slot.left.clear();
+            slot.url = next.clone();
+            Some(next)
+        }
+    }
+}
+
+/// Apply main-frame reports in the order they were observed.
+fn addresses_from_reports(current: &str, left: &str, reports: &[&str]) -> Vec<String> {
+    let mut url = current.to_string();
+    let mut left = left.to_string();
+    let mut told = Vec::new();
+    for live in reports {
+        match live_page(&url, &left, live) {
+            LivePage::Same => {}
+            LivePage::Settled => left.clear(),
+            LivePage::Moved(next) => {
+                left.clear();
+                url = next.clone();
+                told.push(next);
+            }
+        }
+    }
+    told
+}
+
+/// The desk listens on the label the webview has now.
+/// An adopted page still reports the label it was created with until that label is opened again.
+fn browser_label_now(open: &[(String, Vec<String>)], reported: &str) -> Option<String> {
+    if open.iter().any(|(key, _)| key == reported) {
+        return Some(reported.to_string());
+    }
+    open.iter().find_map(|(key, known)| {
+        known
+            .iter()
+            .any(|name| name == reported)
+            .then(|| key.clone())
+    })
+}
+
+fn remember_browser_label(known: &mut Vec<String>, from: &str) {
+    if !known.iter().any(|name| name == from) {
+        known.push(from.to_string());
+    }
+}
+
+fn current_report_label(label: &Mutex<String>) -> String {
+    label.lock().map(|value| value.clone()).unwrap_or_default()
+}
+
+/// Tell a page which panel it belongs to after its webview is adopted by a tab.
+fn page_label_script(label: &str) -> String {
+    let label = serde_json::to_string(label).unwrap_or_else(|_| "\"\"".into());
+    format!("window.__hwpUrlLabel={label};")
+}
+
+/// `label\nurl` from the page script. A quoted JavaScript string is unwrapped once.
+fn page_message(raw: &str) -> Option<(&str, &str)> {
+    let trimmed = raw.trim();
+    let trimmed = trimmed
+        .strip_prefix('"')
+        .and_then(|value| value.strip_suffix('"'))
+        .unwrap_or(trimmed);
+    let (label, live) = trimmed.split_once('\n')?;
+    let label = label.trim();
+    let live = live.trim();
+    if label.is_empty() || live.is_empty() {
         return None;
     }
-    Some(landed.to_string())
+    Some((label, live))
 }
 
 fn browser_page_script(label: &str, url: &str) -> String {
@@ -71,6 +200,9 @@ struct CssBox {
 
 pub struct BrowserHost {
     slots: Mutex<HashMap<String, Slot>>,
+    /// Main-frame URL reports. A place may already hold `slots` on this thread, so reports only queue here.
+    pages: Mutex<Vec<(String, String)>>,
+    paging: AtomicBool,
     selecting: AtomicBool,
     /// Scale of the desk window. Panel content uses `panel_zoom` instead.
     zoom: Mutex<f64>,
@@ -80,6 +212,8 @@ pub struct BrowserHost {
 pub fn host() -> BrowserHost {
     BrowserHost {
         slots: Mutex::new(HashMap::new()),
+        pages: Mutex::new(Vec::new()),
+        paging: AtomicBool::new(false),
         selecting: AtomicBool::new(false),
         zoom: Mutex::new(1.0),
         panel_zoom: Mutex::new(HashMap::new()),
@@ -92,6 +226,11 @@ fn browser_page_zoom(scale: f64) -> String {
     } else {
         1.0
     };
+    // Zoom on the root element, even at 1, is a containing block. Fixed select boxes
+    // then use a different origin than the element rectangles, by the page's inset.
+    if (scale - 1.0).abs() < f64::EPSILON {
+        return "document.documentElement.style.zoom=''".to_string();
+    }
     format!("document.documentElement.style.zoom={scale}")
 }
 
@@ -229,6 +368,59 @@ e.preventDefault();e.stopPropagation();
 post(chord);
 },true);
 })();"#;
+
+/// Client-side navigations (pushState, replaceState, hash, back) do not finish a document load.
+/// The page reports the main-frame URL. The label is in the message so one shared handler
+/// can tell panels apart.
+#[cfg(target_os = "linux")]
+fn page_url_boot(label: &str) -> String {
+    let label = serde_json::to_string(label).unwrap_or_else(|_| "\"\"".into());
+    format!(
+        r#"(function(){{
+if(window.__hwpUrlBound)return;
+window.__hwpUrlBound=true;
+  var label={label};
+  var last="";
+  function report(){{
+  var href="";
+  try{{href=String(location.href||"");}}catch(e){{return;}}
+  if(!href||href===last)return;
+  last=href;
+  var panel=label;
+  try{{if(window.__hwpUrlLabel)panel=String(window.__hwpUrlLabel);}}catch(e){{}}
+  try{{window.webkit.messageHandlers.hwpUrl.postMessage(panel+"\n"+href);}}catch(e){{}}
+  }}
+var push=history.pushState, replace=history.replaceState;
+if(typeof push==="function")history.pushState=function(){{var result=push.apply(this,arguments);report();return result;}};
+if(typeof replace==="function")history.replaceState=function(){{var result=replace.apply(this,arguments);report();return result;}};
+window.addEventListener("popstate",report);
+window.addEventListener("hashchange",report);
+}})();"#
+    )
+}
+
+#[cfg(target_os = "linux")]
+fn arm_page_url(webkit: webkit2gtk::WebView, app: AppHandle) {
+    use webkit2gtk::{UserContentManagerExt, WebViewExt};
+    let Some(manager) = webkit.user_content_manager() else {
+        return;
+    };
+    if !manager.register_script_message_handler("hwpUrl") {
+        return;
+    }
+    manager.connect_script_message_received(Some("hwpUrl"), move |_, result| {
+        let Some(value) = result.js_value() else {
+            return;
+        };
+        let Some((label, live)) = page_message(&value.to_string()) else {
+            return;
+        };
+        if !valid_browser_label(label) {
+            return;
+        }
+        report_live_page(app.clone(), label.to_string(), live.to_string());
+    });
+}
 
 /// Turn a zoom message from a browser page into the desk event that Windows sends for the same input.
 #[cfg(target_os = "linux")]
@@ -790,18 +982,6 @@ fn clip_platform_webview(platform: &tauri::webview::PlatformWebview, page: CssBo
     let _ = (platform, page, cuts);
 }
 
-fn remember_opened(app: &AppHandle, label: &str, url: &str) {
-    let Some(host) = app.try_state::<BrowserHost>() else {
-        return;
-    };
-    let Ok(mut slots) = host.slots.try_lock() else {
-        return;
-    };
-    if let Some(slot) = slots.get_mut(label) {
-        slot.opened = url.to_string();
-    }
-}
-
 fn tell_desk(app: &AppHandle, script: String) {
     let app = app.clone();
     let _ = app.clone().run_on_main_thread(move || {
@@ -811,26 +991,130 @@ fn tell_desk(app: &AppHandle, script: String) {
     });
 }
 
-/// A finished main-frame load can arrive while a place still holds the slot lock.
-/// Waiting on another thread keeps that place from deadlocking on its own navigation.
+/// A page report can arrive while a place still holds the slot lock.
+/// Queue it and apply the batch on one thread, in the order it was observed.
+fn report_live_page(app: AppHandle, label: String, live: String) {
+    if label.is_empty() || live.is_empty() {
+        return;
+    }
+    let Some(host) = app.try_state::<BrowserHost>() else {
+        return;
+    };
+    {
+        let Ok(mut pages) = host.pages.lock() else {
+            return;
+        };
+        pages.push((label, live));
+    }
+    if host.paging.swap(true, Ordering::AcqRel) {
+        return;
+    }
+    std::thread::spawn(move || drain_live_pages(app));
+}
+
+fn drain_live_pages(app: AppHandle) {
+    let Some(host) = app.try_state::<BrowserHost>() else {
+        return;
+    };
+    loop {
+        let batch = {
+            let Ok(mut pages) = host.pages.lock() else {
+                host.paging.store(false, Ordering::Release);
+                return;
+            };
+            std::mem::take(&mut *pages)
+        };
+        if batch.is_empty() {
+            host.paging.store(false, Ordering::Release);
+            let Ok(pages) = host.pages.lock() else {
+                return;
+            };
+            if pages.is_empty() {
+                return;
+            }
+            if host.paging.swap(true, Ordering::AcqRel) {
+                return;
+            }
+            continue;
+        }
+        let mut updates = Vec::new();
+        {
+            let Ok(mut slots) = host.slots.lock() else {
+                host.paging.store(false, Ordering::Release);
+                return;
+            };
+            let open: Vec<(String, Vec<String>)> = slots
+                .iter()
+                .map(|(key, slot)| (key.clone(), slot.known.clone()))
+                .collect();
+            for (label, live) in batch {
+                let Some(key) = browser_label_now(&open, &label) else {
+                    continue;
+                };
+                let Some(slot) = slots.get_mut(&key) else {
+                    continue;
+                };
+                let Some(next) = apply_live_page(slot, &live) else {
+                    continue;
+                };
+                updates.push((key, next));
+            }
+        }
+        for (label, next) in updates {
+            tell_desk(&app, browser_page_script(&label, &next));
+        }
+    }
+}
+
 fn report_finished_page(app: AppHandle, label: String, landed: Url) {
-    std::thread::spawn(move || {
-        let Some(host) = app.try_state::<BrowserHost>() else {
-            return;
-        };
-        let Ok(mut slots) = host.slots.lock() else {
-            return;
-        };
-        let Some(slot) = slots.get_mut(&label) else {
-            return;
-        };
-        let Some(next) = landed_address(&slot.url, &slot.opened, landed.as_str()) else {
-            return;
-        };
-        slot.url = next.clone();
-        drop(slots);
-        tell_desk(&app, browser_page_script(&label, &next));
-    });
+    report_live_page(app, label, landed.to_string());
+}
+
+fn watch_live_page(view: &Webview, app: AppHandle, report_label: Arc<Mutex<String>>) {
+    #[cfg(target_os = "linux")]
+    {
+        let app = app.clone();
+        let report_label = Arc::clone(&report_label);
+        let _ = view.with_webview(move |platform| {
+            use webkit2gtk::glib::prelude::ObjectExt;
+            use webkit2gtk::WebViewExt;
+            let webview = platform.inner();
+            let notify_app = app.clone();
+            let notify_label = Arc::clone(&report_label);
+            webview.connect_notify_local(Some("uri"), move |view, _| {
+                let live = view.uri().map(|uri| uri.to_string()).unwrap_or_default();
+                report_live_page(notify_app.clone(), current_report_label(&notify_label), live);
+            });
+            arm_page_url(webview, app);
+        });
+    }
+    #[cfg(windows)]
+    {
+        let _ = view.with_webview(move |platform| {
+            let Ok(webview) = (unsafe { platform.controller().CoreWebView2() }) else {
+                return;
+            };
+            let mut token = 0_i64;
+            let handler = webview2_com::SourceChangedEventHandler::create(Box::new(move |webview, _| {
+                let Some(webview) = webview else {
+                    return Ok(());
+                };
+                let mut uri = windows::core::PWSTR::null();
+                unsafe { webview.Source(&mut uri)? };
+                report_live_page(
+                    app.clone(),
+                    current_report_label(&report_label),
+                    webview2_com::take_pwstr(uri),
+                );
+                Ok(())
+            }));
+            unsafe {
+                let _ = webview.add_SourceChanged(&handler, &mut token);
+            }
+        });
+    }
+    #[cfg(not(any(windows, target_os = "linux")))]
+    let _ = (view, app, report_label);
 }
 
 #[tauri::command]
@@ -869,15 +1153,24 @@ async fn place_browser(
         if seq > 0 {
             slot.seq = seq;
         }
-        // A reload, or a page that never landed, has to navigate again. Moving the
-        // window is not enough: the address-bar reload used to leave a blank webview.
+        // A reload, or a page that never landed, has to load again. Moving the
+        // window is not enough: the address-bar reload used to leave the old document.
+        // Navigating to the URL the webview is already on does not load it again.
         // A link that already left this address must not be sent back by a later place.
-        let navigate_now = desk_should_navigate(&slot.url, &slot.asked, &target, reload);
+        let action = place_navigation(&slot.url, &slot.asked, &target, reload);
         slot.asked = target.clone();
-        if navigate_now {
-            slot.opened = target.clone();
-            slot.view.navigate(parsed).map_err(|err| err.to_string())?;
-            slot.url = target;
+        match action {
+            PlaceNav::Stay => {}
+            PlaceNav::Reload => {
+                slot.left.clear();
+                slot.view.reload().map_err(|err| err.to_string())?;
+            }
+            PlaceNav::Navigate => {
+                let previous = slot.url.clone();
+                slot.view.navigate(parsed).map_err(|err| err.to_string())?;
+                slot.left = previous;
+                slot.url = target;
+            }
         }
         place_view(
             &slot.view,
@@ -901,14 +1194,14 @@ async fn place_browser(
         .ok_or_else(|| "the desktop window is not open".to_string())?;
     let boot = select_boot();
     #[cfg(target_os = "linux")]
-    let boot = format!("{boot}\n{ZOOM_BOOT}");
+    let boot = format!("{boot}\n{ZOOM_BOOT}\n{}", page_url_boot(&label));
     let opener = app.clone();
-    let navigation_app = app.clone();
-    let navigation_label = label.clone();
     let panel_id = Arc::new(Mutex::new(
         panel_id_from_browser(&label).unwrap_or("").to_string(),
     ));
     let navigation_panel = Arc::clone(&panel_id);
+    let report_label = Arc::new(Mutex::new(label.clone()));
+    let page_label = Arc::clone(&report_label);
     let builder = tauri::webview::WebviewBuilder::new(&label, tauri::WebviewUrl::External(parsed.clone()))
         .initialization_script(boot)
         .on_navigation(move |url| {
@@ -916,12 +1209,7 @@ async fn place_browser(
                 .lock()
                 .map(|id| id.clone())
                 .unwrap_or_default();
-            let allowed = browser_panel_link(url.as_str()) == LinkNavigation::Stay
-                && navigation_permitted(&id, url.as_str());
-            if allowed {
-                remember_opened(&navigation_app, &navigation_label, url.as_str());
-            }
-            allowed
+            browser_panel_link(url.as_str()) == LinkNavigation::Stay && navigation_permitted(&id, url.as_str())
         })
         .on_new_window(move |url, _features| {
             respond_to_new_window(&opener, &url);
@@ -946,14 +1234,24 @@ async fn place_browser(
                 if payload.event() != PageLoadEvent::Finished {
                     return;
                 }
+                let reported = current_report_label(&page_label);
+                let label = if reported.is_empty() {
+                    webview.label().to_string()
+                } else {
+                    reported
+                };
                 let host = webview.state::<BrowserHost>();
-                let scale = panel_content_zoom(&host, webview.label());
+                let scale = panel_content_zoom(&host, &label);
                 if let Err(err) = webview.eval(browser_page_zoom(scale)) {
                     eprintln!("browser zoom: {err}");
                 }
+                #[cfg(target_os = "linux")]
+                {
+                    let _ = webview.eval(page_label_script(&label));
+                }
                 let landed = payload.url();
                 if landed.scheme() == "http" || landed.scheme() == "https" {
-                    report_finished_page(page_app.clone(), webview.label().to_string(), landed.clone());
+                    report_finished_page(page_app.clone(), label, landed.clone());
                 }
                 if !host.selecting.load(Ordering::Relaxed) {
                     return;
@@ -998,12 +1296,16 @@ async fn place_browser(
             }
         });
     }
+    watch_live_page(&view, app.clone(), Arc::clone(&report_label));
+    let created_as = label.clone();
     guard.insert(
         label,
         Slot {
             url: target.clone(),
             asked: target.clone(),
-            opened: target,
+            left: String::new(),
+            known: vec![created_as],
+            report_label,
             view,
             generation,
             shown: true,
@@ -1090,6 +1392,14 @@ async fn adopt_browser(
     }
     if let Some(existing) = guard.remove(&to) {
         let _ = existing.view.close();
+    }
+    remember_browser_label(&mut slot.known, &from);
+    if let Ok(mut reported) = slot.report_label.lock() {
+        *reported = to.clone();
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let _ = slot.view.eval(page_label_script(&to));
     }
     #[cfg(windows)]
     browser_wheel::rename_browser(&from, &to);
@@ -2216,6 +2526,13 @@ mod tests {
     }
 
     #[test]
+    fn a_resting_page_is_not_a_zoom_box() {
+        assert_eq!(browser_page_zoom(1.0), "document.documentElement.style.zoom=''");
+        assert_eq!(browser_page_zoom(1.5), "document.documentElement.style.zoom=1.5");
+        assert_eq!(browser_page_zoom(0.0), "document.documentElement.style.zoom=''");
+    }
+
+    #[test]
     fn browser_panels_are_placed_in_window_pixels() {
         assert_eq!(scale_bounds(10.0, 20.0, 100.0, 50.0, 1.0), (10.0, 20.0, 100.0, 50.0));
         assert_eq!(scale_bounds(10.0, 20.0, 100.0, 50.0, 1.5), (15.0, 30.0, 150.0, 75.0));
@@ -2405,15 +2722,144 @@ mod tests {
     }
 
     #[test]
-    fn a_finished_page_replaces_the_address_the_desk_opened() {
+    fn a_page_message_names_its_panel_and_address() {
         assert_eq!(
-            landed_address("https://example.com/a", "https://example.com/b", "https://example.com/b").as_deref(),
-            Some("https://example.com/b")
+            page_message("browser-panel-1\nhttps://example.com/a"),
+            Some(("browser-panel-1", "https://example.com/a"))
         );
-        assert_eq!(landed_address("https://example.com/a", "https://example.com/a", "https://example.com/a"), None);
-        assert_eq!(landed_address("https://example.com/b", "https://example.com/a", "https://example.com/b"), None);
-        assert_eq!(landed_address("https://example.com/a", "https://example.com/b", "https://example.com/c"), None);
-        assert_eq!(landed_address("https://example.com/a", "", "https://example.com/a"), None);
+        assert_eq!(
+            page_message("\"browser-panel-1:tab-2\nhttps://example.com/a#x\""),
+            Some(("browser-panel-1:tab-2", "https://example.com/a#x"))
+        );
+        assert_eq!(page_message("https://example.com"), None);
+    }
+
+    #[test]
+    fn a_live_page_is_the_address_that_actually_loaded() {
+        assert_eq!(
+            live_page("https://example.com/go", "https://example.com/a", "https://example.com/landed"),
+            LivePage::Moved("https://example.com/landed".into())
+        );
+        assert_eq!(
+            live_page("https://example.com/go", "https://example.com/a", "https://example.com/a"),
+            LivePage::Same
+        );
+        assert_eq!(
+            live_page("https://example.com/go", "https://example.com/a", "https://example.com/go"),
+            LivePage::Settled
+        );
+        assert_eq!(
+            live_page("https://example.com/go", "", "https://example.com/next"),
+            LivePage::Moved("https://example.com/next".into())
+        );
+        assert_eq!(
+            live_page("https://example.com/a", "", "https://example.com/a#section"),
+            LivePage::Moved("https://example.com/a#section".into())
+        );
+        assert_eq!(live_page("https://example.com/a", "", "about:blank"), LivePage::Same);
+        assert_eq!(live_page("https://example.com/a", "", "https://example.com/a"), LivePage::Same);
+        assert_eq!(
+            live_page("https://example.com/b", "", "https://example.com/a"),
+            LivePage::Moved("https://example.com/a".into())
+        );
+    }
+
+    #[test]
+    fn reloading_the_open_address_reloads_and_a_different_one_navigates() {
+        assert_eq!(
+            place_navigation(
+                "https://example.com/a",
+                "https://example.com/a",
+                "https://example.com/a",
+                true
+            ),
+            PlaceNav::Reload
+        );
+        assert_eq!(
+            place_navigation(
+                "https://example.com/a",
+                "https://example.com/a",
+                "https://example.com/a",
+                false
+            ),
+            PlaceNav::Stay
+        );
+        assert_eq!(
+            place_navigation(
+                "https://example.com/b",
+                "https://example.com/b",
+                "https://example.com/a",
+                true
+            ),
+            PlaceNav::Navigate
+        );
+        assert_eq!(
+            place_navigation(
+                "https://example.com/b",
+                "https://example.com/a",
+                "https://example.com/a",
+                false
+            ),
+            PlaceNav::Stay
+        );
+    }
+
+    #[test]
+    fn live_reports_keep_later_pages_and_skip_the_page_just_left() {
+        assert_eq!(
+            addresses_from_reports(
+                "https://example.com/next",
+                "https://example.com/prev",
+                &["https://example.com/prev", "https://example.com/next"]
+            ),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            addresses_from_reports(
+                "https://example.com/go",
+                "https://example.com/prev",
+                &[
+                    "https://example.com/prev",
+                    "https://example.com/landed",
+                    "https://example.com/landed#top"
+                ]
+            ),
+            vec![
+                "https://example.com/landed".to_string(),
+                "https://example.com/landed#top".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn a_renamed_browser_is_found_by_its_old_label_until_that_label_is_reused() {
+        let moved = vec![(
+            "browser-panel-1:tab-2".to_string(),
+            vec!["browser-panel-1".to_string()],
+        )];
+        assert_eq!(
+            browser_label_now(&moved, "browser-panel-1").as_deref(),
+            Some("browser-panel-1:tab-2")
+        );
+        assert_eq!(
+            browser_label_now(&moved, "browser-panel-1:tab-2").as_deref(),
+            Some("browser-panel-1:tab-2")
+        );
+        let reused = vec![
+            ("browser-panel-1".to_string(), Vec::new()),
+            (
+                "browser-panel-1:tab-2".to_string(),
+                vec!["browser-panel-1".to_string()],
+            ),
+        ];
+        assert_eq!(
+            browser_label_now(&reused, "browser-panel-1").as_deref(),
+            Some("browser-panel-1")
+        );
+        assert_eq!(
+            page_label_script("browser-panel-1:tab-2"),
+            "window.__hwpUrlLabel=\"browser-panel-1:tab-2\";"
+        );
     }
 
     #[test]

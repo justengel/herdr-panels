@@ -73,6 +73,14 @@ export function wheelPanel(panelId: string | null, onSessionBar: boolean): strin
  * Magnify the panel body. The frame stays put because `.panel-body` clips it.
  * Shrinking the box as well leaves the magnified content in the top-left corner.
  */
+/**
+ * A plugin, an HTML page, and a desktop browser zoom their own document.
+ * CSS zoom on the desk does not reach those, and applying it as well paints the page twice as large.
+ */
+export function contentZoomsItself(type: string, desktop: boolean): boolean {
+  return type === "plugin" || type === "html" || (desktop && type === "iframe");
+}
+
 export function contentScaleStyle(scale: number): { zoom: number } | undefined {
   const snapped = nearestZoom(scale);
   if (snapped === 1) return undefined;

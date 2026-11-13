@@ -1,8 +1,9 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { api } from "../api";
-import { noteAddress, visitAddress, type AddressHistory } from "../addressHistory";
+import { historyForSurface, noteAddress, visitAddress, type AddressHistory } from "../addressHistory";
 import {
   addressToCopy,
+  addressToOpen,
   charsThatFit,
   displayPath,
   expandDisplayPath,
@@ -91,7 +92,9 @@ export function LocationBar({
   const pendingVisit = useRef<string | null>(null);
   const ready = useRef(false);
   const keyRef = useRef(historyKey);
+  const memories = useRef(new Map<string, AddressHistory>());
   const inputRef = useRef<HTMLInputElement>(null);
+  const reloadRef = useRef<HTMLButtonElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const draftRef = useRef(value);
   const caretRef = useRef<number | null>(null);
@@ -115,10 +118,11 @@ export function LocationBar({
 
   useEffect(() => {
     if (keyRef.current !== historyKey) {
+      memories.current.set(keyRef.current, { entries: historyRef.current.slice(), index: indexRef.current });
       keyRef.current = historyKey;
       pendingVisit.current = null;
       ready.current = true;
-      commitHistory({ entries: value ? [value] : [], index: 0 });
+      commitHistory(historyForSurface(memories.current.get(historyKey), value));
       replaceDraft(draftFor(value), true);
       return;
     }
@@ -129,7 +133,9 @@ export function LocationBar({
     const fromBar = pendingVisit.current !== null;
     pendingVisit.current = null;
     commitHistory(noteAddress({ entries: historyRef.current, index: indexRef.current }, value, fromBar));
-    replaceDraft(draftFor(value), true);
+    const input = inputRef.current;
+    const editing = Boolean(input && document.activeElement === input && undoRef.current.length > 0);
+    if (!editing) replaceDraft(draftFor(value), true);
   }, [historyKey, value]);
 
   useLayoutEffect(() => {
@@ -379,7 +385,12 @@ export function LocationBar({
       hidden={!visible}
       onSubmit={(event) => {
         event.preventDefault();
-        openAddress(realAddress(draft.trim(), value));
+        // The field may be `~` or an ellipsis. addressToOpen keeps the stored address for those.
+        const field = inputRef.current?.value ?? draft;
+        const next = addressToOpen(value, field, true);
+        if (!next.trim()) return;
+        acknowledgeVisit(reloadRef.current, inputRef.current);
+        openAddress(next);
       }}
     >
       <button type="button" aria-label="Back" disabled={index <= 0} onClick={() => go(index - 1)}>
@@ -398,8 +409,17 @@ export function LocationBar({
           ↑
         </button>
       ) : null}
-      <button type="button" aria-label="Reload" onClick={onReload}>
-        ↻
+      <button
+        ref={reloadRef}
+        type="button"
+        aria-label="Reload"
+        onClick={() => {
+          replaceDraft(draftFor(value), true);
+          acknowledgeVisit(reloadRef.current, inputRef.current);
+          onReload?.();
+        }}
+      >
+        <span className="reload-mark">↻</span>
       </button>
       <input
         ref={inputRef}
@@ -410,7 +430,7 @@ export function LocationBar({
         autoCapitalize="off"
         autoCorrect="off"
         onFocus={() => replaceDraft(focusedAddress(value) || value, false)}
-        onBlur={() => replaceDraft(fitted(value), false)}
+        onBlur={() => replaceDraft(fitted(value), true)}
         onKeyDown={onAddressKey}
         onPaste={onAddressPaste}
         onChange={(event) => edit(event.target.value, event.target.selectionStart ?? event.target.value.length, true)}
@@ -455,6 +475,34 @@ export function LocationBar({
   );
 }
 
+/** A short press on Reload or Enter: the reload mark turns once and the field flashes. */
+function acknowledgeVisit(reload: HTMLElement | null, field: HTMLElement | null) {
+  const reduce = typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const mark = reload?.querySelector(".reload-mark");
+  if (mark instanceof HTMLElement && !reduce) {
+    mark.getAnimations().forEach((item) => item.cancel());
+    mark.animate([{ transform: "rotate(0deg)" }, { transform: "rotate(360deg)" }], {
+      duration: 420,
+      easing: "cubic-bezier(0.2, 0.7, 0.2, 1)",
+    });
+  }
+  const flash = (node: HTMLElement) => {
+    node.getAnimations().forEach((item) => item.cancel());
+    node.animate(
+      [
+        {
+          backgroundColor: "color-mix(in srgb, var(--accent) 28%, var(--bg))",
+          borderColor: "var(--accent)",
+        },
+        { backgroundColor: "var(--bg)", borderColor: "var(--line)" },
+      ],
+      { duration: reduce ? 160 : 420, easing: "ease-out" },
+    );
+  };
+  if (reload) flash(reload);
+  if (field) flash(field);
+}
+
 /** Filesystem path to open the picker near; null for URLs / plugins. */
 export function browseHint(address: string): string | null {
   const trimmed = address.trim();
@@ -484,6 +532,7 @@ export function DocumentFrame({
   onUp,
   onPluginNavigate,
   onPluginReload,
+  onForceLoad,
 }: {
   historyKey: string;
   address: string;
@@ -494,6 +543,8 @@ export function DocumentFrame({
   onUp?: () => void;
   onPluginNavigate?: (value: string) => void;
   onPluginReload?: () => void;
+  /** Load the address again when it is already the stored one. A native page ignores a repeated place. */
+  onForceLoad?: () => void;
 }) {
   const [error, setError] = useState<string | null>(null);
   const [generation, setGeneration] = useState(0);
@@ -518,6 +569,10 @@ export function DocumentFrame({
             const panel = await api.resolve(next);
             setError(null);
             onOpen(panel);
+            if (addressOf(panel) === address) {
+              setGeneration((current) => current + 1);
+              onForceLoad?.();
+            }
           } catch (err) {
             setError(err instanceof Error ? err.message : "Could not open that address");
             throw err;
@@ -525,8 +580,12 @@ export function DocumentFrame({
         }}
         onReload={() => {
           setError(null);
-          if (onPluginReload) onPluginReload();
-          else setGeneration((current) => current + 1);
+          if (onPluginReload) {
+            onPluginReload();
+            return;
+          }
+          setGeneration((current) => current + 1);
+          onForceLoad?.();
         }}
       />
       <div className="document-body" key={generation}>

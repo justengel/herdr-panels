@@ -12,9 +12,12 @@ import {
   menuObstacles,
   nativePopupUsesStill,
   placeBrowser,
+  browserLoadPending,
   snapshotBrowser,
+  takeBrowserLoad,
 } from "../../desktopBrowser";
 import { panelZoom, subscribeZoom } from "../../displayZoom";
+import { visualBox } from "../../zoomSpace";
 import {
   browserLeader,
   claimMovingBrowser,
@@ -56,6 +59,7 @@ function EmbeddedPage({ panelId, url, suspended }: { panelId: string; url: strin
   leaderRef.current = place.leader;
   hideRef.current = place.hide;
   const lastRef = useRef("");
+  const forceRef = useRef(false);
   const coverRef = useRef(false);
   const coverUrl = useRef("");
   const [note, setNote] = useState("Opening…");
@@ -63,6 +67,22 @@ function EmbeddedPage({ panelId, url, suspended }: { panelId: string; url: strin
   useEffect(() => {
     lastRef.current = "";
   }, [place.leader, place.hide, url]);
+
+  useEffect(() => {
+    const label = `browser-${panelId}`;
+    const onLoad = (event: Event) => {
+      const detail = (event as CustomEvent<{ label?: string }>).detail;
+      if (!detail || detail.label !== label) return;
+      forceRef.current = true;
+      lastRef.current = "";
+    };
+    window.addEventListener("herdr-browser-load", onLoad);
+    if (browserLoadPending(label)) {
+      forceRef.current = true;
+      lastRef.current = "";
+    }
+    return () => window.removeEventListener("herdr-browser-load", onLoad);
+  }, [panelId]);
 
   useEffect(() => {
     const label = `browser-${panelId}`;
@@ -79,7 +99,7 @@ function EmbeddedPage({ panelId, url, suspended }: { panelId: string; url: strin
       const node = hole.current;
       if (!node || stopped || !leaderRef.current) return;
       const bounds = browserBounds(
-        node.getBoundingClientRect(),
+        visualBox(node),
         suspendedRef.current || hideRef.current || browserBlocked(),
       );
       const cuts = bounds ? menuCuts(bounds, menuObstacles()) : [];
@@ -122,10 +142,14 @@ function EmbeddedPage({ panelId, url, suspended }: { panelId: string; url: strin
         lastRef.current = "";
       }
       const key = browserSlotKey(bounds, cuts);
-      const again = Boolean(bounds && refresh);
+      const again = Boolean(bounds && (refresh || forceRef.current || browserLoadPending(label)));
       if (key === lastRef.current && !again) return;
       lastRef.current = key;
-      if (again) refresh = false;
+      if (again) {
+        refresh = false;
+        forceRef.current = false;
+        takeBrowserLoad(label);
+      }
       void placeBrowser(label, url, bounds, generation, cuts, again).then(
         () => {
           if (stopped) return;

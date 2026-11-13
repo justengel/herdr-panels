@@ -1,3 +1,5 @@
+import { visualBox } from "./zoomSpace";
+
 export interface BrowserBox {
   x: number;
   y: number;
@@ -114,7 +116,12 @@ export const BROWSER_OVERLAYS = [
 ].join(", ");
 
 export function menuObstacles(): BrowserBox[] {
-  return overlayBoxes(document.querySelectorAll(BROWSER_OVERLAYS));
+  if (typeof document === "undefined") return [];
+  return overlayBoxes(
+    [...document.querySelectorAll(BROWSER_OVERLAYS)].map((node) => ({
+      getBoundingClientRect: () => visualBox(node),
+    })),
+  );
 }
 
 export function overlayBoxes(nodes: Iterable<{ getBoundingClientRect(): { left: number; top: number; width: number; height: number } }>): BrowserBox[] {
@@ -140,6 +147,23 @@ export function browserBlocked(): boolean {
 
 let generation = 0;
 let placeSeq = 0;
+const loads = new Set<string>();
+
+/** Ask the native page to load again. The next place consumes this once it can see the panel. */
+export function requestBrowserLoad(label: string) {
+  loads.add(label);
+  if (typeof window !== "undefined" && typeof window.dispatchEvent === "function") {
+    window.dispatchEvent(new CustomEvent("herdr-browser-load", { detail: { label } }));
+  }
+}
+
+export function browserLoadPending(label: string): boolean {
+  return loads.has(label);
+}
+
+export function takeBrowserLoad(label: string): boolean {
+  return loads.delete(label);
+}
 
 function nextPlaceSeq(): number {
   placeSeq += 1;

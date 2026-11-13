@@ -1205,7 +1205,23 @@ body.panel-dragging, body.panel-dragging * { cursor: grabbing !important; user-s
   padding: 0;
 }
 
+.location-bar button:hover:not(:disabled) {
+  border-color: var(--line-strong);
+  background: color-mix(in srgb, var(--text) 7%, var(--bg));
+}
+
+.location-bar button:active:not(:disabled) {
+  transform: translateY(1px);
+  border-color: var(--line-strong);
+  background: color-mix(in srgb, var(--text) 14%, var(--bg));
+}
+
 .location-bar button:disabled { opacity: 0.35; }
+
+.location-bar .reload-mark {
+  display: block;
+  line-height: 1;
+}
 
 .location-bar button svg {
   display: block;

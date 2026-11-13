@@ -12,6 +12,149 @@
     return { x, y, left: x, top: y, width, height, right: x + width, bottom: y + height };
   }
 
+  function cssZoom(node) {
+    let zoom = 1;
+    let current = node instanceof Element ? node : null;
+    while (current) {
+      const value = Number(getComputedStyle(current).zoom);
+      if (value > 0) zoom *= value;
+      current = current.parentElement;
+    }
+    return zoom;
+  }
+
+  // Same rules as web/src/selectFit.ts. A child webview inset by the top and side
+  // strips can report element boxes in window coordinates while position:fixed and
+  // the pointer use the webview's own origin.
+  let bias = null;
+  let biasZoom = "";
+  let fitMode = null;
+
+  function zoomKey() {
+    const root = document.documentElement;
+    return root ? String(root.style.zoom || "") : "";
+  }
+
+  function spaceBias() {
+    const key = zoomKey();
+    if (bias && biasZoom === key) return bias;
+    biasZoom = key;
+    fitMode = null;
+    bias = { x: 0, y: 0 };
+    const parent = document.body || document.documentElement;
+    if (!parent) return bias;
+    const probe = document.createElement("div");
+    probe.setAttribute("data-hwp-probe", "");
+    probe.style.cssText =
+      "position:fixed;left:0;top:0;width:8px;height:8px;z-index:2147483647;background:#000;pointer-events:auto;";
+    try {
+      parent.append(probe);
+      const rect = probe.getBoundingClientRect();
+      const hit = document.elementFromPoint(1, 1);
+      const x = Number(rect.left) || 0;
+      const y = Number(rect.top) || 0;
+      if (hit === probe && (Math.abs(x) >= 1 || Math.abs(y) >= 1)) bias = { x, y };
+    } catch (err) {
+      bias = { x: 0, y: 0 };
+    } finally {
+      probe.remove();
+    }
+    return bias;
+  }
+
+  function shift(rect, offset) {
+    return asRect({
+      x: rect.left - offset.x,
+      y: rect.top - offset.y,
+      width: rect.width,
+      height: rect.height,
+    });
+  }
+
+  function scaleRect(rect, zoom) {
+    return asRect({ x: rect.left * zoom, y: rect.top * zoom, width: rect.width * zoom, height: rect.height * zoom });
+  }
+
+  function hits(node, box) {
+    if (!node || box.width < 1 || box.height < 1) return false;
+    const found = document.elementFromPoint(box.left + Math.min(1, box.width / 2), box.top + Math.min(1, box.height / 2));
+    return Boolean(found && (found === node || node.contains(found) || found.contains(node)));
+  }
+
+  function fitRect(rect, node) {
+    const shifted = shift(asRect(rect), spaceBias());
+    const zoom = node ? cssZoom(node) : 1;
+    if (!(zoom > 0) || Math.abs(zoom - 1) < 0.001) return shifted;
+    if (fitMode === "raw") return shifted;
+    if (fitMode === "times") return scaleRect(shifted, zoom);
+    if (fitMode === "divide") return scaleRect(shifted, 1 / zoom);
+    if (hits(node, shifted)) {
+      fitMode = "raw";
+      return shifted;
+    }
+    const grown = scaleRect(shifted, zoom);
+    if (hits(node, grown)) {
+      fitMode = "times";
+      return grown;
+    }
+    const shrunk = scaleRect(shifted, 1 / zoom);
+    if (hits(node, shrunk)) {
+      fitMode = "divide";
+      return shrunk;
+    }
+    return shifted;
+  }
+
+  function seenBox(rect, node) {
+    return fitRect(rect, node);
+  }
+
+  function seenRect(node) {
+    return fitRect(node.getBoundingClientRect(), node);
+  }
+
+  function cssForVisual(visual, landed) {
+    const sx = visual.width > 0 ? landed.width / visual.width : 1;
+    const sy = visual.height > 0 ? landed.height / visual.height : 1;
+    if (!Number.isFinite(sx) || !Number.isFinite(sy) || sx === 0 || sy === 0) return visual;
+    const ox = landed.left - visual.left * sx;
+    const oy = landed.top - visual.top * sy;
+    return {
+      left: (visual.left - ox) / sx,
+      top: (visual.top - oy) / sy,
+      width: visual.width / sx,
+      height: visual.height / sy,
+    };
+  }
+
+  function pin(node, visual) {
+    const landed = node.getBoundingClientRect();
+    const offset = spaceBias();
+    const css = cssForVisual(visual, {
+      left: landed.left - offset.x,
+      top: landed.top - offset.y,
+      width: landed.width,
+      height: landed.height,
+    });
+    node.style.left = `${css.left}px`;
+    node.style.top = `${css.top}px`;
+    node.style.width = `${css.width}px`;
+    node.style.height = `${css.height}px`;
+  }
+
+  function pinPoint(node, left, top) {
+    node.style.left = `${left}px`;
+    node.style.top = `${top}px`;
+    const landed = node.getBoundingClientRect();
+    const offset = spaceBias();
+    const css = cssForVisual(
+      { left, top, width: 8, height: 8 },
+      { left: landed.left - offset.x, top: landed.top - offset.y, width: 8, height: 8 },
+    );
+    node.style.left = `${css.left}px`;
+    node.style.top = `${css.top}px`;
+  }
+
   function covered(rect, marquee) {
     const area = rect.width * rect.height;
     if (area <= 0) return false;
@@ -36,11 +179,11 @@
 
   function selectable(node) {
     if (!(node instanceof Element)) return false;
-    if (node.closest(".hwp-select-ui")) return false;
+    if (node.closest(".hwp-select-ui") || node.closest("[data-hwp-probe]")) return false;
     const svg = node.namespaceURI === "http://www.w3.org/2000/svg";
     if (svg && node.tagName.toLowerCase() !== "svg") return false;
     if (!(node instanceof HTMLElement) && !svg) return false;
-    const rect = node.getBoundingClientRect();
+    const rect = seenRect(node);
     return rect.width >= 2 && rect.height >= 2;
   }
 
@@ -48,7 +191,7 @@
     const item = element.closest(ITEM);
     if (!(item instanceof Element) || item === element) return element;
     if (item.closest(".hwp-select-ui")) return element;
-    const rect = asRect(item.getBoundingClientRect());
+    const rect = seenRect(item);
     if (covered(rect, marquee) || centerInside(rect, marquee)) return item;
     return element;
   }
@@ -59,7 +202,7 @@
     const root = document.body || document.documentElement;
     for (const node of root.querySelectorAll("*")) {
       if (!selectable(node)) continue;
-      const rect = asRect(node.getBoundingClientRect());
+      const rect = seenRect(node);
       if (!covered(rect, marquee) && !centerInside(rect, marquee)) continue;
       hits.push(node);
     }
@@ -81,8 +224,8 @@
   function collapseOverlaps(elements) {
     const kept = [];
     for (const element of elements) {
-      const rect = asRect(element.getBoundingClientRect());
-      const index = kept.findIndex((other) => overlapRatio(rect, asRect(other.getBoundingClientRect())) > 0.85);
+      const rect = seenRect(element);
+      const index = kept.findIndex((other) => overlapRatio(rect, seenRect(other)) > 0.85);
       if (index < 0) {
         kept.push(element);
         continue;
@@ -109,7 +252,7 @@
   }
 
   function record(element) {
-    const rect = element.getBoundingClientRect();
+    const rect = seenRect(element);
     return {
       tag: element.tagName.toLowerCase(),
       text: textOf(element),
@@ -157,6 +300,9 @@
 
     window.__hwpSetSelect = (on) => {
       enabled = Boolean(on);
+      bias = null;
+      biasZoom = "";
+      fitMode = null;
       drag = null;
       if (!enabled) chosen = [];
       whenReady(() => {
@@ -196,9 +342,9 @@
           if (!draw) send({ type: "select-pointer", phase: "move", x: event.clientX, y: event.clientY });
           return;
         }
-        const rect = element.getBoundingClientRect();
+        const rect = seenRect(element);
         const local = { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
-        if (layer) layer.hover(asRect(rect));
+        if (layer) layer.hover(rect);
         else if (!draw) send({ type: "select-hover", rect: local });
         if (!draw) send({ type: "select-pointer", phase: "move", x: event.clientX, y: event.clientY });
       },
@@ -362,13 +508,27 @@
 
       return {
         hover(rect) {
-          boxes.replaceChildren(rect ? paint(rect, false) : "");
+          if (!rect) {
+            boxes.replaceChildren();
+            return;
+          }
+          const node = paint(rect, false);
+          boxes.replaceChildren(node);
+          pin(node, rect);
         },
         marquee(rect) {
-          boxes.replaceChildren(rect ? paint(rect, true) : "");
+          if (!rect) {
+            boxes.replaceChildren();
+            return;
+          }
+          const node = paint(rect, true);
+          boxes.replaceChildren(node);
+          pin(node, rect);
         },
         boxes(elements) {
-          boxes.replaceChildren(...elements.map((element) => paint(asRect(element.getBoundingClientRect()), false)));
+          const drawn = elements.map((element) => ({ node: paint(seenRect(element), false), element }));
+          boxes.replaceChildren(...drawn.map((item) => item.node));
+          for (const item of drawn) pin(item.node, seenRect(item.element));
         },
         pick(elements, dragged) {
           this.boxes(elements);
@@ -384,12 +544,11 @@
           }
           label.textContent = elements.length === 1 ? elements[0].tagName.toLowerCase() : `${elements.length} items`;
           status.textContent = "";
-          const bounds = union(elements.map((element) => asRect(element.getBoundingClientRect())));
+          const bounds = union(elements.map((element) => seenRect(element)));
           const below = bounds.bottom + 8;
           const top = below + 36 < window.innerHeight ? below : Math.max(8, bounds.top - 40);
           menu.style.display = "flex";
-          menu.style.top = `${top}px`;
-          menu.style.left = `${Math.min(Math.max(8, bounds.left), window.innerWidth - 280)}px`;
+          pinPoint(menu, Math.min(Math.max(8, bounds.left), window.innerWidth - 280), top);
         },
         clear() {
           boxes.replaceChildren();
@@ -684,7 +843,7 @@
 
     /** Ask the desktop app for a pixel snapshot of this webview, cropped to the selection. */
     async function nativeShot(elements) {
-      const bounds = union(elements.map((element) => asRect(element.getBoundingClientRect())));
+      const bounds = union(elements.map((element) => seenRect(element)));
       const left = Math.max(0, bounds.left);
       const top = Math.max(0, bounds.top);
       const right = Math.min(window.innerWidth, bounds.right);
@@ -713,7 +872,7 @@
     }
 
     async function rasterSvg(elements) {
-      const bounds = union(elements.map((element) => asRect(element.getBoundingClientRect())));
+      const bounds = union(elements.map((element) => seenRect(element)));
       const scale = window.devicePixelRatio || 1;
       const canvas = document.createElement("canvas");
       canvas.width = Math.max(1, Math.round(bounds.width * scale));
@@ -725,7 +884,7 @@
       ctx.fillRect(0, 0, canvas.width, canvas.height);
       const body = elements
         .map((element) => {
-          const rect = asRect(element.getBoundingClientRect());
+          const rect = seenRect(element);
           const html = String(element.outerHTML || "").replace(/<script[\s\S]*?<\/script>/gi, "");
           return `<div style="position:absolute;left:${rect.left - bounds.left}px;top:${rect.top - bounds.top}px">${html}</div>`;
         })
@@ -750,7 +909,7 @@
     }
 
     async function paintElements(elements) {
-      const bounds = union(elements.map((element) => asRect(element.getBoundingClientRect())));
+      const bounds = union(elements.map((element) => seenRect(element)));
       if (bounds.width < 1 || bounds.height < 1) throw new Error("That selection has no visible area");
       const scale = window.devicePixelRatio || 1;
       const canvas = document.createElement("canvas");
@@ -769,7 +928,7 @@
       if (!(element instanceof Element) || element.closest(".hwp-select-ui")) return;
       const style = getComputedStyle(element);
       if (style.display === "none" || style.visibility === "hidden") return;
-      const rect = asRect(element.getBoundingClientRect());
+      const rect = seenRect(element);
       const x = rect.left - bounds.left;
       const y = rect.top - bounds.top;
       const bg = usableColor(style.backgroundColor);
@@ -801,7 +960,7 @@
       range.selectNodeContents(node);
       const rect = range.getBoundingClientRect();
       range.detach();
-      return asRect(rect);
+      return seenBox(rect, node.parentElement || document.documentElement);
     }
 
     function wrapText(ctx, text, x, y, width, line) {
@@ -930,7 +1089,7 @@
     async function readElement(element) {
       const text = textOf(element).slice(0, 20000);
       const html = String(element.outerHTML || "").slice(0, 80000);
-      const rect = element.getBoundingClientRect();
+      const rect = seenRect(element);
       if (rect.width < 1 || rect.height < 1) return { text, html, png: "" };
       try {
         const blob = await raster([element]);

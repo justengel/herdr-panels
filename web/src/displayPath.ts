@@ -95,6 +95,26 @@ export function middleEllipsis(path: string, maxChars: number): string {
   return `${head.slice(0, budget)}…${sep}${leaf}`;
 }
 
+/**
+ * Enter follows text the user typed. An unedited field follows the stored address,
+ * not the shortened text on screen.
+ */
+/** The field is showing the stored address, including `~` and the middle ellipsis. */
+function showsStoredAddress(stored: string, field: string): boolean {
+  if (!field || field === stored) return true;
+  const display = displayPath(stored, guessHome(stored));
+  if (field === display) return true;
+  return field.includes("…") && !display.includes("…") && field.length < display.length;
+}
+
+export function addressToOpen(stored: string, field: string, edited: boolean): string {
+  const saved = stored.trim();
+  const typedField = field.trim();
+  if (!edited || showsStoredAddress(saved, typedField)) return saved;
+  const typed = expandDisplayPath(typedField, guessHome(saved) || guessHome(typedField));
+  return typed || saved;
+}
+
 /** Unshortened address for focus and copy. A home path stays `~`, the same form as the idle field. */
 export function focusedAddress(value: string): string {
   const trimmed = value.trim();

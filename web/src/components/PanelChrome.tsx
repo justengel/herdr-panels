@@ -12,7 +12,7 @@ import type { MenuEntry } from "../viewMenu";
 import { fitFlyout, fitMenu, useKeepMenuOnScreen, type FlyoutBox } from "../menuPlace";
 import { useKeyedPanel } from "../deskKeyboard";
 import { desktopHost } from "../desktopBrowser";
-import { contentScaleStyle, PanelScaleProvider, usePanelZoom } from "../displayZoom";
+import { contentScaleStyle, contentZoomsItself, PanelScaleProvider, usePanelZoom } from "../displayZoom";
 import { usePanelActions, usePanelDrag } from "../panelActions";
 import { api } from "../api";
 import { useDesk } from "../desk";
@@ -201,10 +201,7 @@ function PanelBody({
   const scale = usePanelZoom(panelId);
   // A plugin or HTML page is a sandboxed frame, so it zooms its own document.
   // A desktop browser is a separate webview. CSS zoom on this page reaches neither.
-  const ownDocument =
-    panelType === "plugin" ||
-    panelType === "html" ||
-    (desktopHost() !== null && panelType === "iframe");
+  const ownDocument = contentZoomsItself(panelType, desktopHost() !== null);
   const style = ownDocument || panelType === "herdr" ? undefined : contentScaleStyle(scale);
   if (panelType === "tabs") {
     return (

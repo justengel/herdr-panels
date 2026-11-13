@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   addressToCopy,
+  addressToOpen,
   charsThatFit,
   displayPath,
   expandDisplayPath,
@@ -77,5 +78,31 @@ describe("focused address", () => {
     expect(addressToCopy(stored, fitted, false, true)).toBe(shown);
     expect(addressToCopy(stored, "C:/tmp/other.html", true, true)).toBe("C:/tmp/other.html");
     expect(addressToCopy(stored, "charts", false, false)).toBe("charts");
+  });
+});
+
+describe("opening the address that is shown", () => {
+  const stored = "/home/me/projects/herdr-panels/notes/a.md";
+
+  it("follows the stored address when the field is only shortened", () => {
+    const fitted = middleEllipsis(displayPath(stored, guessHome(stored)), 16);
+    expect(fitted).not.toBe(stored);
+    expect(addressToOpen(stored, fitted, false)).toBe(stored);
+    expect(addressToOpen(stored, focusedAddress(stored), false)).toBe(stored);
+  });
+
+  it("follows a path the user typed, including a home shortcut", () => {
+    expect(addressToOpen(stored, "~/other/note.md", true)).toBe("/home/me/other/note.md");
+    expect(addressToOpen("https://example.com/a", "https://example.com/b", true)).toBe("https://example.com/b");
+  });
+
+  it("follows the stored address when a shortened field is still marked edited", () => {
+    const fitted = middleEllipsis(displayPath(stored, guessHome(stored)), 16);
+    expect(fitted.includes("…")).toBe(true);
+    expect(addressToOpen(stored, fitted, true)).toBe(stored);
+    expect(addressToOpen(stored, focusedAddress(stored), true)).toBe(stored);
+    expect(addressToOpen("https://example.com/very/long/path/here", "https://example.com/…/here", true)).toBe(
+      "https://example.com/very/long/path/here",
+    );
   });
 });

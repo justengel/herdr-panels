@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { BROWSER_OVERLAYS, browserBounds, browserSlotKey, hideBrowserPanels, isRemotePage, menuCuts, nativePopupUsesStill, overlayBoxes } from "../src/desktopBrowser";
+import { BROWSER_OVERLAYS, browserBounds, browserLoadPending, browserSlotKey, hideBrowserPanels, isRemotePage, menuCuts, nativePopupUsesStill, overlayBoxes, requestBrowserLoad, takeBrowserLoad } from "../src/desktopBrowser";
 
 describe("a browser panel covers its own rectangle", () => {
   it("places a webview on the panel content", () => {
@@ -62,6 +62,14 @@ describe("a browser panel covers its own rectangle", () => {
     expect(isRemotePage("http://127.0.0.1:8080/app")).toBe(true);
     expect(isRemotePage("/proxy/http/127.0.0.1/")).toBe(false);
     expect(isRemotePage("notes/welcome.md")).toBe(false);
+  });
+
+  it("remembers a reload until the native page can run it", () => {
+    requestBrowserLoad("browser-notes");
+    expect(browserLoadPending("browser-notes")).toBe(true);
+    expect(browserLoadPending("browser-other")).toBe(false);
+    expect(takeBrowserLoad("browser-notes")).toBe(true);
+    expect(browserLoadPending("browser-notes")).toBe(false);
   });
 
   it("keeps the same browser panel when it is locked", () => {

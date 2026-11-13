@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import type { AgentView, Attachment, GridNode, LayoutNode, PaneView, PanelConfig, TabEdge, TabsPanel, WorkspaceView } from "../types";
 import { api } from "../api";
 import { baseName, samePath } from "../paths";
@@ -23,6 +24,7 @@ import { BorrowSlot } from "../borrowKeep";
 import { useBrowserRole, useKeptIds, useStayFill, useVisitIds } from "../browserPlace";
 import { usePanelActions } from "../panelActions";
 import { PanelChrome } from "./PanelChrome";
+import { requestBrowserLoad } from "../desktopBrowser";
 import { addressOf, DocumentFrame } from "./LocationBar";
 import { OpenAddressDialog } from "./OpenAddressDialog";
 import { PinDialog, type PinDialogResult } from "./PinDialog";
@@ -736,14 +738,23 @@ function DocumentSurface({
   const modify = panel.type === "plugin" && bar.modify;
   const liveCommand = command && command.pluginId === pluginId ? command : null;
 
+  const pageRef = useRef(panel);
+  pageRef.current = panel;
+
   useEffect(() => {
-    if (panel.type !== "iframe") return;
+    if (pageRef.current.type !== "iframe") return;
     const label = `browser-${id}`;
-    const page = panel;
     const onPage = (event: Event) => {
       const detail = (event as CustomEvent<{ label?: string; url?: string }>).detail;
+      const page = pageRef.current;
+      if (page.type !== "iframe") return;
       if (!detail || detail.label !== label || typeof detail.url !== "string" || detail.url === page.url) return;
-      onPanel(id, { ...page, url: detail.url });
+      const next = { ...page, url: detail.url };
+      pageRef.current = next;
+      // Each address has to commit before the next one, or Back never sees the page in between.
+      flushSync(() => {
+        onPanel(id, next);
+      });
     };
     window.addEventListener("herdr-browser-page", onPage);
     return () => window.removeEventListener("herdr-browser-page", onPage);
@@ -794,6 +805,13 @@ function DocumentSurface({
       }
       onPluginNavigate={modify ? navigatePlugin : undefined}
       onPluginReload={modify ? reloadPlugin : undefined}
+      onForceLoad={
+        panel.type === "iframe"
+          ? () => {
+              requestBrowserLoad(`browser-${id}`);
+            }
+          : undefined
+      }
     >
       {panel.type === "markdown" && !showsRawText(panel) ? (
         <MarkdownView path={panel.path} design={design.enabled} onPick={({ tag, text }) => pick(tag, text)} />

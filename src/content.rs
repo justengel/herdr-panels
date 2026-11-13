@@ -90,13 +90,22 @@ pub fn inject_frame_keys(html: &str) -> String {
     insert_script(html, &format!("<script>{FRAME_KEYS}</script>"))
 }
 
+const SELECT_BOOT: &str = r#"window.__hwpInstallSelect({draw:false,send:function(message){try{parent.postMessage(Object.assign({source:"hwp-panel"},message),"*")}catch(err){}}});"#;
+
+/// The desk's Select tool. This is not a plugin permission: the person opened the page.
+pub fn inject_select(html: &str) -> String {
+    if html.contains("/* hwp-frame-select */") {
+        return html.to_string();
+    }
+    insert_script(html, &format!("<script>\n{FRAME_SELECT}\n{SELECT_BOOT}\n</script>"))
+}
+
 pub fn inject_bridge(html: &str) -> String {
-    let html = inject_frame_keys(html);
+    let html = inject_select(&inject_frame_keys(html));
     if html.contains("/* hwp-bridge */") {
         return html;
     }
-    let script = format!("<script>{FRAME_SELECT}\n{BRIDGE}</script>");
-    insert_script(&html, &script)
+    insert_script(&html, &format!("<script>\n{BRIDGE}\n</script>"))
 }
 
 fn insert_script(html: &str, script: &str) -> String {

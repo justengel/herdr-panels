@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
-import { usePanelScaleStyle } from "../displayZoom";
+import { desktopHost } from "../desktopBrowser";
+import { contentZoomsItself, usePanelScaleStyle } from "../displayZoom";
 import type { PanelConfig, PanelTab, TabsPanel } from "../types";
 
 export function TabGroup({
@@ -13,10 +14,13 @@ export function TabGroup({
 }) {
   const active = group.tabs.find((tab) => tab.id === group.active) ?? group.tabs[0];
   const scaleStyle = usePanelScaleStyle();
+  // The group's zoom must not wrap a page that zooms its own document. That second zoom
+  // moves the select box off the element, most visibly when a side strip insets the page.
+  const ownPage = active ? contentZoomsItself(active.panel.type, desktopHost() !== null) : false;
 
   return (
     <div className="tab-body">
-      <div className="panel-scale" style={scaleStyle}>
+      <div className="panel-scale" style={ownPage ? undefined : scaleStyle}>
         {active
           ? renderContent(active, (panel) => {
               const title = active.title === "New tab" ? titleFor(panel) ?? active.title : active.title;

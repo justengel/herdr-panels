@@ -26,6 +26,7 @@ import {
 import {
   consumeZoomWheel,
   contentScaleStyle,
+  contentZoomsItself,
   keyZoom,
   nearestZoom,
   parseStoredZooms,
@@ -303,6 +304,15 @@ describe("display zoom", () => {
     expect(wheelPanel("notes", false)).toBe("notes");
     expect(wheelPanel(null, false)).toBeNull();
     expect(wheelPanel("notes", true)).toBeNull();
+  });
+
+  it("lets a plugin and a browser page zoom themselves", () => {
+    expect(contentZoomsItself("plugin", false)).toBe(true);
+    expect(contentZoomsItself("html", false)).toBe(true);
+    expect(contentZoomsItself("iframe", true)).toBe(true);
+    expect(contentZoomsItself("iframe", false)).toBe(false);
+    expect(contentZoomsItself("markdown", true)).toBe(false);
+    expect(contentZoomsItself("tabs", true)).toBe(false);
   });
 
   it("scales panel content in place and enlarges terminal glyphs", () => {

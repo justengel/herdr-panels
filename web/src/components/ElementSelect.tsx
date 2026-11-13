@@ -13,7 +13,9 @@ import {
   settleDisclosure,
   withTimeout,
 } from "../shotElement";
-import { intersects, shiftRect, toFrame, type LocalRect } from "../frameSelect";
+import { frameBox, framePoint, frameRect, intersects, scaledRect, type LocalRect } from "../frameSelect";
+import { boxBias, shiftBox } from "../selectFit";
+import { visualBox, visualScale } from "../zoomSpace";
 import { keepScreenshot, screenshotFileName, screenshotOffer, writeClipboardPng } from "../screenshotOffer";
 
 interface Props {
@@ -141,13 +143,13 @@ export function ElementSelect({ onNotice, onClose, onPrepareShot }: Props) {
         return;
       }
       const element = clickTarget(event.target);
-      setHover(element ? boxOf(element.getBoundingClientRect()) : null);
+      setHover(element ? elementBox(element) : null);
     };
     let hoverTicket = 0;
     const scheduleHover = (frame: HTMLIFrameElement, x: number, y: number) => {
       const ticket = ++hoverTicket;
-      const origin = frame.getBoundingClientRect();
-      void pointHit(frame, x - origin.left, y - origin.top).then((piece) => {
+      const local = pointInFrame(frame, x, y);
+      void pointHit(frame, local.x, local.y).then((piece) => {
         if (ticket !== hoverTicket || drag.current) return;
         setHover(piece ? piece.rect : null);
       });
@@ -168,8 +170,8 @@ export function ElementSelect({ onNotice, onClose, onPrepareShot }: Props) {
       if (frame && !start.moved) {
         drag.current = null;
         const id = ++stamp;
-        const origin = frame.getBoundingClientRect();
-        void pointHit(frame, event.clientX - origin.left, event.clientY - origin.top).then((piece) => {
+        const local = pointInFrame(frame, event.clientX, event.clientY);
+        void pointHit(frame, local.x, local.y).then((piece) => {
           if (id !== stamp) return;
           if (piece) remember([piece]);
         });
@@ -194,19 +196,19 @@ export function ElementSelect({ onNotice, onClose, onPrepareShot }: Props) {
       if (!data || data.source !== "hwp-panel" || !data.type?.startsWith("select")) return;
       const frame = frameFor(event.source);
       if (!frame) return;
-      const origin = frame.getBoundingClientRect();
+      const space = frameSpace(frame);
       if (data.type === "select-ready") {
         frame.dataset.selectBridge = "1";
         return;
       }
       if (data.type === "select-hover") {
         if (drag.current) return;
-        setHover(data.rect ? shiftRect(origin, data.rect) : null);
+        setHover(data.rect ? frameRect(space.layout, space.zoom, data.rect) : null);
         return;
       }
       if (data.type === "select-marquee") {
         setHover(null);
-        setMarquee(data.rect ? shiftRect(origin, data.rect) : null);
+        setMarquee(data.rect ? frameRect(space.layout, space.zoom, data.rect) : null);
         return;
       }
       if (data.type === "select-clear") {
@@ -235,7 +237,7 @@ export function ElementSelect({ onNotice, onClose, onPrepareShot }: Props) {
             if (piece.frame !== frame) return piece;
             const next = elements[index];
             index += 1;
-            return { ...piece, text: next.text, rect: shiftRect(origin, next.rect) };
+            return { ...piece, text: next.text, rect: frameRect(space.layout, space.zoom, next.rect) };
           });
           chosen.current = pieces;
           const rects = pieces.map((piece) => piece.rect);
@@ -244,8 +246,9 @@ export function ElementSelect({ onNotice, onClose, onPrepareShot }: Props) {
         return;
       }
       if (data.type === "select-pointer" && drag.current) {
-        const x = origin.left + (data.x ?? 0);
-        const y = origin.top + (data.y ?? 0);
+        const placed = frameRect(space.layout, space.zoom, { x: data.x ?? 0, y: data.y ?? 0, width: 0, height: 0 });
+        const x = placed.left;
+        const y = placed.top;
         if (data.phase === "up") finishDrag(x, y);
         else if (data.phase === "move") {
           const gesture = drag.current;
@@ -490,6 +493,20 @@ function frameFor(source: MessageEventSource | null): HTMLIFrameElement | null {
   return null;
 }
 
+function frameSpace(frame: HTMLIFrameElement) {
+  const raw = frame.getBoundingClientRect();
+  return { layout: shiftBox(raw, boxBias(frame.ownerDocument)), zoom: visualScale(frame) };
+}
+
+function pointInFrame(frame: HTMLIFrameElement, clientX: number, clientY: number) {
+  const space = frameSpace(frame);
+  return framePoint(space.layout, space.zoom, clientX, clientY);
+}
+
+function elementBox(element: Element): Box {
+  return visualBox(element);
+}
+
 function pieceFromElement(element: Element): Piece {
   return {
     live: element,
@@ -498,12 +515,13 @@ function pieceFromElement(element: Element): Piece {
     text: textOf(element),
     html: element.outerHTML,
     css: "",
-    rect: boxOf(element.getBoundingClientRect()),
+    rect: elementBox(element),
     title: panelName(element),
   };
 }
 
 function pieceFromFrame(frame: HTMLIFrameElement, item: FrameRecord, css: string): Piece {
+  const space = frameSpace(frame);
   return {
     live: null,
     frame,
@@ -511,7 +529,7 @@ function pieceFromFrame(frame: HTMLIFrameElement, item: FrameRecord, css: string
     text: item.text,
     html: item.html,
     css,
-    rect: shiftRect(frame.getBoundingClientRect(), item.rect),
+    rect: frameRect(space.layout, space.zoom, item.rect),
     title: panelName(frame),
   };
 }
@@ -523,7 +541,7 @@ function frameHits(box: Box): Promise<Piece[]> {
     (node): node is HTMLIFrameElement =>
       node instanceof HTMLIFrameElement &&
       node.dataset.selectBridge === "1" &&
-      intersects(node.getBoundingClientRect(), box),
+      intersects(scaledRect(node.getBoundingClientRect(), visualScale(node)), box),
   );
   return Promise.all(frames.map((frame) => queryFrame(frame, box))).then((groups) => groups.flat());
 }
@@ -550,7 +568,8 @@ function pointHit(frame: HTMLIFrameElement, x: number, y: number): Promise<Piece
 
 function queryFrame(frame: HTMLIFrameElement, box: Box): Promise<Piece[]> {
   const requestId = `s${(querySeq += 1)}`;
-  const local = toFrame(frame.getBoundingClientRect(), box);
+  const space = frameSpace(frame);
+  const local = frameBox(space.layout, space.zoom, box);
   return new Promise((resolve) => {
     const timer = window.setTimeout(() => {
       window.removeEventListener("message", onMessage);
@@ -592,12 +611,8 @@ function rectFromPoints(x1: number, y1: number, x2: number, y2: number): Box {
   return { left, top, width, height, right: left + width, bottom: top + height };
 }
 
-function boxOf(rect: Box): Box {
-  return { left: rect.left, top: rect.top, width: rect.width, height: rect.height, right: rect.right, bottom: rect.bottom };
-}
-
 function pack(pieces: Piece[]): Selection {
-  const next = pieces.map((piece) => (piece.live ? { ...piece, rect: boxOf(piece.live.getBoundingClientRect()) } : piece));
+  const next = pieces.map((piece) => (piece.live ? { ...piece, rect: elementBox(piece.live) } : piece));
   const rects = next.map((piece) => piece.rect);
   return { pieces: next, rects, bounds: unionRects(rects), css: pieces.find((piece) => piece.css)?.css ?? "" };
 }
@@ -619,7 +634,7 @@ function elementsIn(marquee: Box): Element[] {
     const svg = node.namespaceURI === "http://www.w3.org/2000/svg";
     if (svg && node.tagName.toLowerCase() !== "svg") continue;
     if (!(node instanceof HTMLElement) && !svg) continue;
-    const rect = node.getBoundingClientRect();
+    const rect = elementBox(node);
     if (rect.width < 2 || rect.height < 2) continue;
     if (!covered(rect, marquee) && !centerInside(rect, marquee)) continue;
     hits.push(node);
@@ -640,7 +655,7 @@ function promote(element: Element, marquee: Box): Element {
   const item = element.closest(ITEM);
   if (!(item instanceof Element) || item === element) return element;
   if (item.closest(".topbar, .select-menu")) return element;
-  const rect = item.getBoundingClientRect();
+  const rect = elementBox(item);
   if (covered(rect, marquee) || centerInside(rect, marquee)) return item;
   return element;
 }
@@ -648,8 +663,8 @@ function promote(element: Element, marquee: Box): Element {
 function collapseOverlaps(elements: Element[]): Element[] {
   const kept: Element[] = [];
   for (const element of elements) {
-    const rect = element.getBoundingClientRect();
-    const index = kept.findIndex((other) => overlapRatio(rect, other.getBoundingClientRect()) > 0.85);
+    const rect = elementBox(element);
+    const index = kept.findIndex((other) => overlapRatio(rect, elementBox(other)) > 0.85);
     if (index < 0) {
       kept.push(element);
       continue;
@@ -703,7 +718,7 @@ function contents(pieces: Piece[]): string {
     return cleanText(only.live ? textOf(only.live) : only.text);
   }
   const rows = pieces.map((piece) => {
-    const rect = piece.live ? piece.live.getBoundingClientRect() : piece.rect;
+    const rect = piece.live ? elementBox(piece.live) : piece.rect;
     return {
       text: (piece.live ? textOf(piece.live) : piece.text).replace(/\u00a0/g, " "),
       top: rect.top,

@@ -343,7 +343,9 @@ pub fn bundled_welcome_manifest() -> anyhow::Result<PluginManifest> {
     parse_manifest(crate::bundle::welcome_manifest()?)
 }
 
-/// Inject the prefix relay into every HTML entry, and the Herdr bridge when the plugin declared it.
+/// Inject the prefix relay and the Select tool into every HTML entry.
+/// The Herdr bridge is only added when the plugin declared a permission that uses it.
+/// Select is the person's tool, so it does not depend on those permissions.
 pub fn prepare_entry(manifest: &PluginManifest, relative: &str, bytes: &[u8]) -> Vec<u8> {
     if relative != manifest.entry {
         return bytes.to_vec();
@@ -353,6 +355,7 @@ pub fn prepare_entry(manifest: &PluginManifest, relative: &str, bytes: &[u8]) ->
         return bytes.to_vec();
     }
     let html = crate::content::inject_frame_keys(&String::from_utf8_lossy(bytes));
+    let html = crate::content::inject_select(&html);
     if !manifest.wants_bridge() {
         return html.into_bytes();
     }
@@ -825,6 +828,9 @@ mod tests {
         let html = b"<html><head></head><body>Hi</body></html>";
         let plain_page = String::from_utf8(prepare_entry(&plain, "index.html", html)).unwrap();
         assert!(plain_page.contains("/* hwp-frame-keys */"));
+        assert!(plain_page.contains("/* hwp-frame-select */"));
+        assert!(plain_page.contains("__hwpInstallSelect"));
+        assert_eq!(plain_page.matches("/* hwp-frame-select */").count(), 1);
         assert!(!plain_page.contains("herdrPanels"));
 
         let powered =
@@ -836,7 +842,9 @@ mod tests {
         assert!(served.contains("focusPane"));
         assert!(served.contains("context"));
         assert!(served.contains("/* hwp-frame-keys */"));
+        assert!(served.contains("/* hwp-frame-select */"));
         assert_eq!(served.matches("/* hwp-frame-keys */").count(), 1);
+        assert_eq!(served.matches("/* hwp-frame-select */").count(), 1);
         assert_eq!(prepare_entry(&powered, "app.js", b"var x"), b"var x");
 
         let err = parse_manifest(r#"{"id":"board","title":"Board","permissions":["shell"]}"#)
