@@ -354,6 +354,18 @@ export function wsUrl(path: string): string {
   return `${protocol}//${location.host}${joined}`;
 }
 
+/** The file bytes. An image tag cannot send the viewer token, so the panel fetches them. */
+export async function fetchContent(path: string): Promise<Blob> {
+  const response = await fetch(contentUrl(path), {
+    headers: { ...sessionHeaders(), ...authHeaders() },
+  });
+  if (!response.ok) {
+    const message = (await response.text()).trim();
+    throw new Error(message || response.statusText || "Could not open the file");
+  }
+  return response.blob();
+}
+
 export function contentUrl(path: string, bridge = false): string {
   const encoded =
     (isPosixAbsolute(path) ? "%2F" : "") +

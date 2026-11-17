@@ -35,6 +35,8 @@ struct Slot {
     panel_id: Arc<Mutex<String>>,
     /// The newest place. An older one still in flight must not put the old size back.
     seq: u64,
+    /// The last rectangle applied to the webview. Absent until the first place lands.
+    placed: Option<WindowPlace>,
 }
 
 /// `0` is an unsequenced place and always applies. A smaller number is stale.
@@ -190,12 +192,36 @@ fn browser_page_script(label: &str, url: &str) -> String {
     )
 }
 
-#[derive(Clone, Copy, serde::Deserialize)]
+#[derive(Clone, Copy, PartialEq, serde::Deserialize)]
 struct CssBox {
     x: f64,
     y: f64,
     width: f64,
     height: f64,
+}
+
+/// Where the webview was last put. A later place that stays on the same page and
+/// the same rectangle does not move the window. Moving it interrupts a scroll.
+#[derive(Clone, PartialEq)]
+struct WindowPlace {
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+    visible: bool,
+    cuts: Vec<CssBox>,
+}
+
+/// True when this place has to touch the webview. A fragment change that the page
+/// already made, with the window left where it is, does not.
+fn place_leaves_the_view(action: PlaceNav, previous: Option<&WindowPlace>, next: &WindowPlace) -> bool {
+    if action != PlaceNav::Stay {
+        return true;
+    }
+    match previous {
+        Some(prior) => prior != next,
+        None => true,
+    }
 }
 
 pub struct BrowserHost {
@@ -1173,6 +1199,19 @@ async fn place_browser(
                 slot.url = target;
             }
         }
+        let next_place = WindowPlace {
+            x,
+            y,
+            width,
+            height,
+            visible,
+            cuts: cuts.clone(),
+        };
+        // The page changed its own fragment, and the window is already there.
+        // Resizing or waking the webview throws away the scroll the click just made.
+        if !place_leaves_the_view(action, slot.placed.as_ref(), &next_place) {
+            return Ok(());
+        }
         place_view(
             &slot.view,
             x,
@@ -1185,6 +1224,7 @@ async fn place_browser(
         let mut clipped = slot.clipped;
         sync_menu_clip(&slot.view, page, cuts, &mut clipped);
         slot.clipped = clipped;
+        slot.placed = Some(next_place);
         return Ok(());
     }
     if !visible || width < 2.0 || height < 2.0 {
@@ -1285,6 +1325,7 @@ async fn place_browser(
         eprintln!("browser zoom: {err}");
     }
     let mut clipped = false;
+    let placed_cuts = cuts.clone();
     sync_menu_clip(&view, page, cuts, &mut clipped);
     #[cfg(windows)]
     {
@@ -1313,6 +1354,14 @@ async fn place_browser(
             clipped,
             panel_id,
             seq,
+            placed: Some(WindowPlace {
+                x,
+                y,
+                width,
+                height,
+                visible: true,
+                cuts: placed_cuts,
+            }),
         },
     );
     Ok(())
@@ -2803,6 +2852,27 @@ mod tests {
             ),
             PlaceNav::Stay
         );
+    }
+
+    #[test]
+    fn a_fragment_the_page_already_shows_does_not_move_the_window() {
+        let here = WindowPlace {
+            x: 10.0,
+            y: 20.0,
+            width: 400.0,
+            height: 300.0,
+            visible: true,
+            cuts: Vec::new(),
+        };
+        assert!(!place_leaves_the_view(PlaceNav::Stay, Some(&here), &here));
+        let moved = WindowPlace {
+            y: 24.0,
+            ..here.clone()
+        };
+        assert!(place_leaves_the_view(PlaceNav::Stay, Some(&here), &moved));
+        assert!(place_leaves_the_view(PlaceNav::Navigate, Some(&here), &here));
+        assert!(place_leaves_the_view(PlaceNav::Reload, Some(&here), &here));
+        assert!(place_leaves_the_view(PlaceNav::Stay, None, &here));
     }
 
     #[test]

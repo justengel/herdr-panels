@@ -45,6 +45,12 @@ export function desktopHost(): Internals | null {
   };
 }
 
+/** The address before a fragment. A fragment scrolls the open page to a section. It is not a new document. */
+export function browserDocument(url: string): string {
+  const hash = url.indexOf("#");
+  return hash === -1 ? url : url.slice(0, hash);
+}
+
 export function isRemotePage(url: string): boolean {
   try {
     const parsed = new URL(url);

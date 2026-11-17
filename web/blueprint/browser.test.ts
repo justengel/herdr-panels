@@ -1,5 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { BROWSER_OVERLAYS, browserBounds, browserLoadPending, browserSlotKey, hideBrowserPanels, isRemotePage, menuCuts, nativePopupUsesStill, overlayBoxes, requestBrowserLoad, takeBrowserLoad } from "../src/desktopBrowser";
+import { BROWSER_OVERLAYS, browserBounds, browserDocument, browserLoadPending, browserSlotKey, hideBrowserPanels, isRemotePage, menuCuts, nativePopupUsesStill, overlayBoxes, requestBrowserLoad, takeBrowserLoad } from "../src/desktopBrowser";
+
+describe("a browser address fragment", () => {
+  it("keeps the document and drops only the fragment", () => {
+    expect(browserDocument("https://github.com/org/repo/pull/1/files#diff-abc")).toBe(
+      "https://github.com/org/repo/pull/1/files",
+    );
+    expect(browserDocument("https://example.com/a")).toBe("https://example.com/a");
+    expect(browserDocument("https://example.com/a#one#two")).toBe("https://example.com/a");
+  });
+});
 
 describe("a browser panel covers its own rectangle", () => {
   it("places a webview on the panel content", () => {

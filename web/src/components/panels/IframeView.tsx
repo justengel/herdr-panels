@@ -5,6 +5,7 @@ import {
   browserBlocked,
   closeBrowser,
   browserBounds,
+  browserDocument,
   browserSlotKey,
   desktopHost,
   isRemotePage,
@@ -59,6 +60,9 @@ function EmbeddedPage({ panelId, url, suspended }: { panelId: string; url: strin
   leaderRef.current = place.leader;
   hideRef.current = place.hide;
   const lastRef = useRef("");
+  const urlRef = useRef(url);
+  const sentUrl = useRef("");
+  urlRef.current = url;
   const forceRef = useRef(false);
   const coverRef = useRef(false);
   const coverUrl = useRef("");
@@ -66,7 +70,7 @@ function EmbeddedPage({ panelId, url, suspended }: { panelId: string; url: strin
 
   useEffect(() => {
     lastRef.current = "";
-  }, [place.leader, place.hide, url]);
+  }, [place.leader, place.hide, browserDocument(url)]);
 
   useEffect(() => {
     const label = `browser-${panelId}`;
@@ -127,7 +131,7 @@ function EmbeddedPage({ panelId, url, suspended }: { panelId: string; url: strin
               if (!ready || stopped || !coverRef.current) return;
               lastRef.current = "covered";
               setNote("");
-              void placeBrowser(label, url, null, generation, [], false);
+              void placeBrowser(label, urlRef.current, null, generation, [], false);
             });
         }
         return;
@@ -142,15 +146,18 @@ function EmbeddedPage({ panelId, url, suspended }: { panelId: string; url: strin
         lastRef.current = "";
       }
       const key = browserSlotKey(bounds, cuts);
+      const liveUrl = urlRef.current;
+      const urlMoved = liveUrl !== sentUrl.current;
       const again = Boolean(bounds && (refresh || forceRef.current || browserLoadPending(label)));
-      if (key === lastRef.current && !again) return;
+      if (key === lastRef.current && !again && !urlMoved) return;
       lastRef.current = key;
+      sentUrl.current = liveUrl;
       if (again) {
         refresh = false;
         forceRef.current = false;
         takeBrowserLoad(label);
       }
-      void placeBrowser(label, url, bounds, generation, cuts, again).then(
+      void placeBrowser(label, liveUrl, bounds, generation, cuts, again).then(
         () => {
           if (stopped) return;
           setNote(bounds ? "" : "Hidden while the desk is using this area.");
@@ -190,7 +197,7 @@ function EmbeddedPage({ panelId, url, suspended }: { panelId: string; url: strin
       if (coverUrl.current) URL.revokeObjectURL(coverUrl.current);
       dropBrowser(label, generation, url);
     };
-  }, [panelId, url]);
+  }, [panelId, browserDocument(url)]);
 
   return (
     <div ref={hole} className="frame browser-hole" data-browser-label={`browser-${panelId}`}>

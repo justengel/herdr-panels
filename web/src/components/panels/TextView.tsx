@@ -1,10 +1,48 @@
 import { useEffect, useState } from "react";
-import { useTabSession, wsUrl } from "../../api";
+import { fetchContent, useTabSession, wsUrl } from "../../api";
+import { isImageFile } from "../../imageFile";
 import { CopyOnSelect } from "../CopyOnSelect";
 
 export function TextView({ path, text }: { path?: string; text?: string }) {
   if (text !== undefined) return <StaticText text={text} />;
+  if (path && isImageFile(path)) return <ImageFile path={path} />;
   return <WatchedText path={path ?? ""} />;
+}
+
+function ImageFile({ path }: { path: string }) {
+  const [src, setSrc] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const sessionName = useTabSession();
+
+  useEffect(() => {
+    let stopped = false;
+    let objectUrl = "";
+    setSrc(null);
+    setError(null);
+    fetchContent(path).then(
+      (blob) => {
+        if (stopped) return;
+        const next = URL.createObjectURL(blob);
+        objectUrl = next;
+        setSrc(next);
+      },
+      (err: unknown) => {
+        if (!stopped) setError(err instanceof Error ? err.message : "Could not open the image");
+      },
+    );
+    return () => {
+      stopped = true;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [path, sessionName]);
+
+  if (error) return <div className="empty">{error}</div>;
+  if (!src) return <div className="empty">Opening…</div>;
+  return (
+    <div className="image-view">
+      <img src={src} alt="" />
+    </div>
+  );
 }
 
 function StaticText({ text }: { text: string }) {
