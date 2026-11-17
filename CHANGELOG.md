@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.21 - 2026-11-17
+
+A browser tab you have already opened stays loaded. Switching back shows that page instead of loading the site again. A browser tab that has not been opened yet still loads the first time. Notes, terminals, and the other tab types still unload when you leave them.
+
 ## 0.1.20 - 2026-11-13
 
 The address bar follows the page a desktop browser landed on, including a redirect, on Windows and Linux. Reload and Enter open the address in the field. A shortened path, or a path that starts with ~, still opens the stored address until that text is edited. The reload mark and the field acknowledge the visit.
