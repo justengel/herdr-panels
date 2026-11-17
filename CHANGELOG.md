@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.22 - 2026-11-17
+
+Opening a PNG, JPEG, GIF, WebP, BMP, ICO, AVIF, or SVG shows the picture in the file panel. Other files still open as text.
+
+A desktop browser keeps its place when the page only changes the address fragment, such as clicking a file in a review. The window is not moved, so the scroll that click just made stays. Typing a different fragment in the address bar still opens that place.
+
 ## 0.1.21 - 2026-11-17
 
 A browser tab you have already opened stays loaded. Switching back shows that page instead of loading the site again. A browser tab that has not been opened yet still loads the first time. Notes, terminals, and the other tab types still unload when you leave them.
