@@ -1,6 +1,7 @@
-import type { ReactNode } from "react";
+import { useRef, type ReactNode } from "react";
 import { desktopHost } from "../desktopBrowser";
 import { contentZoomsItself, usePanelScaleStyle } from "../displayZoom";
+import { tabsToMount, warmBrowser } from "../tabWarm";
 import type { PanelConfig, PanelTab, TabsPanel } from "../types";
 
 export function TabGroup({
@@ -14,23 +15,30 @@ export function TabGroup({
 }) {
   const active = group.tabs.find((tab) => tab.id === group.active) ?? group.tabs[0];
   const scaleStyle = usePanelScaleStyle();
-  // The group's zoom must not wrap a page that zooms its own document. That second zoom
-  // moves the select box off the element, most visibly when a side strip insets the page.
-  const ownPage = active ? contentZoomsItself(active.panel.type, desktopHost() !== null) : false;
+  const seen = useRef(new Set<string>());
+  if (active && warmBrowser(active)) seen.current.add(active.id);
+  const mounted = tabsToMount(group, seen.current);
 
   return (
     <div className="tab-body">
-      <div className="panel-scale" style={ownPage ? undefined : scaleStyle}>
-        {active
-          ? renderContent(active, (panel) => {
-              const title = active.title === "New tab" ? titleFor(panel) ?? active.title : active.title;
-              onChange({
-                ...group,
-                tabs: group.tabs.map((tab) => (tab.id === active.id ? { ...tab, panel, title } : tab)),
-              });
-            })
-          : null}
-      </div>
+      {mounted.map((tab) => {
+        // The group's zoom must not wrap a page that zooms its own document. That second zoom
+        // moves the select box off the element, most visibly when a side strip insets the page.
+        const ownPage = contentZoomsItself(tab.panel.type, desktopHost() !== null);
+        return (
+          <div key={tab.id} className="tab-pane" hidden={tab.id !== active?.id}>
+            <div className="panel-scale" style={ownPage ? undefined : scaleStyle}>
+              {renderContent(tab, (panel) => {
+                const title = tab.title === "New tab" ? titleFor(panel) ?? tab.title : tab.title;
+                onChange({
+                  ...group,
+                  tabs: group.tabs.map((item) => (item.id === tab.id ? { ...item, panel, title } : item)),
+                });
+              })}
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 }
