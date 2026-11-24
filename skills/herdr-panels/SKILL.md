@@ -139,7 +139,7 @@ herdr-panels panel drive Web click --selector button.submit
 herdr-panels panel drive Web navigate --url https://example.com
 ```
 
-`read` prints the panel text. `--png` is an absolute path and saves a screenshot of an open panel. `type` types into a Panes or Terminal panel. `drive` is `navigate`, `wait`, `click`, `fill`, `key`, `scroll`, `scroll-to`, `select`, `back`, `forward`, or `reload`. `--space` chooses the space, including a panel that a visit is showing from another space. `--timeout` is milliseconds, up to 30000. `--dx` and `--dy` are the scroll distance in pixels. `scroll-to` scrolls the `--selector` element to the start of the page. `select` sets that `select` element to `--value` and fires input and change. Arranging the desk does not need Agent control.
+`read` prints the panel text. `--png` is an absolute path and saves a screenshot of an open panel. `type` types into a Panes or Terminal panel. `drive` is `navigate`, `wait`, `click`, `fill`, `key`, `scroll`, `scroll-to`, `select`, `back`, `forward`, or `reload`. `--space` chooses the space, including a panel that a visit is showing from another space. `--timeout` is milliseconds, up to 30000. `--dx` and `--dy` are the scroll distance in pixels. `scroll-to` scrolls the `--selector` element to the start of the page. `select` sets that `select` element to `--value` and fires input and change. When `wait`, `click`, `fill`, `select`, or `scroll-to` gives both `--selector` and `--text`, the element is the first selector match whose visible text contains that text, ignoring case. Arranging the desk does not need Agent control.
 
 ## When the command is not enough
 
@@ -262,7 +262,7 @@ Prefer the `herdr-panels panel` commands for these. A direct call is the same ga
 - `GET /api/agent/panels/{name}?png=` with an absolute path saves a screenshot of an open panel.
 - `POST /api/agent/panels/{name}/select` `{"selector":"h2","text":"workspace"}` outlines a match in the open page.
 - `POST /api/agent/panels/{name}/write` `{"text":"echo hi","keys":["enter"]}` types into a Panes or Terminal panel.
-- `POST /api/agent/panels/{name}/drive` `{"op":"click","selector":"button"}` clicks, fills, or navigates. `op` is `navigate`, `wait`, `click`, `fill`, `key`, `scroll`, `scroll-to`, `select`, `back`, `forward`, or `reload`. `space` is the workspace id. `timeout` is milliseconds. `dx` and `dy` scroll by that many pixels. `scroll-to` scrolls the selector into view at the start of the page. `select` sets the matching `select` to `value`.
+- `POST /api/agent/panels/{name}/drive` `{"op":"click","selector":"button"}` clicks, fills, or navigates. `op` is `navigate`, `wait`, `click`, `fill`, `key`, `scroll`, `scroll-to`, `select`, `back`, `forward`, or `reload`. `space` is the workspace id. `timeout` is milliseconds. `dx` and `dy` scroll by that many pixels. `scroll-to` scrolls the selector into view at the start of the page. `select` sets the matching `select` to `value`. For `wait`, `click`, `fill`, `select`, and `scroll-to`, a selector and text together match the first selector hit whose visible text contains the text, ignoring case.
 - `POST /api/agent/say` `{"to":"Chat","from":"planner","text":"look at the note"}` appends to that chat. `to` may be `*`.
 - `GET /api/agent-access` reports `{"enabled":true}` unless the person turned Agent control off. `herdr-panels access` prints the same state. `POST /api/agent-access` `{"enabled":false}` turns it off. `{"enabled":true}` is refused. Turning it on is **Agent control** in the Spaces panel menu in the desktop window.
 

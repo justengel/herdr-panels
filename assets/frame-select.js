@@ -1053,20 +1053,30 @@
       return { docs, blocked };
     }
 
+    function visibleOf(element) {
+      return String(element.innerText || element.textContent || "").replace(/\u00a0/g, " ");
+    }
+
     function findElement(selector, text) {
       const { docs, blocked } = docsOf(document);
+      const needle = String(text || "").trim().toLowerCase();
       if (selector) {
+        let saw = false;
         for (const doc of docs) {
-          let hit = null;
+          let nodes = [];
           try {
-            hit = doc.querySelector(selector);
+            nodes = doc.querySelectorAll(selector);
           } catch {
             return { error: "the selector is invalid" };
           }
-          if (hit instanceof Element) return { element: hit };
+          for (const hit of nodes) {
+            if (!(hit instanceof Element)) continue;
+            saw = true;
+            if (!needle || visibleOf(hit).toLowerCase().includes(needle)) return { element: hit };
+          }
         }
-        if (blocked) return { error: CROSS_ORIGIN_FRAME };
-        return { error: "that element was not found" };
+        if (!saw && blocked) return { error: CROSS_ORIGIN_FRAME };
+        return { error: saw && needle ? "that text was not found" : "that element was not found" };
       }
       if (text) {
         const needle = String(text).trim().toLowerCase();

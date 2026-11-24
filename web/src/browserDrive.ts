@@ -160,13 +160,18 @@ async function deskAction(section: HTMLElement | null, message: BrowserDriveMess
 }
 
 function findIn(root: HTMLElement, selector?: string, text?: string): { element?: HTMLElement; error?: string } {
+  const needle = text?.trim().toLowerCase() ?? "";
   if (selector) {
+    let nodes: HTMLElement[];
     try {
-      const hit = root.querySelector<HTMLElement>(selector);
-      return hit ? { element: hit } : { error: "that element was not found" };
+      nodes = [...root.querySelectorAll<HTMLElement>(selector)];
     } catch {
       return { error: "the selector is invalid" };
     }
+    for (const hit of nodes) {
+      if (!needle || shownText(hit).toLowerCase().includes(needle)) return { element: hit };
+    }
+    return { error: nodes.length > 0 && needle ? "that text was not found" : "that element was not found" };
   }
   if (text) {
     const needle = text.trim().toLowerCase();
@@ -178,8 +183,12 @@ function findIn(root: HTMLElement, selector?: string, text?: string): { element?
   return {};
 }
 
+function shownText(element: HTMLElement): string {
+  return (element.innerText || element.textContent || "").replace(/\u00a0/g, " ");
+}
+
 function visibleText(element: HTMLElement): string {
-  return (element.innerText || element.textContent || "").replace(/\u00a0/g, " ").trim().slice(0, 20000);
+  return shownText(element).trim().slice(0, 20000);
 }
 
 function writeSelect(field: HTMLSelectElement, value: string) {
