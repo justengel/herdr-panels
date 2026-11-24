@@ -107,6 +107,7 @@ pub fn build_app(config_dir: PathBuf, herdr_socket: PathBuf, port: u16) -> anyho
         agent_access: Arc::new(AtomicBool::new(settings.agent_access)),
         desk_grant,
     };
+    crate::browser_drive::install_local(state.browser.clone());
     let guard_state = state.clone();
 
     let mut router = Router::new()
@@ -1913,8 +1914,8 @@ async fn plugin_bridge(
             Ok(Json(json!({ "ok": true })))
         }
         "navigate" => drive_navigate(&state, &link, &body).await,
-        "read" | "shot" | "wait" | "click" | "fill" | "key" | "scroll" | "back" | "forward"
-        | "reload" => drive_browser(&state, &link, &id, &body).await,
+        "read" | "shot" | "wait" | "click" | "fill" | "key" | "scroll" | "scroll-to" | "select"
+        | "back" | "forward" | "reload" => drive_browser(&state, &link, &id, &body).await,
         _ => Err(ApiError::bad(format!(
             "Unknown bridge method: {}",
             body.method

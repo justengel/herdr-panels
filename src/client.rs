@@ -203,7 +203,7 @@ enum PanelCommand {
     Drive {
         /// Panel name or id
         panel: String,
-        /// navigate, wait, click, fill, key, scroll, back, forward, or reload
+        /// navigate, wait, click, fill, key, scroll, scroll-to, select, back, forward, or reload
         op: String,
         #[arg(long)]
         selector: Option<String>,
@@ -215,6 +215,15 @@ enum PanelCommand {
         key: Option<String>,
         #[arg(long)]
         url: Option<String>,
+        /// How long to wait, in milliseconds. The viewer allows up to 30000
+        #[arg(long)]
+        timeout: Option<u64>,
+        /// Horizontal scroll distance, in pixels
+        #[arg(long)]
+        dx: Option<f64>,
+        /// Vertical scroll distance, in pixels
+        #[arg(long)]
+        dy: Option<f64>,
     },
     /// List, rename, focus, open, or close one tab in a tab group
     Tab {
@@ -769,20 +778,34 @@ async fn panel_command(
             value,
             key,
             url,
+            timeout,
+            dx,
+            dy,
         } => {
+            let mut body = json!({
+                "op": op,
+                "selector": selector,
+                "text": text,
+                "value": value,
+                "key": key,
+                "url": url,
+            });
+            if let Some(timeout) = timeout {
+                body["timeout"] = json!(timeout);
+            }
+            if let Some(dx) = dx {
+                body["dx"] = json!(dx);
+            }
+            if let Some(dy) = dy {
+                body["dy"] = json!(dy);
+            }
+            attach_space(&mut body, space);
             let response = call(
                 base,
                 token,
                 "POST",
                 &format!("/api/agent/panels/{}/drive", path_segment(&panel)),
-                Some(json!({
-                    "op": op,
-                    "selector": selector,
-                    "text": text,
-                    "value": value,
-                    "key": key,
-                    "url": url,
-                })),
+                Some(body),
             )
             .await?;
             println!("{response}");

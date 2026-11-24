@@ -534,7 +534,17 @@ fn decide(permissions: &[String], method: &str, flag: Result<bool, String>) -> R
     let browser_read = matches!(method, "read" | "shot");
     let browser_control = matches!(
         method,
-        "navigate" | "wait" | "click" | "fill" | "key" | "scroll" | "back" | "forward" | "reload"
+        "navigate"
+            | "wait"
+            | "click"
+            | "fill"
+            | "key"
+            | "scroll"
+            | "scroll-to"
+            | "select"
+            | "back"
+            | "forward"
+            | "reload"
     );
     let context = method == "context";
     let panels_read = method == "listPanels";
@@ -1325,7 +1335,17 @@ mod tests {
             CONTROL_OFF
         );
         for method in [
-            "navigate", "wait", "click", "fill", "key", "scroll", "back", "forward", "reload",
+            "navigate",
+            "wait",
+            "click",
+            "fill",
+            "key",
+            "scroll",
+            "scroll-to",
+            "select",
+            "back",
+            "forward",
+            "reload",
         ] {
             assert!(bridge_allowed(&drive, &live, "checkin-report", "report", method).is_ok());
         }

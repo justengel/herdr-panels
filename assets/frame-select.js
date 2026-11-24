@@ -1,5 +1,15 @@
 /* hwp-frame-select */
 (() => {
+  if (typeof window.__hwpDrive !== "function") {
+    window.__hwpDrive = (spec) => ({
+      id: spec && typeof spec.id === "string" ? spec.id : "",
+      text: "",
+      html: "",
+      png: "",
+      error: "the browser drive script did not finish loading",
+      href: "",
+    });
+  }
   if (window.__hwpInstallSelect) return;
   const ITEM =
     "button, a, input, textarea, select, label, li, h1, h2, h3, h4, h5, h6, p, pre, blockquote, .file-line, .tree-row, .agent-row, .space-row, .panel-title, [role='tab']";
@@ -1115,6 +1125,44 @@
       field.dispatchEvent(new Event("change", { bubbles: true }));
     }
 
+    function isSelect(element) {
+      return Boolean(element && (element instanceof HTMLSelectElement || String(element.tagName || "").toUpperCase() === "SELECT"));
+    }
+
+    function setSelect(element, value) {
+      const view = element.ownerDocument && element.ownerDocument.defaultView ? element.ownerDocument.defaultView : window;
+      const prototype = view.HTMLSelectElement ? view.HTMLSelectElement.prototype : HTMLSelectElement.prototype;
+      const setter = Object.getOwnPropertyDescriptor(prototype, "value");
+      if (setter && setter.set) setter.set.call(element, value);
+      else element.value = value;
+      element.dispatchEvent(new view.Event("input", { bubbles: true }));
+      element.dispatchEvent(new view.Event("change", { bubbles: true }));
+    }
+
+    // A remote https page cannot fetch the http viewer. The desktop host forwards this post.
+    function postToHost(body) {
+      const handlers = window.webkit && window.webkit.messageHandlers;
+      const webkit = handlers && handlers.hwpDrive;
+      if (webkit && typeof webkit.postMessage === "function") {
+        try {
+          webkit.postMessage(body);
+          return true;
+        } catch (err) {
+          // A same-origin page can still post to the viewer.
+        }
+      }
+      const chrome = window.chrome && window.chrome.webview;
+      if (chrome && typeof chrome.postMessage === "function") {
+        try {
+          chrome.postMessage("hwp-drive:" + body);
+          return true;
+        } catch (err) {
+          // Fall through to fetch.
+        }
+      }
+      return false;
+    }
+
     async function waitFor(spec) {
       const limit = Math.max(0, Number(spec.timeoutMs) || 0);
       const started = Date.now();
@@ -1122,16 +1170,27 @@
         const found = findElement(spec.selector || "", spec.text || "");
         if (found.element) return found;
         if (found.error === CROSS_ORIGIN_FRAME || found.error === "the selector is invalid") return found;
-        if (Date.now() - started >= limit) return { error: "the browser panel did not answer in time" };
+        if (Date.now() - started >= limit) return { error: found.error || "that element was not found" };
         await new Promise((resolve) => setTimeout(resolve, 50));
       }
     }
 
     window.__hwpDrive = (spec) => {
-      if (!spec || typeof spec.reply !== "string" || typeof spec.id !== "string") return;
+      if (!spec || typeof spec.reply !== "string" || typeof spec.id !== "string") {
+        return {
+          id: spec && typeof spec.id === "string" ? spec.id : "",
+          text: "",
+          html: "",
+          png: "",
+          error: "the drive call is invalid",
+          href: "",
+        };
+      }
       let posted = false;
-      const post = (payload) => {
-        if (posted) return;
+      const deliver = (payload) => {
+        if (posted) {
+          return Object.assign({ id: spec.id, text: "", html: "", png: "", error: "", href: "" }, payload || {});
+        }
         posted = true;
         let href = "";
         try {
@@ -1139,14 +1198,18 @@
         } catch (err) {
           href = "";
         }
-        const body = JSON.stringify(Object.assign({ id: spec.id, text: "", html: "", png: "", error: "", href }, payload || {}, { href }));
-        fetch(spec.reply, {
-          method: "POST",
-          headers: { "content-type": "text/plain" },
-          body,
-        }).catch(() => {});
+        const record = Object.assign({ id: spec.id, text: "", html: "", png: "", error: "", href }, payload || {}, { href });
+        const body = JSON.stringify(record);
+        if (!postToHost(body)) {
+          fetch(spec.reply, {
+            method: "POST",
+            headers: { "content-type": "text/plain" },
+            body,
+          }).catch(() => {});
+        }
+        return record;
       };
-      Promise.resolve()
+      return Promise.resolve()
         .then(async () => {
           const op = String(spec.op || "");
           if (op === "read" || op === "shot") {
@@ -1159,10 +1222,10 @@
             if (!found.element) return { error: found.error || "that element was not found" };
             return { text: textOf(found.element).slice(0, 20000) };
           }
-          if (op === "click" || op === "fill" || op === "key" || op === "scroll") {
+          if (op === "click" || op === "fill" || op === "key" || op === "scroll" || op === "scroll-to" || op === "select") {
             const found = findElement(spec.selector || "", spec.text || "");
             const element = found.element;
-            if (!element && (op === "click" || op === "fill" || spec.selector || spec.text)) {
+            if (!element && (op === "click" || op === "fill" || op === "scroll-to" || op === "select" || spec.selector || spec.text)) {
               return { error: found.error || "that element was not found" };
             }
             const target = element || document.activeElement || document.body;
@@ -1181,6 +1244,15 @@
               const view = target.ownerDocument?.defaultView || window;
               target.dispatchEvent(new view.KeyboardEvent("keydown", { key, bubbles: true }));
               target.dispatchEvent(new view.KeyboardEvent("keyup", { key, bubbles: true }));
+            } else if (op === "scroll-to") {
+              if (!element || typeof element.scrollIntoView !== "function") {
+                return { error: found.error || "that element was not found" };
+              }
+              element.scrollIntoView({ block: "start", inline: "nearest" });
+            } else if (op === "select") {
+              if (!isSelect(element)) return { error: "that element is not a select" };
+              setSelect(element, spec.value == null ? "" : String(spec.value));
+              return { text: String(element.value == null ? "" : element.value).slice(0, 20000) };
             } else {
               const dx = Number(spec.dx) || 0;
               const dy = Number(spec.dy) || 0;
@@ -1191,8 +1263,8 @@
           }
           return { error: "unknown browser action" };
         })
-        .then((payload) => post(payload))
-        .catch((err) => post({ error: err && err.message ? err.message : String(err) }));
+        .then((payload) => deliver(payload))
+        .catch((err) => deliver({ error: err && err.message ? err.message : String(err) }));
     };
   };
 })();

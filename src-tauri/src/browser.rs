@@ -237,7 +237,11 @@ struct WindowPlace {
 
 /// True when this place has to touch the webview. A fragment change that the page
 /// already made, with the window left where it is, does not.
-fn place_leaves_the_view(action: PlaceNav, previous: Option<&WindowPlace>, next: &WindowPlace) -> bool {
+fn place_leaves_the_view(
+    action: PlaceNav,
+    previous: Option<&WindowPlace>,
+    next: &WindowPlace,
+) -> bool {
     if action != PlaceNav::Stay {
         return true;
     }
@@ -305,7 +309,12 @@ pub fn scale_bounds(x: f64, y: f64, width: f64, height: f64, zoom: f64) -> (f64,
 }
 
 /// Menu rectangles in the child window's own pixels. The window keeps its full size.
-fn menu_holes(page: CssBox, client_width: i32, client_height: i32, cuts: &[CssBox]) -> Vec<(i32, i32, i32, i32)> {
+fn menu_holes(
+    page: CssBox,
+    client_width: i32,
+    client_height: i32,
+    cuts: &[CssBox],
+) -> Vec<(i32, i32, i32, i32)> {
     if client_width < 2 || client_height < 2 || page.width < 2.0 || page.height < 2.0 {
         return Vec::new();
     }
@@ -313,7 +322,10 @@ fn menu_holes(page: CssBox, client_width: i32, client_height: i32, cuts: &[CssBo
     let scale_y = client_height as f64 / page.height;
     let mut holes = Vec::new();
     for cut in cuts {
-        if ![cut.x, cut.y, cut.width, cut.height].into_iter().all(f64::is_finite) {
+        if ![cut.x, cut.y, cut.width, cut.height]
+            .into_iter()
+            .all(f64::is_finite)
+        {
             continue;
         }
         if cut.width < 1.0 || cut.height < 1.0 {
@@ -516,16 +528,19 @@ fn arm_zoom(webkit: webkit2gtk::WebView, app: AppHandle, label: String) {
 
 #[cfg(target_os = "linux")]
 fn png_save_reply(raw: &str) -> String {
-    let outcome = decode_png_save(raw).and_then(|(bytes, name)| herdr_panels::server::save_png_dialog(bytes, &name));
+    let outcome = decode_png_save(raw)
+        .and_then(|(bytes, name)| herdr_panels::server::save_png_dialog(bytes, &name));
     match outcome {
         Ok(Some(path)) => format!(
             "window.__hwpSaveDone&&window.__hwpSaveDone(true,{});",
-            serde_json::to_string(&path.display().to_string()).unwrap_or_else(|_| "\"\"".to_string())
+            serde_json::to_string(&path.display().to_string())
+                .unwrap_or_else(|_| "\"\"".to_string())
         ),
         Ok(None) => "window.__hwpSaveDone&&window.__hwpSaveDone(true,null);".to_string(),
         Err(err) => format!(
             "window.__hwpSaveDone&&window.__hwpSaveDone(false,{});",
-            serde_json::to_string(&err).unwrap_or_else(|_| "\"Could not save the screenshot\"".to_string())
+            serde_json::to_string(&err)
+                .unwrap_or_else(|_| "\"Could not save the screenshot\"".to_string())
         ),
     }
 }
@@ -540,7 +555,8 @@ fn decode_png_save(raw: &str) -> Result<(Vec<u8>, String), String> {
         name: String,
         data: String,
     }
-    let message: Message = serde_json::from_str(raw).map_err(|_| "the screenshot could not be read".to_string())?;
+    let message: Message =
+        serde_json::from_str(raw).map_err(|_| "the screenshot could not be read".to_string())?;
     if message.data.len() > MAX * 4 / 3 + 8 {
         return Err("the screenshot is too large".into());
     }
@@ -552,6 +568,137 @@ fn decode_png_save(raw: &str) -> Result<(Vec<u8>, String), String> {
     }
     Ok((bytes, message.name))
 }
+
+/// A remote page cannot fetch the viewer. The host posts the drive result for it.
+fn forward_browser_reply(body: String) {
+    if herdr_panels::browser_drive::deliver_local(&body) {
+        return;
+    }
+    std::thread::spawn(move || {
+        if let Err(err) = post_browser_reply(&body) {
+            eprintln!("browser reply was not delivered: {err}");
+        }
+    });
+}
+
+fn post_browser_reply(body: &str) -> Result<(), String> {
+    if body.len() > 16 * 1024 * 1024 {
+        return Err("the browser reply is too large".into());
+    }
+    let base = std::env::var("HERDR_PANELS_URL").unwrap_or_else(|_| VIEWER.to_string());
+    let base = base.trim().trim_end_matches('/').to_string();
+    let parsed = Url::parse(&base).map_err(|_| "the viewer address is invalid".to_string())?;
+    let host = parsed
+        .host_str()
+        .ok_or("the viewer address is invalid")?
+        .to_string();
+    let port = parsed
+        .port_or_known_default()
+        .ok_or("the viewer address is invalid")?;
+    let mut stream = TcpStream::connect((host.as_str(), port)).map_err(|err| err.to_string())?;
+    stream.set_read_timeout(Some(Duration::from_secs(5))).ok();
+    stream.set_write_timeout(Some(Duration::from_secs(5))).ok();
+    let header = format!(
+        "POST /api/browser-reply HTTP/1.1\r\nHost: {host}:{port}\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+    );
+    stream
+        .write_all(header.as_bytes())
+        .map_err(|err| err.to_string())?;
+    stream
+        .write_all(body.as_bytes())
+        .map_err(|err| err.to_string())?;
+    stream.flush().map_err(|err| err.to_string())?;
+    let mut buf = [0u8; 512];
+    let _ = stream.read(&mut buf);
+    Ok(())
+}
+
+fn host_reply_body(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    let text = if trimmed.starts_with('{') {
+        trimmed.to_string()
+    } else {
+        serde_json::from_str::<String>(trimmed)
+            .ok()?
+            .trim()
+            .to_string()
+    };
+    let value: serde_json::Value = serde_json::from_str(&text).ok()?;
+    let id = value.get("id").and_then(serde_json::Value::as_str)?;
+    if id.len() < 16 || id.len() > 80 || !id.chars().all(|ch| ch.is_ascii_hexdigit()) {
+        return None;
+    }
+    Some(text)
+}
+
+fn windows_drive_reply(message: &str) -> Option<String> {
+    let value: serde_json::Value = serde_json::from_str(message).ok()?;
+    if value.get("source").and_then(serde_json::Value::as_str) != Some("hwp-drive") {
+        return None;
+    }
+    let body = value.get("body")?;
+    let text = match body {
+        serde_json::Value::String(text) => text.clone(),
+        other => other.to_string(),
+    };
+    host_reply_body(&text)
+}
+
+#[cfg(target_os = "linux")]
+fn arm_drive_reply(webkit: webkit2gtk::WebView) {
+    use webkit2gtk::{UserContentManagerExt, WebViewExt};
+    let Some(manager) = webkit.user_content_manager() else {
+        return;
+    };
+    if !manager.register_script_message_handler("hwpDrive") {
+        return;
+    }
+    manager.connect_script_message_received(Some("hwpDrive"), move |_, result| {
+        let Some(value) = result.js_value() else {
+            return;
+        };
+        if let Some(body) = host_reply_body(&value.to_string()) {
+            forward_browser_reply(body);
+        }
+    });
+}
+
+#[cfg(windows)]
+fn arm_drive_reply(platform: &tauri::webview::PlatformWebview) {
+    let Ok(webview) = (unsafe { platform.controller().CoreWebView2() }) else {
+        return;
+    };
+    let handler =
+        webview2_com::WebMessageReceivedEventHandler::create(Box::new(move |_view, args| {
+            let Some(args) = args else {
+                return Ok(());
+            };
+            let mut as_string = windows::core::PWSTR::null();
+            if unsafe { args.TryGetWebMessageAsString(&mut as_string) }.is_ok() {
+                let text = webview2_com::take_pwstr(as_string);
+                if let Some(body) = text.strip_prefix("hwp-drive:") {
+                    if let Some(body) = host_reply_body(body) {
+                        forward_browser_reply(body);
+                    }
+                }
+                return Ok(());
+            }
+            let mut message = windows::core::PWSTR::null();
+            if unsafe { args.WebMessageAsJson(&mut message) }.is_ok() {
+                let text = webview2_com::take_pwstr(message);
+                if let Some(body) = windows_drive_reply(&text) {
+                    forward_browser_reply(body);
+                }
+            }
+            Ok(())
+        }));
+    let mut token = 0_i64;
+    unsafe {
+        let _ = webview.add_WebMessageReceived(&handler, &mut token);
+    }
+}
+
 
 pub fn browser_target(label: &str, url: &str) -> Result<Url, String> {
     if !valid_browser_label(label) {
@@ -575,7 +722,15 @@ fn finite_box(x: f64, y: f64, width: f64, height: f64) -> Result<(), String> {
     }
 }
 
-fn place_view(view: &Webview, x: f64, y: f64, width: f64, height: f64, shown: &mut bool, visible: bool) -> Result<(), String> {
+fn place_view(
+    view: &Webview,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+    shown: &mut bool,
+    visible: bool,
+) -> Result<(), String> {
     if !visible || width < 2.0 || height < 2.0 {
         if *shown {
             view.hide().map_err(|err| err.to_string())?;
@@ -707,7 +862,8 @@ fn windows_answer_snap(view: &Webview, title: &str) {
     };
     let view = view.clone();
     std::thread::spawn(move || {
-        let outcome = browser_hwnd_of(&view).and_then(|hwnd| unsafe { webview_png(hwnd, Some(request)) });
+        let outcome =
+            browser_hwnd_of(&view).and_then(|hwnd| unsafe { webview_png(hwnd, Some(request)) });
         let _ = view.eval(&snap_reply(outcome));
     });
 }
@@ -727,7 +883,9 @@ fn browser_hwnd_of(view: &Webview) -> Result<windows::Win32::Foundation::HWND, S
 }
 
 #[cfg(windows)]
-fn read_browser_hwnd(platform: &tauri::webview::PlatformWebview) -> Result<windows::Win32::Foundation::HWND, String> {
+fn read_browser_hwnd(
+    platform: &tauri::webview::PlatformWebview,
+) -> Result<windows::Win32::Foundation::HWND, String> {
     use windows::Win32::Foundation::HWND;
     let mut hwnd = HWND(std::ptr::null_mut());
     unsafe { platform.controller().ParentWindow(&mut hwnd) }.map_err(|err| err.to_string())?;
@@ -750,11 +908,15 @@ fn snap_reply(outcome: Result<String, String>) -> String {
 }
 
 #[cfg(windows)]
-unsafe fn webview_png(hwnd: windows::Win32::Foundation::HWND, crop: Option<SnapRequest>) -> Result<String, String> {
+unsafe fn webview_png(
+    hwnd: windows::Win32::Foundation::HWND,
+    crop: Option<SnapRequest>,
+) -> Result<String, String> {
     use windows::Win32::Foundation::HWND;
     use windows::Win32::Graphics::Gdi::{
         CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject, GetDC, GetDIBits,
-        ReleaseDC, SelectObject, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS, HDC, HGDIOBJ,
+        ReleaseDC, SelectObject, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS, HDC,
+        HGDIOBJ,
     };
     use windows::Win32::UI::WindowsAndMessaging::GetClientRect;
 
@@ -826,7 +988,9 @@ unsafe fn webview_png(hwnd: windows::Win32::Foundation::HWND, crop: Option<SnapR
     encoder.set_color(png::ColorType::Rgba);
     encoder.set_depth(png::BitDepth::Eight);
     let mut writer = encoder.write_header().map_err(|err| err.to_string())?;
-    writer.write_image_data(&pixels).map_err(|err| err.to_string())?;
+    writer
+        .write_image_data(&pixels)
+        .map_err(|err| err.to_string())?;
     drop(writer);
     Ok(base64_encode(&png))
 }
@@ -869,7 +1033,12 @@ fn largest_child(root: windows::Win32::Foundation::HWND) -> windows::Win32::Foun
 }
 
 #[cfg(windows)]
-fn crop_rgba(pixels: &[u8], width: i32, height: i32, request: SnapRequest) -> Result<(Vec<u8>, u32, u32), String> {
+fn crop_rgba(
+    pixels: &[u8],
+    width: i32,
+    height: i32,
+    request: SnapRequest,
+) -> Result<(Vec<u8>, u32, u32), String> {
     if width < 1 || height < 1 {
         return Err("the browser window has no size".into());
     }
@@ -878,7 +1047,9 @@ fn crop_rgba(pixels: &[u8], width: i32, height: i32, request: SnapRequest) -> Re
         return Err("the snapshot scale is invalid".into());
     }
     let x = (request.x * scale).round().clamp(0.0, f64::from(width - 1)) as i32;
-    let y = (request.y * scale).round().clamp(0.0, f64::from(height - 1)) as i32;
+    let y = (request.y * scale)
+        .round()
+        .clamp(0.0, f64::from(height - 1)) as i32;
     let w = ((request.w * scale).round().max(1.0) as i32).min(width - x);
     let h = ((request.h * scale).round().max(1.0) as i32).min(height - y);
     if w < 1 || h < 1 {
@@ -896,7 +1067,14 @@ fn crop_rgba(pixels: &[u8], width: i32, height: i32, request: SnapRequest) -> Re
 /// A snapshot of the desk page, cropped to a rectangle, as a base64 PNG. Linux only.
 /// A browser panel uses `snapshot_browser` instead. This command is the main page.
 #[tauri::command]
-async fn snapshot_view(webview: Webview, x: f64, y: f64, width: f64, height: f64, viewport: f64) -> Result<String, String> {
+async fn snapshot_view(
+    webview: Webview,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+    viewport: f64,
+) -> Result<String, String> {
     desk_page(&webview)?;
     finite_box(x, y, width, height)?;
     if width < 1.0 || height < 1.0 {
@@ -954,7 +1132,9 @@ fn base64_encode(bytes: &[u8]) -> String {
     let mut out = String::new();
     let mut index = 0;
     while index + 3 <= bytes.len() {
-        let value = ((bytes[index] as u32) << 16) | ((bytes[index + 1] as u32) << 8) | bytes[index + 2] as u32;
+        let value = ((bytes[index] as u32) << 16)
+            | ((bytes[index + 1] as u32) << 8)
+            | bytes[index + 2] as u32;
         out.push(TABLE[((value >> 18) & 63) as usize] as char);
         out.push(TABLE[((value >> 12) & 63) as usize] as char);
         out.push(TABLE[((value >> 6) & 63) as usize] as char);
@@ -990,7 +1170,11 @@ fn sync_menu_clip(view: &Webview, page: CssBox, cuts: Vec<CssBox>, clipped: &mut
     });
 }
 
-fn clip_platform_webview(platform: &tauri::webview::PlatformWebview, page: CssBox, cuts: &[CssBox]) {
+fn clip_platform_webview(
+    platform: &tauri::webview::PlatformWebview,
+    page: CssBox,
+    cuts: &[CssBox],
+) {
     #[cfg(windows)]
     unsafe {
         use windows::Win32::Foundation::{HWND, RECT};
@@ -1133,7 +1317,11 @@ fn watch_live_page(view: &Webview, app: AppHandle, report_label: Arc<Mutex<Strin
             let notify_label = Arc::clone(&report_label);
             webview.connect_notify_local(Some("uri"), move |view, _| {
                 let live = view.uri().map(|uri| uri.to_string()).unwrap_or_default();
-                report_live_page(notify_app.clone(), current_report_label(&notify_label), live);
+                report_live_page(
+                    notify_app.clone(),
+                    current_report_label(&notify_label),
+                    live,
+                );
             });
             arm_page_url(webview, app);
         });
@@ -1145,19 +1333,20 @@ fn watch_live_page(view: &Webview, app: AppHandle, report_label: Arc<Mutex<Strin
                 return;
             };
             let mut token = 0_i64;
-            let handler = webview2_com::SourceChangedEventHandler::create(Box::new(move |webview, _| {
-                let Some(webview) = webview else {
-                    return Ok(());
-                };
-                let mut uri = windows::core::PWSTR::null();
-                unsafe { webview.Source(&mut uri)? };
-                report_live_page(
-                    app.clone(),
-                    current_report_label(&report_label),
-                    webview2_com::take_pwstr(uri),
-                );
-                Ok(())
-            }));
+            let handler =
+                webview2_com::SourceChangedEventHandler::create(Box::new(move |webview, _| {
+                    let Some(webview) = webview else {
+                        return Ok(());
+                    };
+                    let mut uri = windows::core::PWSTR::null();
+                    unsafe { webview.Source(&mut uri)? };
+                    report_live_page(
+                        app.clone(),
+                        current_report_label(&report_label),
+                        webview2_com::take_pwstr(uri),
+                    );
+                    Ok(())
+                }));
             unsafe {
                 let _ = webview.add_SourceChanged(&handler, &mut token);
             }
@@ -1189,12 +1378,20 @@ async fn place_browser(
     let seq = seq.unwrap_or(0);
     let parsed = browser_target(&label, &url)?;
     finite_box(x, y, width, height)?;
-    let page = CssBox { x, y, width, height };
+    let page = CssBox {
+        x,
+        y,
+        width,
+        height,
+    };
     let zoom = current_zoom(&host);
     let content_zoom = panel_content_zoom(&host, &label);
     let (x, y, width, height) = scale_bounds(x, y, width, height, zoom);
     let target = parsed.as_str().to_string();
-    let mut guard = host.slots.lock().map_err(|_| "browser host is locked".to_string())?;
+    let mut guard = host
+        .slots
+        .lock()
+        .map_err(|_| "browser host is locked".to_string())?;
     if let Some(slot) = guard.get_mut(&label) {
         if generation < slot.generation || !place_is_current(slot.seq, seq) {
             return Ok(());
@@ -1235,15 +1432,7 @@ async fn place_browser(
         if !place_leaves_the_view(action, slot.placed.as_ref(), &next_place) {
             return Ok(());
         }
-        place_view(
-            &slot.view,
-            x,
-            y,
-            width,
-            height,
-            &mut slot.shown,
-            visible,
-        )?;
+        place_view(&slot.view, x, y, width, height, &mut slot.shown, visible)?;
         let mut clipped = slot.clipped;
         sync_menu_clip(&slot.view, page, cuts, &mut clipped);
         slot.clipped = clipped;
@@ -1275,66 +1464,68 @@ async fn place_browser(
     let navigation_panel = Arc::clone(&panel_id);
     let report_label = Arc::new(Mutex::new(label.clone()));
     let page_label = Arc::clone(&report_label);
-    let builder = tauri::webview::WebviewBuilder::new(&label, tauri::WebviewUrl::External(parsed.clone()))
-        .initialization_script(boot)
-        .on_navigation(move |url| {
-            let id = navigation_panel
-                .lock()
-                .map(|id| id.clone())
-                .unwrap_or_default();
-            browser_panel_link(url.as_str()) == LinkNavigation::Stay && navigation_permitted(&id, url.as_str())
-        })
-        .on_new_window(move |url, _features| {
-            respond_to_new_window(&opener, &url);
-            NewWindowResponse::Deny
-        })
-        .on_document_title_changed({
-            let select_app = app.clone();
-            move |view, title| {
-                if forward_find(&select_app, &view, &title) {
-                    return;
+    let builder =
+        tauri::webview::WebviewBuilder::new(&label, tauri::WebviewUrl::External(parsed.clone()))
+            .initialization_script(boot)
+            .on_navigation(move |url| {
+                let id = navigation_panel
+                    .lock()
+                    .map(|id| id.clone())
+                    .unwrap_or_default();
+                browser_panel_link(url.as_str()) == LinkNavigation::Stay
+                    && navigation_permitted(&id, url.as_str())
+            })
+            .on_new_window(move |url, _features| {
+                respond_to_new_window(&opener, &url);
+                NewWindowResponse::Deny
+            })
+            .on_document_title_changed({
+                let select_app = app.clone();
+                move |view, title| {
+                    if forward_find(&select_app, &view, &title) {
+                        return;
+                    }
+                    if title == "hwp-select:off" {
+                        // Windows has no page message. Linux sends `hwpLeave` and also sets this
+                        // title only when that message is missing. Either way, leave the signal
+                        // before handling a snapshot title that replaces it.
+                        schedule_end_browser_select(&select_app);
+                        return;
+                    }
+                    answer_snap(&view, &title);
                 }
-                if title == "hwp-select:off" {
-                    // Windows has no page message. Linux sends `hwpLeave` and also sets this
-                    // title only when that message is missing. Either way, leave the signal
-                    // before handling a snapshot title that replaces it.
-                    schedule_end_browser_select(&select_app);
-                    return;
+            })
+            .on_page_load({
+                let page_app = app.clone();
+                move |webview, payload| {
+                    if payload.event() != PageLoadEvent::Finished {
+                        return;
+                    }
+                    let reported = current_report_label(&page_label);
+                    let label = if reported.is_empty() {
+                        webview.label().to_string()
+                    } else {
+                        reported
+                    };
+                    let host = webview.state::<BrowserHost>();
+                    let scale = panel_content_zoom(&host, &label);
+                    if let Err(err) = webview.eval(browser_page_zoom(scale)) {
+                        eprintln!("browser zoom: {err}");
+                    }
+                    #[cfg(target_os = "linux")]
+                    {
+                        let _ = webview.eval(page_label_script(&label));
+                    }
+                    let landed = payload.url();
+                    if landed.scheme() == "http" || landed.scheme() == "https" {
+                        report_finished_page(page_app.clone(), label, landed.clone());
+                    }
+                    if !host.selecting.load(Ordering::Relaxed) {
+                        return;
+                    }
+                    let _ = webview.eval(select_on());
                 }
-                answer_snap(&view, &title);
-            }
-        })
-        .on_page_load({
-            let page_app = app.clone();
-            move |webview, payload| {
-                if payload.event() != PageLoadEvent::Finished {
-                    return;
-                }
-                let reported = current_report_label(&page_label);
-                let label = if reported.is_empty() {
-                    webview.label().to_string()
-                } else {
-                    reported
-                };
-                let host = webview.state::<BrowserHost>();
-                let scale = panel_content_zoom(&host, &label);
-                if let Err(err) = webview.eval(browser_page_zoom(scale)) {
-                    eprintln!("browser zoom: {err}");
-                }
-                #[cfg(target_os = "linux")]
-                {
-                    let _ = webview.eval(page_label_script(&label));
-                }
-                let landed = payload.url();
-                if landed.scheme() == "http" || landed.scheme() == "https" {
-                    report_finished_page(page_app.clone(), label, landed.clone());
-                }
-                if !host.selecting.load(Ordering::Relaxed) {
-                    return;
-                }
-                let _ = webview.eval(select_on());
-            }
-        });
+            });
     let view = window
         .add_child(
             builder,
@@ -1352,6 +1543,7 @@ async fn place_browser(
         if let Err(err) = view.with_webview(move |platform| {
             arm_zoom(platform.inner(), zoom_app, zoom_label);
             arm_png_save(platform.inner(), reply);
+            arm_drive_reply(platform.inner());
         }) {
             eprintln!("screenshot save: {err}");
         }
@@ -1366,10 +1558,13 @@ async fn place_browser(
     {
         use windows::Win32::Foundation::HWND;
         let remembered = label.clone();
-        let _ = view.with_webview(move |platform| unsafe {
-            let mut parent = HWND(std::ptr::null_mut());
-            if platform.controller().ParentWindow(&mut parent).is_ok() && !parent.0.is_null() {
-                browser_wheel::remember_browser(parent.0 as isize, remembered);
+        let _ = view.with_webview(move |platform| {
+            arm_drive_reply(&platform);
+            unsafe {
+                let mut parent = HWND(std::ptr::null_mut());
+                if platform.controller().ParentWindow(&mut parent).is_ok() && !parent.0.is_null() {
+                    browser_wheel::remember_browser(parent.0 as isize, remembered);
+                }
             }
         });
     }
@@ -1403,13 +1598,20 @@ async fn place_browser(
 }
 
 #[tauri::command]
-async fn set_display_zoom(app: AppHandle, host: State<'_, BrowserHost>, scale: f64) -> Result<(), String> {
+async fn set_display_zoom(
+    app: AppHandle,
+    host: State<'_, BrowserHost>,
+    scale: f64,
+) -> Result<(), String> {
     if !scale.is_finite() {
         return Err("zoom is invalid".into());
     }
     let scale = scale.clamp(0.25, 5.0);
     {
-        let mut zoom = host.zoom.lock().map_err(|_| "browser host is locked".to_string())?;
+        let mut zoom = host
+            .zoom
+            .lock()
+            .map_err(|_| "browser host is locked".to_string())?;
         *zoom = scale;
     }
     #[cfg(windows)]
@@ -1422,16 +1624,26 @@ async fn set_display_zoom(app: AppHandle, host: State<'_, BrowserHost>, scale: f
 }
 
 #[tauri::command]
-async fn set_browser_zoom(host: State<'_, BrowserHost>, label: String, scale: f64) -> Result<(), String> {
+async fn set_browser_zoom(
+    host: State<'_, BrowserHost>,
+    label: String,
+    scale: f64,
+) -> Result<(), String> {
     if !scale.is_finite() || scale <= 0.0 {
         return Err("zoom is invalid".into());
     }
     let scale = scale.clamp(0.25, 3.0);
     {
-        let mut zoom = host.panel_zoom.lock().map_err(|_| "browser host is locked".to_string())?;
+        let mut zoom = host
+            .panel_zoom
+            .lock()
+            .map_err(|_| "browser host is locked".to_string())?;
         zoom.insert(label.clone(), scale);
     }
-    let guard = host.slots.lock().map_err(|_| "browser host is locked".to_string())?;
+    let guard = host
+        .slots
+        .lock()
+        .map_err(|_| "browser host is locked".to_string())?;
     if let Some(slot) = guard.get(&label) {
         slot.view
             .eval(browser_page_zoom(scale))
@@ -1455,7 +1667,10 @@ async fn adopt_browser(
     if !valid_browser_label(&from) || !valid_browser_label(&to) {
         return Err("browser label is invalid".into());
     }
-    let mut guard = host.slots.lock().map_err(|_| "browser host is locked".to_string())?;
+    let mut guard = host
+        .slots
+        .lock()
+        .map_err(|_| "browser host is locked".to_string())?;
     if from == to {
         if let Some(slot) = guard.get_mut(&from) {
             if generation >= slot.generation {
@@ -1513,7 +1728,10 @@ async fn snapshot_browser(
         return Err("browser snapshot is empty".into());
     }
     let view = {
-        let guard = host.slots.lock().map_err(|_| "browser host is locked".to_string())?;
+        let guard = host
+            .slots
+            .lock()
+            .map_err(|_| "browser host is locked".to_string())?;
         guard
             .get(&label)
             .ok_or_else(|| "that browser panel is not open".to_string())?
@@ -1524,8 +1742,15 @@ async fn snapshot_browser(
 }
 
 #[tauri::command]
-async fn close_browser(host: State<'_, BrowserHost>, label: String, generation: u64) -> Result<(), String> {
-    let mut guard = host.slots.lock().map_err(|_| "browser host is locked".to_string())?;
+async fn close_browser(
+    host: State<'_, BrowserHost>,
+    label: String,
+    generation: u64,
+) -> Result<(), String> {
+    let mut guard = host
+        .slots
+        .lock()
+        .map_err(|_| "browser host is locked".to_string())?;
     let Some(slot) = guard.get(&label) else {
         return Ok(());
     };
@@ -1552,7 +1777,13 @@ fn set_frame_focus(focused: bool) {
 }
 
 #[tauri::command]
-fn set_desk_prefix(ctrl: bool, alt: bool, shift: bool, meta: bool, key: String) -> Result<(), String> {
+fn set_desk_prefix(
+    ctrl: bool,
+    alt: bool,
+    shift: bool,
+    meta: bool,
+    key: String,
+) -> Result<(), String> {
     if key.is_empty() || key.len() > 16 || !key.chars().all(|ch| ch.is_ascii_graphic()) {
         return Err("prefix key is invalid".into());
     }
@@ -1592,7 +1823,11 @@ fn parse_find_title(title: &str) -> Option<FindSignal> {
     if parts.next().is_some() || count > 1_000_000 {
         return None;
     }
-    Some(FindSignal::Count { token, count, index })
+    Some(FindSignal::Count {
+        token,
+        count,
+        index,
+    })
 }
 
 fn find_desk_script(label: &str, signal: &FindSignal) -> String {
@@ -1659,7 +1894,10 @@ async fn find_browser(
     }
     let script = find_browser_script(&query, index.clamp(-1, 1_000_000), match_case, token);
     let view = {
-        let guard = host.slots.lock().map_err(|_| "browser host is locked".to_string())?;
+        let guard = host
+            .slots
+            .lock()
+            .map_err(|_| "browser host is locked".to_string())?;
         guard
             .get(&label)
             .ok_or_else(|| "that browser panel is not open".to_string())?
@@ -1671,7 +1909,11 @@ async fn find_browser(
 
 /// Run one host-built script in a child webview. The page cannot call this.
 #[tauri::command]
-async fn eval_browser(host: State<'_, BrowserHost>, label: String, script: String) -> Result<(), String> {
+async fn eval_browser(
+    host: State<'_, BrowserHost>,
+    label: String,
+    script: String,
+) -> Result<(), String> {
     if !valid_browser_label(&label) {
         return Err("browser label is invalid".into());
     }
@@ -1684,11 +1926,17 @@ async fn eval_browser(host: State<'_, BrowserHost>, label: String, script: Strin
     {
         return Err("that browser script is not allowed".into());
     }
-    let guard = host.slots.lock().map_err(|_| "browser host is locked".to_string())?;
-    let slot = guard
+    let guard = host
+        .slots
+        .lock()
+        .map_err(|_| "browser host is locked".to_string())?;
+    let view = guard
         .get(&label)
-        .ok_or_else(|| "that browser panel is not open".to_string())?;
-    slot.view.eval(script).map_err(|err| err.to_string())
+        .ok_or_else(|| "that browser panel is not open".to_string())?
+        .view
+        .clone();
+    drop(guard);
+    view.eval(script).map_err(|err| err.to_string())
 }
 
 #[tauri::command]
@@ -1699,7 +1947,10 @@ async fn set_browser_select(host: State<'_, BrowserHost>, enabled: bool) -> Resu
     } else {
         "if (window.__hwpSetSelect) window.__hwpSetSelect(false);".to_string()
     };
-    let guard = host.slots.lock().map_err(|_| "browser host is locked".to_string())?;
+    let guard = host
+        .slots
+        .lock()
+        .map_err(|_| "browser host is locked".to_string())?;
     for slot in guard.values() {
         let _ = slot.view.eval(script.clone());
     }
@@ -1802,8 +2053,12 @@ fn navigation_answer(panel_id: &str, url: &str) -> Option<bool> {
     let host = parsed.host_str()?.to_string();
     let port = parsed.port_or_known_default()?;
     let mut stream = TcpStream::connect((host.as_str(), port)).ok()?;
-    stream.set_read_timeout(Some(Duration::from_millis(400))).ok()?;
-    stream.set_write_timeout(Some(Duration::from_millis(400))).ok()?;
+    stream
+        .set_read_timeout(Some(Duration::from_millis(400)))
+        .ok()?;
+    stream
+        .set_write_timeout(Some(Duration::from_millis(400)))
+        .ok()?;
     let request = format!(
         "GET {path} HTTP/1.1\r\nHost: {host}:{port}\r\nAuthorization: Bearer {token}\r\nConnection: close\r\n\r\n"
     );
@@ -1981,7 +2236,11 @@ pub enum CursorPlace {
 }
 
 /// The pointer counts only while it is over this window and this window is in front.
-pub fn cursor_place_for(over_desk: bool, desk_front: bool, browser_label: Option<String>) -> CursorPlace {
+pub fn cursor_place_for(
+    over_desk: bool,
+    desk_front: bool,
+    browser_label: Option<String>,
+) -> CursorPlace {
     if !over_desk || !desk_front {
         return CursorPlace::Away;
     }
@@ -2004,7 +2263,13 @@ fn cursor_place() -> CursorPlace {
 }
 
 /// Ctrl+F or Cmd+F opens find. F3 moves to the next match. Alt is left for the page.
-pub fn find_chord_vk(vk: u16, ctrl: bool, alt: bool, shift: bool, meta: bool) -> Option<&'static str> {
+pub fn find_chord_vk(
+    vk: u16,
+    ctrl: bool,
+    alt: bool,
+    shift: bool,
+    meta: bool,
+) -> Option<&'static str> {
     if alt {
         return None;
     }
@@ -2173,7 +2438,11 @@ fn prefix_hit(chord: &PrefixChord, snap: &KeySnap) -> bool {
 /// Window pixels under the cursor, turned into CSS pixels for `elementFromPoint`.
 pub fn css_from_client(x: i32, y: i32, dpi: u32, zoom: f64) -> Option<(f64, f64)> {
     let dpi = if dpi == 0 { 96 } else { dpi };
-    let zoom = if zoom.is_finite() && zoom > 0.0 { zoom } else { 1.0 };
+    let zoom = if zoom.is_finite() && zoom > 0.0 {
+        zoom
+    } else {
+        1.0
+    };
     let css_x = x as f64 * 96.0 / f64::from(dpi) / zoom;
     let css_y = y as f64 * 96.0 / f64::from(dpi) / zoom;
     if css_x.is_finite() && css_y.is_finite() {
@@ -2206,7 +2475,12 @@ pub fn route_desk_key(
     if !relay {
         return (armed, KeyRoute::Leave);
     }
-    (armed, KeyRoute::Take { panel: browser_panel.map(str::to_string) })
+    (
+        armed,
+        KeyRoute::Take {
+            panel: browser_panel.map(str::to_string),
+        },
+    )
 }
 
 fn is_modifier_key(key: &str) -> bool {
@@ -2264,14 +2538,15 @@ mod browser_wheel {
         GetAsyncKeyState, GetFocus, VK_CONTROL, VK_LWIN, VK_MENU, VK_RWIN, VK_SHIFT,
     };
     use windows::Win32::UI::WindowsAndMessaging::{
-        CallNextHookEx, GetAncestor, GetCursorPos, GetForegroundWindow, GetParent, GetWindowThreadProcessId,
-        SetWindowsHookExW, WindowFromPoint, GA_ROOT, HHOOK, MOUSEHOOKSTRUCT, MOUSEHOOKSTRUCTEX, WH_KEYBOARD, WH_MOUSE,
-        WM_LBUTTONDOWN, WM_MOUSEWHEEL, WM_RBUTTONDOWN,
+        CallNextHookEx, GetAncestor, GetCursorPos, GetForegroundWindow, GetParent,
+        GetWindowThreadProcessId, SetWindowsHookExW, WindowFromPoint, GA_ROOT, HHOOK,
+        MOUSEHOOKSTRUCT, MOUSEHOOKSTRUCTEX, WH_KEYBOARD, WH_MOUSE, WM_LBUTTONDOWN, WM_MOUSEWHEEL,
+        WM_RBUTTONDOWN,
     };
 
     use super::{
-        capture_prefix, css_from_client, key_from_vk, panel_id_from_browser, zoom_chord_vk, zoom_wheel_steps, KeyRoute,
-        KeySnap, PrefixChord,
+        capture_prefix, css_from_client, key_from_vk, panel_id_from_browser, zoom_chord_vk,
+        zoom_wheel_steps, KeyRoute, KeySnap, PrefixChord,
     };
 
     static APP: Mutex<Option<AppHandle>> = Mutex::new(None);
@@ -2365,7 +2640,9 @@ mod browser_wheel {
         if app
             .clone()
             .run_on_main_thread(move || {
-                let hwnd = posted.get_window("main").and_then(|window| window.hwnd().ok());
+                let hwnd = posted
+                    .get_window("main")
+                    .and_then(|window| window.hwnd().ok());
                 let _ = tx.send(hwnd.map(|hwnd| hwnd.0 as isize));
             })
             .is_err()
@@ -2397,7 +2674,11 @@ mod browser_wheel {
         let desk_front = desk != 0
             && !front.0.is_null()
             && unsafe { GetAncestor(front, GA_ROOT) }.0 as isize == desk;
-        let label = if over_desk { browser_label_at(hwnd) } else { None };
+        let label = if over_desk {
+            browser_label_at(hwnd)
+        } else {
+            None
+        };
         super::cursor_place_for(over_desk, desk_front, label)
     }
 
@@ -2534,7 +2815,9 @@ mod browser_wheel {
         let dpi = unsafe { GetDpiForWindow(HWND(desk as *mut std::ffi::c_void)) };
         let zoom = ZOOM.lock().ok().map(|zoom| *zoom).unwrap_or(1.0);
         let (x, y) = css_from_client(local.x, local.y, dpi, zoom)?;
-        Some(format!("window.__hwpFocusAt&&window.__hwpFocusAt({x:.1},{y:.1})"))
+        Some(format!(
+            "window.__hwpFocusAt&&window.__hwpFocusAt({x:.1},{y:.1})"
+        ))
     }
 
     pub fn set_prefix(chord: PrefixChord) {
@@ -2709,6 +2992,24 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_drive_reply_is_the_page_json_and_other_messages_are_ignored() {
+        let id = "0123456789abcdef0123456789abcdef";
+        let body =
+            format!(r#"{{"id":"{id}","text":"Example Domain","html":"","png":"","error":""}}"#);
+        assert_eq!(host_reply_body(&body).as_deref(), Some(body.as_str()));
+        let quoted = serde_json::to_string(&body).unwrap();
+        assert_eq!(host_reply_body(&quoted).as_deref(), Some(body.as_str()));
+        let wrapped = serde_json::json!({ "source": "hwp-drive", "body": body }).to_string();
+        assert_eq!(
+            windows_drive_reply(&wrapped).as_deref(),
+            Some(body.as_str())
+        );
+        assert!(windows_drive_reply(r#"{"cmd":"plugin:opener|open"}"#).is_none());
+        assert!(host_reply_body(r#"{"id":"short","text":""}"#).is_none());
+        assert!(host_reply_body("not json").is_none());
+    }
+
+    #[test]
     fn a_menu_cuts_a_hole_and_leaves_the_page_size_alone() {
         let page = CssBox {
             x: 100.0,
@@ -2729,8 +3030,14 @@ mod tests {
             width: 200.0,
             height: 240.0,
         };
-        assert_eq!(menu_holes(page, 600, 400, &[menu]), vec![(400, 0, 200, 240)]);
-        assert_eq!(menu_holes(page, 900, 600, &[menu]), vec![(600, 0, 300, 360)]);
+        assert_eq!(
+            menu_holes(page, 600, 400, &[menu]),
+            vec![(400, 0, 200, 240)]
+        );
+        assert_eq!(
+            menu_holes(page, 900, 600, &[menu]),
+            vec![(600, 0, 300, 360)]
+        );
     }
 
     #[test]
@@ -2748,23 +3055,40 @@ mod tests {
         assert_eq!(find_chord_vk(0x46, false, false, false, true), Some("open"));
         assert_eq!(find_chord_vk(0x46, true, false, true, false), None);
         assert_eq!(find_chord_vk(0x46, true, true, false, false), None);
-        assert_eq!(find_chord_vk(0x72, false, false, false, false), Some("next"));
+        assert_eq!(
+            find_chord_vk(0x72, false, false, false, false),
+            Some("next")
+        );
         assert_eq!(find_chord_vk(0x72, false, false, true, false), Some("prev"));
         assert_eq!(find_chord_vk(0x72, true, false, false, false), None);
     }
 
     #[test]
     fn find_titles_report_a_key_or_a_count() {
-        assert_eq!(parse_find_title("hwp-find-key:open"), Some(FindSignal::Key("open")));
-        assert_eq!(parse_find_title("hwp-find-key:next"), Some(FindSignal::Key("next")));
+        assert_eq!(
+            parse_find_title("hwp-find-key:open"),
+            Some(FindSignal::Key("open"))
+        );
+        assert_eq!(
+            parse_find_title("hwp-find-key:next"),
+            Some(FindSignal::Key("next"))
+        );
         assert_eq!(parse_find_title("hwp-find-key:nope"), None);
         assert_eq!(
             parse_find_title("hwp-find:4:12:3"),
-            Some(FindSignal::Count { token: 4, count: 12, index: 3 })
+            Some(FindSignal::Count {
+                token: 4,
+                count: 12,
+                index: 3
+            })
         );
         assert_eq!(
             parse_find_title("hwp-find:4:0:-1"),
-            Some(FindSignal::Count { token: 4, count: 0, index: -1 })
+            Some(FindSignal::Count {
+                token: 4,
+                count: 0,
+                index: -1
+            })
         );
         assert_eq!(parse_find_title("hwp-find:4:12"), None);
         assert_eq!(parse_find_title("hwp-snap:{}"), None);
@@ -2776,16 +3100,34 @@ mod tests {
 
     #[test]
     fn a_resting_page_is_not_a_zoom_box() {
-        assert_eq!(browser_page_zoom(1.0), "document.documentElement.style.zoom=''");
-        assert_eq!(browser_page_zoom(1.5), "document.documentElement.style.zoom=1.5");
-        assert_eq!(browser_page_zoom(0.0), "document.documentElement.style.zoom=''");
+        assert_eq!(
+            browser_page_zoom(1.0),
+            "document.documentElement.style.zoom=''"
+        );
+        assert_eq!(
+            browser_page_zoom(1.5),
+            "document.documentElement.style.zoom=1.5"
+        );
+        assert_eq!(
+            browser_page_zoom(0.0),
+            "document.documentElement.style.zoom=''"
+        );
     }
 
     #[test]
     fn browser_panels_are_placed_in_window_pixels() {
-        assert_eq!(scale_bounds(10.0, 20.0, 100.0, 50.0, 1.0), (10.0, 20.0, 100.0, 50.0));
-        assert_eq!(scale_bounds(10.0, 20.0, 100.0, 50.0, 1.5), (15.0, 30.0, 150.0, 75.0));
-        assert_eq!(scale_bounds(10.0, 20.0, 100.0, 50.0, 0.0), (10.0, 20.0, 100.0, 50.0));
+        assert_eq!(
+            scale_bounds(10.0, 20.0, 100.0, 50.0, 1.0),
+            (10.0, 20.0, 100.0, 50.0)
+        );
+        assert_eq!(
+            scale_bounds(10.0, 20.0, 100.0, 50.0, 1.5),
+            (15.0, 30.0, 150.0, 75.0)
+        );
+        assert_eq!(
+            scale_bounds(10.0, 20.0, 100.0, 50.0, 0.0),
+            (10.0, 20.0, 100.0, 50.0)
+        );
     }
 
     #[test]
@@ -2852,11 +3194,22 @@ mod tests {
             route_desk_key(None, true, false, &chord, &prefix),
             (true, KeyRoute::Take { panel: None })
         );
-        assert_eq!(route_desk_key(None, false, false, &chord, &prefix).1, KeyRoute::Leave);
-        assert_eq!(route_desk_key(None, true, false, &chord, &letter).1, KeyRoute::Leave);
+        assert_eq!(
+            route_desk_key(None, false, false, &chord, &prefix).1,
+            KeyRoute::Leave
+        );
+        assert_eq!(
+            route_desk_key(None, true, false, &chord, &letter).1,
+            KeyRoute::Leave
+        );
         assert_eq!(
             route_desk_key(Some("panel-1"), false, false, &chord, &prefix),
-            (true, KeyRoute::Take { panel: Some("panel-1".into()) })
+            (
+                true,
+                KeyRoute::Take {
+                    panel: Some("panel-1".into())
+                }
+            )
         );
         let outside = capture_prefix(false, true, true, None, false, &chord, &prefix);
         assert_eq!(outside.1, KeyRoute::Leave);
@@ -2880,14 +3233,20 @@ mod tests {
             repeat: false,
             up: false,
         };
-        assert_eq!(capture_prefix(false, true, true, None, true, &chord, &held_ctrl).0, true);
+        assert_eq!(
+            capture_prefix(false, true, true, None, true, &chord, &held_ctrl).0,
+            true
+        );
         assert_eq!(key_from_vk(0x42), ("b".into(), "KeyB".into()));
         assert_eq!(key_from_vk(0xBC), (",".into(), "Comma".into()));
         assert_eq!(css_from_client(200, 100, 96, 1.0), Some((200.0, 100.0)));
         assert_eq!(css_from_client(200, 100, 192, 1.0), Some((100.0, 50.0)));
         assert_eq!(css_from_client(200, 100, 96, 2.0), Some((100.0, 50.0)));
         assert_eq!(panel_id_from_browser("browser-panel-1"), Some("panel-1"));
-        assert_eq!(panel_id_from_browser("browser-panel-1:tab-2"), Some("panel-1"));
+        assert_eq!(
+            panel_id_from_browser("browser-panel-1:tab-2"),
+            Some("panel-1")
+        );
         assert_eq!(panel_id_from_browser("browser-panel-1:tab-2:nope"), None);
         assert_eq!(panel_id_from_browser("main"), None);
     }
@@ -2903,8 +3262,14 @@ mod tests {
             main_window_link("http://localhost:4737/plugins/checkin-report", &ports),
             LinkNavigation::Stay
         );
-        assert_eq!(main_window_link("about:blank", &ports), LinkNavigation::Stay);
-        assert_eq!(main_window_link("about:srcdoc", &ports), LinkNavigation::Stay);
+        assert_eq!(
+            main_window_link("about:blank", &ports),
+            LinkNavigation::Stay
+        );
+        assert_eq!(
+            main_window_link("about:srcdoc", &ports),
+            LinkNavigation::Stay
+        );
         assert_eq!(
             main_window_link("https://example.com/docs", &ports),
             LinkNavigation::External
@@ -2938,10 +3303,16 @@ mod tests {
             new_window_link("https://example.com/pr/1"),
             LinkNavigation::External
         );
-        assert_eq!(new_window_link("http://example.com"), LinkNavigation::External);
+        assert_eq!(
+            new_window_link("http://example.com"),
+            LinkNavigation::External
+        );
         assert_eq!(new_window_link("about:blank"), LinkNavigation::Refuse);
         assert_eq!(new_window_link("file:///tmp/x"), LinkNavigation::Refuse);
-        assert_eq!(new_window_link("javascript:alert(1)"), LinkNavigation::Refuse);
+        assert_eq!(
+            new_window_link("javascript:alert(1)"),
+            LinkNavigation::Refuse
+        );
         assert_eq!(new_window_link("herdr://panel"), LinkNavigation::Refuse);
     }
 
@@ -2949,9 +3320,17 @@ mod tests {
     #[test]
     fn a_page_zoom_message_becomes_the_desk_zoom_event() {
         let step = zoom_script("browser-panel-3", "wheel:-1").unwrap();
-        assert!(step.contains("herdr-zoom-step") && step.contains("\"browser-panel-3\"") && step.contains("steps:-1"));
+        assert!(
+            step.contains("herdr-zoom-step")
+                && step.contains("\"browser-panel-3\"")
+                && step.contains("steps:-1")
+        );
         let reset = zoom_script("browser-panel-3", "reset").unwrap();
-        assert!(reset.contains("herdr-zoom-set") && reset.contains("\"panel-3\"") && reset.contains("scale:1"));
+        assert!(
+            reset.contains("herdr-zoom-set")
+                && reset.contains("\"panel-3\"")
+                && reset.contains("scale:1")
+        );
         assert!(zoom_script("browser-panel-3", "sideways").is_none());
     }
 
@@ -2986,15 +3365,27 @@ mod tests {
     #[test]
     fn a_live_page_is_the_address_that_actually_loaded() {
         assert_eq!(
-            live_page("https://example.com/go", "https://example.com/a", "https://example.com/landed"),
+            live_page(
+                "https://example.com/go",
+                "https://example.com/a",
+                "https://example.com/landed"
+            ),
             LivePage::Moved("https://example.com/landed".into())
         );
         assert_eq!(
-            live_page("https://example.com/go", "https://example.com/a", "https://example.com/a"),
+            live_page(
+                "https://example.com/go",
+                "https://example.com/a",
+                "https://example.com/a"
+            ),
             LivePage::Same
         );
         assert_eq!(
-            live_page("https://example.com/go", "https://example.com/a", "https://example.com/go"),
+            live_page(
+                "https://example.com/go",
+                "https://example.com/a",
+                "https://example.com/go"
+            ),
             LivePage::Settled
         );
         assert_eq!(
@@ -3005,8 +3396,14 @@ mod tests {
             live_page("https://example.com/a", "", "https://example.com/a#section"),
             LivePage::Moved("https://example.com/a#section".into())
         );
-        assert_eq!(live_page("https://example.com/a", "", "about:blank"), LivePage::Same);
-        assert_eq!(live_page("https://example.com/a", "", "https://example.com/a"), LivePage::Same);
+        assert_eq!(
+            live_page("https://example.com/a", "", "about:blank"),
+            LivePage::Same
+        );
+        assert_eq!(
+            live_page("https://example.com/a", "", "https://example.com/a"),
+            LivePage::Same
+        );
         assert_eq!(
             live_page("https://example.com/b", "", "https://example.com/a"),
             LivePage::Moved("https://example.com/a".into())
@@ -3069,7 +3466,11 @@ mod tests {
             ..here.clone()
         };
         assert!(place_leaves_the_view(PlaceNav::Stay, Some(&here), &moved));
-        assert!(place_leaves_the_view(PlaceNav::Navigate, Some(&here), &here));
+        assert!(place_leaves_the_view(
+            PlaceNav::Navigate,
+            Some(&here),
+            &here
+        ));
         assert!(place_leaves_the_view(PlaceNav::Reload, Some(&here), &here));
         assert!(place_leaves_the_view(PlaceNav::Stay, None, &here));
     }
@@ -3134,11 +3535,36 @@ mod tests {
 
     #[test]
     fn a_later_place_does_not_pull_back_a_page_that_navigated() {
-        assert!(!desk_should_navigate("https://example.com/b", "https://example.com/a", "https://example.com/a", false));
-        assert!(!desk_should_navigate("https://example.com/b", "https://example.com/a", "https://example.com/b", false));
-        assert!(desk_should_navigate("https://example.com/b", "https://example.com/b", "https://example.com/c", false));
-        assert!(desk_should_navigate("https://example.com/b", "https://example.com/a", "https://example.com/a", true));
-        assert!(!desk_should_navigate("https://example.com/a", "https://example.com/a", "https://example.com/a", false));
+        assert!(!desk_should_navigate(
+            "https://example.com/b",
+            "https://example.com/a",
+            "https://example.com/a",
+            false
+        ));
+        assert!(!desk_should_navigate(
+            "https://example.com/b",
+            "https://example.com/a",
+            "https://example.com/b",
+            false
+        ));
+        assert!(desk_should_navigate(
+            "https://example.com/b",
+            "https://example.com/b",
+            "https://example.com/c",
+            false
+        ));
+        assert!(desk_should_navigate(
+            "https://example.com/b",
+            "https://example.com/a",
+            "https://example.com/a",
+            true
+        ));
+        assert!(!desk_should_navigate(
+            "https://example.com/a",
+            "https://example.com/a",
+            "https://example.com/a",
+            false
+        ));
     }
 
     #[test]

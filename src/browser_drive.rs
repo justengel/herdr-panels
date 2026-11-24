@@ -3,7 +3,7 @@
 
 use std::collections::HashMap;
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use serde_json::{json, Value};
@@ -14,6 +14,25 @@ use crate::plugin_grant::{self, ReadPath};
 
 pub const REMOTE_TAB: &str = "a remote page in a browser tab cannot be scripted";
 pub const CROSS_ORIGIN_FRAME: &str = "a cross-origin frame inside that page cannot be scripted";
+pub const DRIVE_OP_ERROR: &str =
+    "op is navigate, wait, click, fill, key, scroll, scroll-to, select, back, forward, or reload";
+
+pub fn is_drive_op(op: &str) -> bool {
+    matches!(
+        op,
+        "navigate"
+            | "wait"
+            | "click"
+            | "fill"
+            | "key"
+            | "scroll"
+            | "scroll-to"
+            | "select"
+            | "back"
+            | "forward"
+            | "reload"
+    )
+}
 
 #[derive(Clone)]
 pub struct Mailbox {
@@ -51,6 +70,43 @@ impl Mailbox {
     pub async fn cancel(&self, id: &str) {
         self.pending.lock().await.remove(id);
     }
+}
+
+struct LocalHub {
+    mailbox: Mailbox,
+    handle: tokio::runtime::Handle,
+}
+
+static LOCAL_HUB: OnceLock<LocalHub> = OnceLock::new();
+
+/// Remember the mailbox when the viewer and the desktop window are one process.
+pub fn install_local(mailbox: Mailbox) {
+    let _ = LOCAL_HUB.set(LocalHub {
+        mailbox,
+        handle: tokio::runtime::Handle::current(),
+    });
+}
+
+/// Finish a drive from this process. False when this process is not the viewer.
+pub fn deliver_local(body: &str) -> bool {
+    let Some(hub) = LOCAL_HUB.get() else {
+        return false;
+    };
+    let Ok(value) = serde_json::from_str::<Value>(body) else {
+        return false;
+    };
+    let Some(id) = value.get("id").and_then(Value::as_str) else {
+        return false;
+    };
+    if id.len() < 16 || id.len() > 80 || !id.chars().all(|ch| ch.is_ascii_hexdigit()) {
+        return false;
+    }
+    let id = id.to_string();
+    let mailbox = hub.mailbox.clone();
+    hub.handle.spawn(async move {
+        let _ = mailbox.finish(&id, value).await;
+    });
+    true
 }
 
 pub async fn ask(
@@ -235,6 +291,39 @@ fn fresh_id() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn a_local_reply_finishes_the_waiting_drive() {
+        let mailbox = Mailbox::new();
+        install_local(mailbox.clone());
+        let (id, rx) = mailbox.open().await;
+        let body = json!({
+            "id": id,
+            "text": "hello",
+            "html": "",
+            "png": "",
+            "error": "",
+            "href": "https://example.com/",
+        })
+        .to_string();
+        assert!(deliver_local(&body));
+        let value = tokio::time::timeout(Duration::from_secs(2), rx)
+            .await
+            .expect("timed out")
+            .expect("dropped");
+        assert_eq!(value["text"], "hello");
+        assert!(!deliver_local("{"));
+    }
+
+    #[test]
+    fn scroll_to_and_select_are_drive_ops() {
+        assert!(is_drive_op("scroll-to"));
+        assert!(is_drive_op("select"));
+        assert!(is_drive_op("wait"));
+        assert!(!is_drive_op("read"));
+        assert!(!is_drive_op("shot"));
+        assert!(!is_drive_op("type"));
+    }
 
     #[test]
     fn the_script_is_json_and_a_second_reply_is_ignored() {

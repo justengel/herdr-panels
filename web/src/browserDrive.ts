@@ -39,34 +39,23 @@ export async function runBrowserDrive(message: BrowserDriveMessage): Promise<voi
       () => undefined,
     );
 
-  if (message.op === "back" || message.op === "forward" || message.op === "reload") {
-    const host = desktopHost();
-    if (!host || type !== "iframe") {
-      await reply({ error: REMOTE_TAB });
-      return;
-    }
-    const script = message.op === "reload" ? "location.reload()" : `history.${message.op}()`;
+  const hole = browserHole(section);
+  const label = hole?.getAttribute("data-browser-label") || "";
+  const host = desktopHost();
+  if (host && label) {
+    const script =
+      message.op === "reload" ? "location.reload()" : message.op === "back" || message.op === "forward" ? `history.${message.op}()` : message.script;
     try {
-      await host.invoke("eval_browser", { label: `browser-${message.panelId}`, script });
-      await reply({});
+      await host.invoke("eval_browser", { label, script });
+      if (message.op === "back" || message.op === "forward" || message.op === "reload") await reply({});
     } catch (err) {
       await reply({ error: err instanceof Error ? err.message : String(err) });
     }
     return;
   }
 
-  if (type === "iframe") {
-    const host = desktopHost();
-    const hole = section?.querySelector("[data-browser-label]");
-    if (!host || !hole) {
-      await reply({ error: REMOTE_TAB });
-      return;
-    }
-    try {
-      await host.invoke("eval_browser", { label: `browser-${message.panelId}`, script: message.script });
-    } catch (err) {
-      await reply({ error: err instanceof Error ? err.message : String(err) });
-    }
+  if (type === "iframe" || message.op === "back" || message.op === "forward" || message.op === "reload") {
+    await reply({ error: REMOTE_TAB });
     return;
   }
 
@@ -75,12 +64,27 @@ export async function runBrowserDrive(message: BrowserDriveMessage): Promise<voi
 
 function panelSection(panelId: string): HTMLElement | null {
   const sections = [...document.querySelectorAll<HTMLElement>(`[data-panel-id="${CSS.escape(panelId)}"]`)];
+  const showing = (section: HTMLElement) => !section.closest("[hidden]") && !section.closest(".desk-held");
   return (
+    sections.find((section) => showing(section) && section.querySelector("[data-browser-label]")) ??
+    sections.find((section) => showing(section)) ??
     sections.find((section) => section.querySelector("[data-browser-label]") && !section.closest("[hidden]")) ??
-    sections.find((section) => !section.closest("[hidden]") && !section.closest(".desk-held")) ??
     sections[0] ??
     null
   );
+}
+
+function browserHole(section: HTMLElement | null): HTMLElement | null {
+  if (!section) return null;
+  const holes = [...section.querySelectorAll<HTMLElement>("[data-browser-label]")];
+  const visible = holes.find((hole) => {
+    if (hole.closest("[hidden]")) return false;
+    const style = getComputedStyle(hole);
+    if (style.display === "none" || style.visibility === "hidden") return false;
+    const rect = hole.getBoundingClientRect();
+    return rect.width >= 2 && rect.height >= 2;
+  });
+  return visible ?? holes[0] ?? null;
 }
 
 async function deskAction(section: HTMLElement | null, message: BrowserDriveMessage): Promise<Record<string, unknown>> {
@@ -104,7 +108,15 @@ async function deskAction(section: HTMLElement | null, message: BrowserDriveMess
     return { text: visibleText(current.element) };
   }
   const element = found.element;
-  if (!element && (message.op === "click" || message.op === "fill" || message.selector || message.text)) {
+  if (
+    !element &&
+    (message.op === "click" ||
+      message.op === "fill" ||
+      message.op === "scroll-to" ||
+      message.op === "select" ||
+      message.selector ||
+      message.text)
+  ) {
     return { error: found.error || "that element was not found" };
   }
   const target = element ?? root;
@@ -132,6 +144,18 @@ async function deskAction(section: HTMLElement | null, message: BrowserDriveMess
     target.scrollBy(message.dx ?? 0, message.dy ?? 0);
     return { text: visibleText(target) };
   }
+  if (message.op === "scroll-to") {
+    if (!element || typeof element.scrollIntoView !== "function") {
+      return { error: found.error || "that element was not found" };
+    }
+    element.scrollIntoView({ block: "start", inline: "nearest" });
+    return { text: visibleText(element) };
+  }
+  if (message.op === "select") {
+    if (!(element instanceof HTMLSelectElement)) return { error: "that element is not a select" };
+    writeSelect(element, message.value ?? "");
+    return { text: element.value };
+  }
   return { error: "unknown browser action" };
 }
 
@@ -156,6 +180,14 @@ function findIn(root: HTMLElement, selector?: string, text?: string): { element?
 
 function visibleText(element: HTMLElement): string {
   return (element.innerText || element.textContent || "").replace(/\u00a0/g, " ").trim().slice(0, 20000);
+}
+
+function writeSelect(field: HTMLSelectElement, value: string) {
+  const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")?.set;
+  if (setter) setter.call(field, value);
+  else field.value = value;
+  field.dispatchEvent(new Event("input", { bubbles: true }));
+  field.dispatchEvent(new Event("change", { bubbles: true }));
 }
 
 function writeField(field: HTMLElement, value: string) {

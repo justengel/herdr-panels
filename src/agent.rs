@@ -154,7 +154,7 @@ async fn index(State(state): State<AppState>) -> Json<Value> {
         "resolve": "POST /api/agent/resolve {target}",
         "read": "GET /api/agent/panels/{id}?selector=&text=&png= needs agent control",
         "write": "POST /api/agent/panels/{id}/write {text?, keys?} needs agent control",
-        "drive": "POST /api/agent/panels/{id}/drive {op, selector?, text?, value?, key?, url?, dx?, dy?, timeout?} needs agent control",
+        "drive": "POST /api/agent/panels/{id}/drive {op, selector?, text?, value?, key?, url?, dx?, dy?, timeout?, space?} needs agent control",
         "select": "POST /api/agent/panels/{id}/select {selector?, text?} needs agent control",
         "say": "POST /api/agent/say {to: panel name, id, or *, text, from?} needs agent control",
         "access": "GET /api/agent-access. POST {enabled:false} turns it off. The desktop window is what turns it on.",
@@ -1634,6 +1634,9 @@ struct DriveBody {
     dy: f64,
     #[serde(default)]
     timeout: Option<u64>,
+    /// Workspace id. A panel on another space can be driven while a visit is showing it.
+    #[serde(default)]
+    space: Option<String>,
 }
 
 async fn drive_panel(
@@ -1644,35 +1647,24 @@ async fn drive_panel(
 ) -> Result<Json<Value>, AgentError> {
     require_agent_access(&state)?;
     let op = body.op.trim().to_string();
-    if !matches!(
-        op.as_str(),
-        "navigate" | "wait" | "click" | "fill" | "key" | "scroll" | "back" | "forward" | "reload"
-    ) {
-        return Err(AgentError::bad(
-            "op is navigate, wait, click, fill, key, scroll, back, forward, or reload",
-        ));
+    if !crate::browser_drive::is_drive_op(&op) {
+        return Err(AgentError::bad(crate::browser_drive::DRIVE_OP_ERROR));
     }
-    let doc = load_active(&state, &link).await?;
-    let id = resolve_key(&state, &doc.root, &id)?;
-    let panel = list_panels(&doc.root)
-        .into_iter()
-        .find(|panel| panel.id == id)
-        .ok_or_else(|| AgentError::missing("panel was not found"))?;
-    let snapshot = link.runtime.snapshot().await;
-    let space = snapshot.focused_workspace_id.clone().unwrap_or_default();
-    if herdr_pane(&panel.panel)
+    let found = resolve_drive_panel(&state, &link, &id, body.space.as_deref()).await?;
+    let id = found.id;
+    if herdr_pane(&found.panel)
         .is_some_and(|pane| crate::panel_lock::pane_locked(&state.config_dir, pane))
         || crate::panel_lock::is_locked(
             &state.config_dir,
             &link.name,
-            &space,
-            &panel.id,
-            herdr_pane(&panel.panel),
+            &found.space,
+            &id,
+            herdr_pane(&found.panel),
         )
     {
         return Err(AgentError::forbidden("this panel is locked"));
     }
-    forbid_browser_panel(&state, &link, &panel.panel)?;
+    forbid_browser_panel(&state, &link, &found.panel)?;
     if op == "navigate" {
         let url = body.url.unwrap_or_default();
         let parsed = url::Url::parse(&url)
@@ -1681,7 +1673,7 @@ async fn drive_panel(
             return Err(AgentError::bad("navigate needs an http or https url"));
         }
         forbid_browser_url(&state, &link, &url)?;
-        let next = match panel.panel {
+        let next = match found.panel {
             PanelConfig::Iframe {
                 proxy, address_bar, ..
             } => PanelConfig::Iframe {
@@ -1691,7 +1683,8 @@ async fn drive_panel(
             },
             _ => return Err(AgentError::bad("navigate is for a browser panel")),
         };
-        return update_desk(&state, &link, &id, None, Some(next), None, None)
+        let space = (!found.space.is_empty()).then_some(found.space.as_str());
+        return update_desk(&state, &link, &id, None, Some(next), space, None)
             .await
             .map(Json);
     }
@@ -1729,6 +1722,96 @@ async fn drive_panel(
         "text": value.get("text").and_then(Value::as_str).unwrap_or(""),
         "html": value.get("html").and_then(Value::as_str).unwrap_or(""),
     })))
+}
+
+struct DrivePanel {
+    id: String,
+    panel: PanelConfig,
+    space: String,
+}
+
+/// The named space wins. With no space, the focused desk wins, and a panel that is only on
+/// another space is still found so a visit of that panel can be driven.
+async fn resolve_drive_panel(
+    state: &AppState,
+    link: &SessionLink,
+    key: &str,
+    space: Option<&str>,
+) -> Result<DrivePanel, AgentError> {
+    let requested = named_space(space);
+    match panel_on_space(state, link, key, requested).await {
+        Ok(found) => Ok(found),
+        Err(err) if requested.is_none() && drive_can_search(&err) => {
+            panel_on_any_space(state, link, key).await
+        }
+        Err(err) => Err(err),
+    }
+}
+
+fn drive_can_search(err: &AgentError) -> bool {
+    err.status == StatusCode::NOT_FOUND || err.message.contains("there is no desk to edit")
+}
+
+async fn panel_on_space(
+    state: &AppState,
+    link: &SessionLink,
+    key: &str,
+    space: Option<&str>,
+) -> Result<DrivePanel, AgentError> {
+    let (source, doc) = begin(state, link, space).await?;
+    let id = resolve_key(state, &doc.root, key)?;
+    let info = list_panels(&doc.root)
+        .into_iter()
+        .find(|panel| panel.id == id)
+        .ok_or_else(|| AgentError::missing("panel was not found"))?;
+    let space = match source {
+        ActiveSource::Space { workspace_id, .. } => workspace_id,
+        ActiveSource::Layout => String::new(),
+    };
+    Ok(DrivePanel {
+        id,
+        panel: info.panel,
+        space,
+    })
+}
+
+async fn panel_on_any_space(
+    state: &AppState,
+    link: &SessionLink,
+    key: &str,
+) -> Result<DrivePanel, AgentError> {
+    let owned = visit_spaces(state, link).await?;
+    let views: Vec<desk::VisitSpace<'_>> = owned
+        .iter()
+        .map(|space| desk::VisitSpace {
+            id: &space.id,
+            label: &space.label,
+            root: &space.root,
+            current: space.current,
+        })
+        .collect();
+    let found = desk::find_visits_with(&views, &[key], &|id| plugin_manifest_title(state, id))
+        .map_err(|err| {
+            if err.starts_with("panel was not found") {
+                AgentError::missing(err)
+            } else {
+                AgentError::bad(err)
+            }
+        })?;
+    let visit = &found[0];
+    let space = owned
+        .iter()
+        .find(|space| space.id == visit.space_id)
+        .ok_or_else(|| AgentError::missing("panel was not found"))?;
+    let info = list_panels(&space.root)
+        .into_iter()
+        .find(|panel| panel.id == visit.panel_id)
+        .ok_or_else(|| AgentError::missing("panel was not found"))?;
+    Ok(DrivePanel {
+        id: info.id,
+        panel: info.panel,
+        space: visit.space_id.clone(),
+    })
 }
 
 #[derive(Deserialize)]

@@ -4,6 +4,8 @@
 
 Ctrl+F, or Cmd+F, finds text in the focused panel. F3 and Shift+F3 move through the matches, and Escape closes the bar. Notes, files, lists, HTML panels, and plugins are searched in place. A terminal search covers the text on screen. A desktop browser panel is searched in that page. A remote page in a browser tab keeps the browser's own find once the page is clicked.
 
+`herdr-panels panel drive` reaches a desktop browser panel, including an https page and a panel open in a visit from another space. `wait`, `click`, and `fill` get an answer from that page. `--timeout` is how long to wait, in milliseconds. `scroll` takes `--dx` and `--dy`. `scroll-to` brings the element for `--selector` to the start of the page's own scroller. `select` sets a dropdown to `--value` and fires input and change. `--space` names the space.
+
 ## 0.1.22 - 2026-11-17
 
 Opening a PNG, JPEG, GIF, WebP, BMP, ICO, AVIF, or SVG shows the picture in the file panel. Other files still open as text.
