@@ -4,6 +4,8 @@ Recorded 2026-10-27 from the review before the first public release. Closed item
 
 ## Unreleased
 
+## Done in 0.1.23
+
 - Ctrl+F finds text in the focused panel. F3 and Shift+F3 move through the matches.
 - `panel drive` waits, clicks, fills, scrolls, and selects in a desktop browser panel, including an https page and a visit from another space.
 
