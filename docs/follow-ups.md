@@ -4,6 +4,10 @@ Recorded 2026-10-27 from the review before the first public release. Closed item
 
 ## Unreleased
 
+## Done in 0.1.24
+
+- `panel drive` matches a selector and text together, so a wait does not pass on an older element that only matches the selector.
+
 ## Done in 0.1.23
 
 - Ctrl+F finds text in the focused panel. F3 and Shift+F3 move through the matches.

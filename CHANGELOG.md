@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.1.24 - 2026-11-24
+
+`panel drive` accepts a selector and text together. `wait`, `click`, `fill`, `select`, and `scroll-to` use the first element for that selector whose visible text contains the text, ignoring case. A wait for a new response no longer succeeds on an older element that only matches the selector.
+
 ## 0.1.23 - 2026-11-24
 
 Ctrl+F, or Cmd+F, finds text in the focused panel. F3 and Shift+F3 move through the matches, and Escape closes the bar. Notes, files, lists, HTML panels, and plugins are searched in place. A terminal search covers the text on screen. A desktop browser panel is searched in that page. A remote page in a browser tab keeps the browser's own find once the page is clicked.
