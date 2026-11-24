@@ -2159,6 +2159,17 @@ async fn set_cli_access(webview: Webview) -> Result<(), String> {
     herdr_panels::desk_gate::enable_from_desk().await
 }
 
+/// Name the window after a session other than default, so two viewers can be told apart.
+#[tauri::command]
+fn set_window_title(window: tauri::WebviewWindow, session: String) -> Result<(), String> {
+    if window.label() != "main" {
+        return Err("the window title is set from the desk".into());
+    }
+    window
+        .set_title(&herdr_panels::paths::desktop_window_title(&session))
+        .map_err(|err| err.to_string())
+}
+
 /// Approve or cancel an unlock. Yes is refused unless this window holds the desk grant.
 #[tauri::command]
 async fn answer_panel_unlock(webview: Webview, id: String, yes: bool) -> Result<(), String> {
@@ -2188,7 +2199,8 @@ pub fn run() {
             set_frame_focus,
             open_external,
             set_cli_access,
-            answer_panel_unlock
+            answer_panel_unlock,
+            set_window_title
         ])
         .setup(|app| {
             let Some(config) = app
@@ -2210,20 +2222,54 @@ pub fn run() {
                 })
                 .on_navigation(move |url| allow_main_navigation(&navigate, url))
                 .build()?;
+            let mut title_url = VIEWER.to_string();
             if let Ok(raw) = std::env::var("HERDR_PANELS_URL") {
                 let raw = raw.trim().trim_end_matches('/').to_string();
-                if !raw.is_empty() && raw != VIEWER {
-                    if let Ok(target) = format!("{raw}/").parse() {
-                        let _ = window.navigate(target);
+                if !raw.is_empty() {
+                    title_url = raw.clone();
+                    if raw != VIEWER {
+                        if let Ok(target) = format!("{raw}/").parse() {
+                            let _ = window.navigate(target);
+                        }
                     }
                 }
             }
+            let title_window = window.clone();
+            std::thread::spawn(move || watch_window_title(title_window, title_url));
             #[cfg(windows)]
             browser_wheel::install(app.handle().clone());
             Ok(())
         })
         .run(tauri::generate_context!())
         .expect("error while running the desktop shell");
+}
+
+fn watch_window_title(window: tauri::WebviewWindow, url: String) {
+    let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    else {
+        return;
+    };
+    let config = herdr_panels::config::prepare_config_dir(None).ok();
+    let token = config
+        .as_deref()
+        .and_then(herdr_panels::launch::existing_token);
+    for _ in 0..40 {
+        let health = runtime.block_on(herdr_panels::launch::read_health(&url, token.as_deref()));
+        if let Some((200, body)) = health {
+            if let Some(session) = session_in_health(&body) {
+                let _ = window.set_title(&herdr_panels::paths::desktop_window_title(&session));
+                return;
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(250));
+    }
+}
+
+fn session_in_health(body: &str) -> Option<String> {
+    let value: serde_json::Value = serde_json::from_str(body).ok()?;
+    value.get("session")?.as_str().map(str::to_string)
 }
 
 /// Where the pointer is, for zoom keys when no panel is selected.

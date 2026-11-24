@@ -6,7 +6,7 @@ use crate::paths::{self, named_session_dir};
 
 pub async fn start_session(name: &str) -> Result<PathBuf, String> {
     let socket = socket_for(name)?;
-    if !socket.is_file() {
+    if !paths::herdr_socket_exists(&socket) {
         spawn_server(name)?;
         wait_for_file(&socket).await?;
     }
@@ -29,7 +29,7 @@ pub async fn rename_session(from: &str, to: &str) -> Result<PathBuf, String> {
         return Err("a session with that name already exists".into());
     }
     let old_socket = source.join("herdr.sock");
-    if old_socket.is_file() {
+    if paths::herdr_socket_exists(&old_socket) {
         stop_session(from)?;
         wait_until_gone(&old_socket).await?;
     }
@@ -63,7 +63,7 @@ pub async fn close_session(name: &str) -> Result<(), String> {
     let socket = named_session_dir(name)
         .map_err(|err| err.to_string())?
         .join("herdr.sock");
-    if socket.is_file() {
+    if paths::herdr_socket_exists(&socket) {
         stop_session(name)?;
         wait_until_gone(&socket).await?;
     }
@@ -109,7 +109,7 @@ fn spawn_server(name: &str) -> Result<(), String> {
 
 async fn wait_for_file(path: &Path) -> Result<(), String> {
     for _ in 0..50 {
-        if path.is_file() {
+        if paths::herdr_socket_exists(path) {
             return Ok(());
         }
         tokio::time::sleep(Duration::from_millis(200)).await;

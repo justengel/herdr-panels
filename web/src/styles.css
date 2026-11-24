@@ -62,6 +62,11 @@ button, select, input { font: inherit; color: inherit; }
   letter-spacing: 0.01em;
 }
 
+.brand .session-name {
+  color: var(--muted);
+  font-weight: 550;
+}
+
 .mark {
   width: 18px;
   height: 18px;

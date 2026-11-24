@@ -217,7 +217,14 @@ async fn start_viewer_in(config_dir: std::path::PathBuf, url: &str) -> Result<()
     let (host, port) = endpoint(url)?;
     let config_dir =
         herdr_panels::config::prepare_config_dir(Some(config_dir)).map_err(|err| err.to_string())?;
-    let herdr_socket = herdr_panels::paths::resolve_herdr_socket(None, None)
+    let socket_flag = std::env::var_os("HERDR_PANELS_HERDR_SOCKET")
+        .filter(|value| !value.is_empty())
+        .map(std::path::PathBuf::from);
+    let session_flag = std::env::var("HERDR_PANELS_HERDR_SESSION")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    let herdr_socket = herdr_panels::paths::resolve_herdr_socket(socket_flag, session_flag)
         .map_err(|err| err.to_string())?;
     herdr_panels::serve(herdr_panels::server::ServerConfig {
         host,

@@ -31,6 +31,10 @@ impl Drop for Desk {
 }
 
 async fn desk() -> Desk {
+    desk_with_socket(None).await
+}
+
+async fn desk_with_socket(socket: Option<PathBuf>) -> Desk {
     static NEXT: AtomicU64 = AtomicU64::new(0);
     let id = NEXT.fetch_add(1, Ordering::Relaxed);
     let root = std::env::temp_dir().join(format!("hwp-blueprint-{}-{id}", std::process::id()));
@@ -88,7 +92,8 @@ async fn desk() -> Desk {
 
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
-    let app = build_app(root.clone(), root.join("missing-herdr.sock"), port).unwrap();
+    let herdr_socket = socket.unwrap_or_else(|| root.join("missing-herdr.sock"));
+    let app = build_app(root.clone(), herdr_socket, port).unwrap();
     let token = herdr_panels::auth::session_token(&root).unwrap();
     let server = tokio::spawn(async move {
         axum::serve(listener, app).await.unwrap();
@@ -208,16 +213,63 @@ async fn the_viewer_stays_up_when_herdr_is_offline() {
     assert_eq!(health["build"], herdr_panels::BUILD_ID);
     assert_eq!(health["version"], env!("CARGO_PKG_VERSION"));
     assert!(health["dev"].is_boolean());
+    assert_eq!(health["session"], "default");
+
+    let (status, sessions) = desk.call("GET", "/api/sessions", None).await;
+    assert_eq!(status, StatusCode::OK);
+    let names = sessions["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|item| item.get("name").and_then(Value::as_str))
+        .collect::<Vec<_>>();
+    assert!(names.contains(&"default"), "{names:?}");
 
     let (status, runtime) = desk.call("GET", "/api/runtime", None).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(runtime["connected"], false);
+    assert_eq!(runtime["session"], "default");
 
     let (status, workspace) = desk.call("GET", "/api/agent/workspace", None).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(workspace["panels"].as_array().unwrap().len(), 2);
     assert_eq!(desk.panel(&workspace, "Shell")["type"], "herdr");
     assert_eq!(desk.panel(&workspace, "Notes")["type"], "markdown");
+}
+
+#[tokio::test]
+async fn a_viewer_reports_the_session_named_by_its_socket() {
+    let socket = std::env::temp_dir()
+        .join(format!(
+            "hwp-session-name-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ))
+        .join("sessions")
+        .join("demos")
+        .join("herdr.sock");
+    let desk = desk_with_socket(Some(socket)).await;
+    let (status, health) = desk.call("GET", "/api/health", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(health["session"], "demos");
+    let (status, sessions) = desk.call("GET", "/api/sessions", None).await;
+    assert_eq!(status, StatusCode::OK);
+    let names = sessions["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|item| item.get("name").and_then(Value::as_str))
+        .collect::<Vec<_>>();
+    assert!(
+        names.contains(&"demos"),
+        "the attached session should be listed, got {names:?}"
+    );
+    let (status, runtime) = desk.call("GET", "/api/runtime", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(runtime["session"], "demos");
 }
 
 #[tokio::test]

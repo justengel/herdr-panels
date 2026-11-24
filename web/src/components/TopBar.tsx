@@ -63,6 +63,7 @@ export function TopBar({
       <div className="brand">
         <img className="mark" src="/icon.svg" alt="" />
         <span>Herdr Panels</span>
+        {session !== "default" ? <span className="session-name">{session}</span> : null}
       </div>
       {mode ? (
         <form

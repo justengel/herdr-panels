@@ -77,3 +77,8 @@ commands.allow = ["set_cli_access"]
 identifier = "allow-answer-panel-unlock"
 description = "Confirm or cancel unlocking a panel from the desktop window."
 commands.allow = ["answer_panel_unlock"]
+
+[[permission]]
+identifier = "allow-set-window-title"
+description = "Set the desktop window title from the session this viewer is attached to."
+commands.allow = ["set_window_title"]

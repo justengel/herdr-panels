@@ -26,8 +26,8 @@ describe("tab session", () => {
     vi.stubGlobal("window", {});
   });
 
-  it("starts a new tab at default and keeps that tab's name", () => {
-    expect(tabSession()).toBe("default");
+  it("follows the viewer until this tab chooses a session", () => {
+    expect(tabSession()).toBe("");
     rememberSession("testing");
     expect(tabSession()).toBe("testing");
     rememberSession("  ");
@@ -64,5 +64,10 @@ describe("tab session", () => {
     expect(wsUrl("/ws/terminal?paneId=w1%3Ap1")).toBe(
       "ws://127.0.0.1:9/ws/terminal?paneId=w1%3Ap1&session=testing",
     );
+    vi.stubGlobal("sessionStorage", memoryStorage());
+    await api.health();
+    const fresh = fetchMock.mock.calls[1]?.[1] as RequestInit;
+    expect(new Headers(fresh.headers).get("X-Herdr-Session")).toBeNull();
+    expect(wsUrl("/ws/terminal")).toBe("ws://127.0.0.1:9/ws/terminal");
   });
 });

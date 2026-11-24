@@ -36,8 +36,20 @@ function hwpHidden(el) {
     if (node.nodeType === 1) {
       if (node.hidden) return true;
       if (node.getAttribute && node.getAttribute("aria-hidden") === "true") return true;
-      var tag = node.tagName;
-      if (tag === "SCRIPT" || tag === "STYLE" || tag === "NOSCRIPT" || tag === "TEXTAREA" || tag === "INPUT" || tag === "SELECT") return true;
+      var tag = String(node.tagName || "").toLowerCase();
+      if (
+        tag === "script" ||
+        tag === "style" ||
+        tag === "noscript" ||
+        tag === "textarea" ||
+        tag === "input" ||
+        tag === "select" ||
+        tag === "template" ||
+        tag === "title" ||
+        tag === "desc"
+      ) {
+        return true;
+      }
       if (node.classList && node.classList.contains("find-bar")) return true;
     }
     node = node.parentNode;
@@ -121,12 +133,17 @@ function hwpStyle(doc) {
   (doc.head || doc.documentElement).appendChild(style);
 }
 
+function hwpDropHighlight(view, name) {
+  if (!view || !view.CSS || !view.CSS.highlights) return;
+  var existing = view.CSS.highlights.get ? view.CSS.highlights.get(name) : null;
+  if (existing && existing.clear) existing.clear();
+  view.CSS.highlights.delete(name);
+}
+
 function hwpClearFind(doc, root) {
   var view = doc && doc.defaultView;
-  if (view && view.CSS && view.CSS.highlights) {
-    view.CSS.highlights.delete("hwp-find");
-    view.CSS.highlights.delete("hwp-find-current");
-  }
+  hwpDropHighlight(view, "hwp-find");
+  hwpDropHighlight(view, "hwp-find-current");
   if (!root || !root.querySelectorAll) return;
   var marks = root.querySelectorAll("mark.hwp-find-mark");
   for (var i = 0; i < marks.length; i += 1) {
@@ -164,6 +181,8 @@ function hwpPaint(doc, parts, matches, at) {
       for (var j = 0; j < ranges.length; j += 1) all.add(ranges[j]);
     }
     for (var k = 0; k < current.length; k += 1) here.add(current[k]);
+    hwpDropHighlight(view, "hwp-find");
+    hwpDropHighlight(view, "hwp-find-current");
     view.CSS.highlights.set("hwp-find", all);
     view.CSS.highlights.set("hwp-find-current", here);
   } else {
@@ -200,6 +219,7 @@ function hwpApplyFind(root, query, index, matchCase) {
 
 globalThis.hwpFindChord = hwpFindChord;
 globalThis.hwpTextMatches = hwpTextMatches;
+globalThis.hwpHidden = hwpHidden;
 globalThis.hwpApplyFind = hwpApplyFind;
 
 if (typeof window !== "undefined" && window.parent && window.parent !== window && !window.__hwpFrameFind) {

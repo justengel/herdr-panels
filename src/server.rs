@@ -82,7 +82,7 @@ pub fn build_app(config_dir: PathBuf, herdr_socket: PathBuf, port: u16) -> anyho
     let token = crate::auth::session_token(&config_dir)?;
     let settings = store::load_settings(&config_dir)?;
     let desk_grant = crate::auth::random_secret()?;
-    crate::desk_gate::arm_launch(config_dir.clone(), desk_grant.clone());
+    crate::desk_gate::arm_launch(config_dir.clone(), desk_grant.clone(), herdr_socket.clone());
     let mut watch_paths = vec![config_dir.clone()];
     watch_paths.extend(settings.content_roots.iter().cloned());
     let watch = WatchHub::start(&watch_paths)?;
@@ -192,6 +192,10 @@ pub async fn serve(config: ServerConfig) -> anyhow::Result<()> {
     tracing::info!("listening on {}", config.url);
     tracing::info!("config directory {}", config.config_dir.display());
     tracing::info!("herdr socket {}", config.herdr_socket.display());
+    tracing::info!(
+        "herdr session {}",
+        crate::paths::session_label(&config.herdr_socket)
+    );
     if find_dist_dir().is_some() {
         tracing::info!("serving the built UI from disk");
     } else if crate::bundle::has_packaged_page() {
@@ -537,12 +541,13 @@ async fn setup_page() -> Html<&'static str> {
     Html(include_str!("../assets/setup.html"))
 }
 
-async fn health() -> Json<Value> {
+async fn health(State(state): State<AppState>) -> Json<Value> {
     Json(json!({
         "ok": true,
         "build": crate::BUILD_ID,
         "version": env!("CARGO_PKG_VERSION"),
         "dev": cfg!(debug_assertions),
+        "session": state.sessions.startup_name(),
     }))
 }
 
@@ -1399,8 +1404,13 @@ async fn issue_frame_pass(
     Ok(Json(json!({ "src": src })))
 }
 
-async fn list_sessions() -> Result<Json<Value>, ApiError> {
-    let sessions = crate::paths::list_herdr_sessions().map_err(ApiError::bad)?;
+async fn list_sessions(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
+    let found = crate::paths::list_herdr_sessions().unwrap_or_default();
+    let sessions = crate::paths::include_attached_session(
+        state.sessions.startup_name(),
+        state.sessions.startup_socket().to_path_buf(),
+        found,
+    );
     Ok(Json(json!({
         "sessions": sessions.into_iter().map(|(name, _)| json!({ "name": name })).collect::<Vec<_>>(),
     })))

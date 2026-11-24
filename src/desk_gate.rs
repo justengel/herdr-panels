@@ -19,15 +19,17 @@ struct Launch {
     url: String,
     config_dir: PathBuf,
     grant: String,
+    herdr_socket: PathBuf,
 }
 
 static LAUNCH: Mutex<Option<Launch>> = Mutex::new(None);
 
-pub fn arm_launch(config_dir: PathBuf, grant: String) {
+pub fn arm_launch(config_dir: PathBuf, grant: String, herdr_socket: PathBuf) {
     *launch_slot() = Some(Launch {
         url: String::new(),
         config_dir,
         grant,
+        herdr_socket,
     });
 }
 
@@ -73,6 +75,9 @@ pub fn apply_desktop_env(command: &mut std::process::Command, url: Option<&str>)
     };
     command.env("HERDR_PANELS_DESK_GRANT", &launch.grant);
     command.env("HERDR_PANELS_CONFIG", &launch.config_dir);
+    if !launch.herdr_socket.as_os_str().is_empty() {
+        command.env("HERDR_PANELS_HERDR_SOCKET", &launch.herdr_socket);
+    }
     let chosen = url
         .map(str::to_string)
         .filter(|value| !value.is_empty())

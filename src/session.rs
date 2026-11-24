@@ -185,6 +185,10 @@ impl SessionLinks {
         &self.startup_name
     }
 
+    pub fn startup_socket(&self) -> &std::path::Path {
+        &self.startup_socket
+    }
+
     /// The named session, or the startup session when `requested` is missing.
     /// A stopped session still gets a link so the caller can report it offline.
     pub fn open(&self, requested: Option<&str>) -> Result<SessionLink, String> {

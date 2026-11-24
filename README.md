@@ -364,7 +364,7 @@ Default config directory:
 - Windows: `%APPDATA%\herdr-panels`
 - macOS and Linux: `$XDG_CONFIG_HOME/herdr-panels` or `~/.config/herdr-panels`
 
-The first launch copies the bundled examples into that directory when it has no layouts. `HERDR_PANELS_CONFIG` selects that directory when `--config` is omitted, which is how `npm run dev` finds the same place as the viewer. `HERDR_PANELS_TOKEN` overrides `auth-token` for each process that has it set. Herdr's own socket is discovered from `HERDR_SOCKET_PATH`, then `HERDR_SESSION` / `--herdr-session`, then the default session socket printed by `herdr status`.
+The first launch copies the bundled examples into that directory when it has no layouts. `HERDR_PANELS_CONFIG` selects that directory when `--config` is omitted, which is how `npm run dev` finds the same place as the viewer. `HERDR_PANELS_TOKEN` overrides `auth-token` for each process that has it set. The Herdr socket is the path given by `--herdr-socket`. With no socket flag, `--herdr-session` selects that session. With neither flag, the socket is `HERDR_SOCKET_PATH`, then `HERDR_SESSION`, then the default session socket printed by `herdr status`. `--config` and `--url` may come before the command.
 
 The example side-by-side layout targets pane `w1:p1`. If that pane is not in the session, right-click the terminal's title bar and choose another pane. The choice is saved into the layout file.
 
@@ -373,12 +373,15 @@ The example side-by-side layout targets pane `w1:p1`. If that pane is not in the
 ```sh
 herdr --session demo server
 herdr --session demo workspace create --label demo
-cargo run -- server --herdr-session demo
+herdr-panels server --config ~/.config/herdr-panels-demo --herdr-session demo --port 4747
+herdr-panels desktop --config ~/.config/herdr-panels-demo
 ```
+
+`--herdr-session` selects that session when the shell inherited another socket. The viewer reports the session in `herdr-panels status`, in `/api/sessions`, and at startup. A name in `sessions/<name>/herdr.sock` is that session. The desktop window title is `Herdr Panels - demo` for that session, and stays `Herdr Panels` for the default session.
 
 ## Desktop shell
 
-`src-tauri` opens this same viewer in a native window. How to start it is in [Install and run](#install-and-run). The window class is `herdr-panels-desktop`. Closing the window leaves the viewer running when `herdr-panels` started it. Ctrl or Cmd with the mouse wheel zooms the panel under the pointer. Ctrl or Cmd with plus, minus, or 0 zooms the panel with the gold bar. With no panel selected, those keys zoom the panel under the pointer while this window is in front. With the pointer somewhere else, Ctrl+0 or Cmd+0 returns every panel to 100%. Clicking the session bar clears that bar. Steps are 10% from 50% to 200%, and 25% from 25% to 300%. The session bar stays the same size. A terminal changes its font size and keeps its place in its history. A browser tab zooms one panel at a time the same way. A browser panel whose address is `http` or `https` is a child webview laid on that panel's content rectangle, so the site is its own top-level page. Moving a divider sends the new rectangle to the webview. A right-click menu stays on screen and the webview shifts out from under it. The settings dialog, design mode, and a panel drag hide the webview so those controls can take the pointer. Element selection stays on the page and runs inside it. A normal browser tab still uses an iframe.
+`src-tauri` opens this same viewer in a native window. How to start it is in [Install and run](#install-and-run). `herdr-panels desktop` opens the window. `--config` uses the viewer recorded for that config directory, and `--url` names the address. When that viewer is not running, the window starts one and passes `--herdr-session`, `--herdr-socket`, and `--port` through. `herdr-panels desktop --help` prints this help. The window class is `herdr-panels-desktop`. Closing the window leaves the viewer running when `herdr-panels` started it. Ctrl or Cmd with the mouse wheel zooms the panel under the pointer. Ctrl or Cmd with plus, minus, or 0 zooms the panel with the gold bar. With no panel selected, those keys zoom the panel under the pointer while this window is in front. With the pointer somewhere else, Ctrl+0 or Cmd+0 returns every panel to 100%. Clicking the session bar clears that bar. Steps are 10% from 50% to 200%, and 25% from 25% to 300%. The session bar stays the same size. A terminal changes its font size and keeps its place in its history. A browser tab zooms one panel at a time the same way. A browser panel whose address is `http` or `https` is a child webview laid on that panel's content rectangle, so the site is its own top-level page. Moving a divider sends the new rectangle to the webview. A right-click menu stays on screen and the webview shifts out from under it. The settings dialog, design mode, and a panel drag hide the webview so those controls can take the pointer. Element selection stays on the page and runs inside it. A normal browser tab still uses an iframe.
 
 ## Development checks
 

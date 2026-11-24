@@ -77,4 +77,31 @@ describe("frame find", () => {
     expect(sandbox.hwpFindChord?.({ key: "F3", ctrlKey: false, metaKey: false, altKey: false, shiftKey: true })).toBe("prev");
     expect(sandbox.hwpFindChord?.({ key: "f", ctrlKey: false, metaKey: false, altKey: false, shiftKey: false })).toBeNull();
   });
+
+  it("skips a diagram stylesheet, whose tag name is lowercase", () => {
+    const sandbox = load() as {
+      hwpHidden?: (el: {
+        nodeType: number;
+        tagName: string;
+        hidden: boolean;
+        parentNode: unknown;
+        getAttribute: () => null;
+        classList: { contains: () => boolean };
+      }) => boolean;
+    };
+    const hidden = (tag: string) =>
+      sandbox.hwpHidden?.({
+        nodeType: 1,
+        tagName: tag,
+        hidden: false,
+        parentNode: null,
+        getAttribute: () => null,
+        classList: { contains: () => false },
+      });
+    expect(hidden("style")).toBe(true);
+    expect(hidden("STYLE")).toBe(true);
+    expect(hidden("script")).toBe(true);
+    expect(hidden("p")).toBe(false);
+    expect(hidden("tspan")).toBe(false);
+  });
 });

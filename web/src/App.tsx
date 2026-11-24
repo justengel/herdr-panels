@@ -8,6 +8,7 @@ import {
   type HerdrCtlStatus,
   type ViewerHealth,
 } from "./api";
+import { applyWindowTitle } from "./windowTitle";
 import type { HerdrStatusAction } from "./herdrStatus";
 import { DesignProvider } from "./design";
 import { highlight, inspectPanel } from "./inspect";
@@ -182,6 +183,9 @@ export function App() {
   keyIdRef.current = keyId;
 
   useEffect(() => installContextMenuGuard(), []);
+  useEffect(() => {
+    applyWindowTitle(runtime?.session || tabSession());
+  }, [runtime?.session]);
 
   useEffect(() => {
     let stopped = false;
@@ -697,7 +701,8 @@ export function App() {
         return;
       }
       const posted = (msg as { session?: string }).session;
-      if (posted && posted !== tabSession()) return;
+      const chosen = tabSession();
+      if (posted && chosen && posted !== chosen) return;
       if (msg.type === "agent-access" && typeof msg.enabled === "boolean") {
         setCliAccess(msg.enabled);
         return;

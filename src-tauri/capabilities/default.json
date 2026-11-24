@@ -1,11 +1,11 @@
 {
   "identifier": "desktop-shell",
-  "description": "The local viewer may place browser panels and open http or https links in the system browser. Remote sites loaded in child webviews are not listed here. The page cannot call the opener plugin directly.",
+  "description": "The local viewer may place browser panels and open http or https links in the system browser. Remote sites loaded in child webviews are not listed here. The page cannot call the opener plugin directly. A loopback viewer on any port can call these commands so a second window is not stuck on 4737.",
   "windows": ["main"],
   "remote": {
     "urls": [
-      "http://127.0.0.1:4737/*",
-      "http://localhost:4737/*"
+      "http://127.0.0.1:*/*",
+      "http://localhost:*/*"
     ]
   },
   "permissions": [
@@ -25,6 +25,7 @@
     "allow-set-frame-focus",
     "allow-open-external",
     "allow-set-cli-access",
-    "allow-answer-panel-unlock"
+    "allow-answer-panel-unlock",
+    "allow-set-window-title"
   ]
 }

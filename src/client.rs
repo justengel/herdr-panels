@@ -13,7 +13,7 @@ use crate::plugins;
     name = "herdr-panels",
     version,
     about = "Herdr viewer with installable HTML panels",
-    long_about = "herdr-panels starts the viewer and opens the desktop window when that program is installed, or a browser tab otherwise. When the viewer is already running, it opens the window and exits.\nherdr-panels server runs the viewer without opening a window.\nherdr-panels desktop opens the desktop window. On its own it starts a viewer when the address is closed, and that viewer stops when the window closes.\nherdr-panels install-launcher writes the application menu entry: a Linux desktop file, a Windows Start menu shortcut, or a macOS app in the home Applications folder.\nherdr-panels update downloads the latest GitHub release and replaces this program. When the desktop window is beside it, that program is replaced from the same release. A viewer that is already running is stopped and started again on the same address, and an open desktop window is opened again.\nherdr-panels panel, access, plugin, and token talk to that viewer or its config."
+    long_about = "herdr-panels starts the viewer and opens the desktop window when that program is installed, or a browser tab otherwise. When the viewer is already running, it opens the window and exits.\nherdr-panels server runs the viewer without opening a window.\nherdr-panels desktop opens the desktop window. Pass --config or --url to open a viewer other than the default one. On its own it starts a viewer when the address is closed, and that viewer stops when the window closes. --herdr-session, --herdr-socket, and --port are passed through to that viewer.\n--config and --url may come before the command, as in herdr-panels --config DIR access.\nherdr-panels install-launcher writes the application menu entry: a Linux desktop file, a Windows Start menu shortcut, or a macOS app in the home Applications folder.\nherdr-panels update downloads the latest GitHub release and replaces this program. When the desktop window is beside it, that program is replaced from the same release. A viewer that is already running is stopped and started again on the same address, and an open desktop window is opened again.\nherdr-panels panel, access, plugin, and token talk to that viewer or its config."
 )]
 struct ClientCli {
     /// Viewer URL. Defaults to the address recorded by the running server.
@@ -428,6 +428,11 @@ async fn status(config_dir: &std::path::Path, url: Option<String>) -> anyhow::Re
     match call(&base, &token, "GET", "/api/health", None).await {
         Ok(body) => {
             println!("{base}");
+            if let Ok(value) = serde_json::from_str::<Value>(&body) {
+                if let Some(session) = value.get("session").and_then(Value::as_str) {
+                    println!("session {session}");
+                }
+            }
             println!("{body}");
             Ok(())
         }
@@ -1173,8 +1178,22 @@ fn weight_list(raw: Option<String>) -> anyhow::Result<Vec<f64>> {
 
 pub(crate) async fn request_desk_window(config_dir: &std::path::Path) -> anyhow::Result<()> {
     let base = server_url(config_dir, None)?;
+    request_desk_window_at(config_dir, &base).await
+}
+
+pub(crate) async fn request_desk_window_at(
+    config_dir: &std::path::Path,
+    url: &str,
+) -> anyhow::Result<()> {
     let token = crate::auth::session_token(config_dir)?;
-    call(&base, &token, "POST", "/api/desk-window", Some(json!({}))).await?;
+    call(
+        url.trim_end_matches('/'),
+        &token,
+        "POST",
+        "/api/desk-window",
+        Some(json!({})),
+    )
+    .await?;
     Ok(())
 }
 

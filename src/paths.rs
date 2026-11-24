@@ -3,38 +3,62 @@ use std::path::{Path, PathBuf};
 use anyhow::{bail, Context};
 
 /// Logical Herdr socket path, before the Windows named-pipe prefix.
+///
+/// An explicit socket wins. An explicit session wins over `HERDR_SOCKET_PATH`
+/// and `HERDR_SESSION`, which a shell inside Herdr inherits from another session.
 pub fn resolve_herdr_socket(
     flag: Option<PathBuf>,
     session_flag: Option<String>,
 ) -> anyhow::Result<PathBuf> {
-    if let Some(path) = flag {
+    let env_socket = std::env::var_os("HERDR_SOCKET_PATH")
+        .filter(|path| !path.is_empty())
+        .map(PathBuf::from);
+    let env_session = std::env::var("HERDR_SESSION")
+        .ok()
+        .filter(|value| !value.trim().is_empty());
+    choose_herdr_socket(
+        flag,
+        session_flag.as_deref(),
+        env_socket,
+        env_session.as_deref(),
+        &herdr_config_dir()?,
+    )
+}
+
+pub fn choose_herdr_socket(
+    socket_flag: Option<PathBuf>,
+    session_flag: Option<&str>,
+    env_socket: Option<PathBuf>,
+    env_session: Option<&str>,
+    base: &Path,
+) -> anyhow::Result<PathBuf> {
+    if let Some(path) = socket_flag.filter(|path| !path.as_os_str().is_empty()) {
         return Ok(path);
     }
-    if let Some(path) = std::env::var_os("HERDR_SOCKET_PATH") {
-        if !path.is_empty() {
-            return Ok(PathBuf::from(path));
-        }
+    if let Some(name) = trimmed(session_flag) {
+        return named_socket(base, name);
     }
-    let session = session_flag.or_else(|| {
-        std::env::var("HERDR_SESSION")
-            .ok()
-            .filter(|value| !value.is_empty())
-    });
-    let base = herdr_config_dir()?;
-    let path = match session {
-        Some(name) => {
-            if name.contains('/')
-                || name.contains('\\')
-                || name.contains("..")
-                || name.starts_with('.')
-            {
-                bail!("invalid Herdr session name");
-            }
-            base.join("sessions").join(name).join("herdr.sock")
-        }
-        None => base.join("herdr.sock"),
-    };
-    Ok(path)
+    if let Some(path) = env_socket.filter(|path| !path.as_os_str().is_empty()) {
+        return Ok(path);
+    }
+    if let Some(name) = trimmed(env_session) {
+        return named_socket(base, name);
+    }
+    Ok(base.join("herdr.sock"))
+}
+
+fn trimmed(value: Option<&str>) -> Option<&str> {
+    value.map(str::trim).filter(|value| !value.is_empty())
+}
+
+fn named_socket(base: &Path, name: &str) -> anyhow::Result<PathBuf> {
+    if name == "default" {
+        return Ok(base.join("herdr.sock"));
+    }
+    if !valid_session_name(name) {
+        bail!("invalid Herdr session name");
+    }
+    Ok(base.join("sessions").join(name).join("herdr.sock"))
 }
 
 /// Session name encoded in `<herdr config>/sessions/<name>/herdr.sock`.
@@ -59,11 +83,56 @@ pub fn session_label(socket: &Path) -> String {
     session_name_from_socket(socket).unwrap_or_else(|| "default".into())
 }
 
+/// Window title for a viewer. Default stays "Herdr Panels" so an existing window is unchanged.
+pub fn desktop_window_title(session: &str) -> String {
+    let name = session.trim();
+    if !valid_session_name(name) {
+        return "Herdr Panels".into();
+    }
+    format!("Herdr Panels - {name}")
+}
+
+/// A Herdr socket is a regular file on some systems and a Unix socket on others.
+pub fn herdr_socket_exists(path: &Path) -> bool {
+    let Ok(meta) = std::fs::metadata(path) else {
+        return false;
+    };
+    let kind = meta.file_type();
+    kind.is_file() || is_socket(&kind)
+}
+
+fn is_socket(kind: &std::fs::FileType) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::FileTypeExt;
+        kind.is_socket()
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = kind;
+        false
+    }
+}
+
+/// The session this viewer attached to is always listed, even when its socket is not a regular file.
+pub fn include_attached_session(
+    attached: &str,
+    attached_socket: PathBuf,
+    mut sessions: Vec<(String, PathBuf)>,
+) -> Vec<(String, PathBuf)> {
+    let attached = attached.trim();
+    if attached.is_empty() || sessions.iter().any(|(name, _)| name == attached) {
+        return sessions;
+    }
+    sessions.insert(0, (attached.to_string(), attached_socket));
+    sessions
+}
+
 pub fn list_herdr_sessions() -> anyhow::Result<Vec<(String, PathBuf)>> {
     let base = herdr_config_dir()?;
     let mut sessions = Vec::new();
     let default_socket = base.join("herdr.sock");
-    if default_socket.is_file() {
+    if herdr_socket_exists(&default_socket) {
         sessions.push(("default".into(), default_socket));
     }
     let directory = base.join("sessions");
@@ -75,7 +144,7 @@ pub fn list_herdr_sessions() -> anyhow::Result<Vec<(String, PathBuf)>> {
                 continue;
             }
             let socket = entry.path().join("herdr.sock");
-            if socket.is_file() {
+            if herdr_socket_exists(&socket) {
                 named.push((name, socket));
             }
         }
@@ -101,7 +170,7 @@ pub fn session_socket_path(name: &str) -> anyhow::Result<PathBuf> {
 
 pub fn session_socket(name: &str) -> anyhow::Result<PathBuf> {
     let socket = session_socket_path(name)?;
-    if !socket.is_file() {
+    if !herdr_socket_exists(&socket) {
         if name == "default" {
             bail!("the default Herdr session is not running");
         }
@@ -440,6 +509,111 @@ mod tests {
     fn windows_pipe_name() {
         let name = transport_name(Path::new(r"C:\Users\a\herdr.sock"));
         assert_eq!(name, r"\\.\pipe\C:\Users\a\herdr.sock");
+    }
+
+    #[test]
+    fn an_explicit_session_wins_over_the_inherited_socket() {
+        let base = PathBuf::from("/herdr");
+        let inherited = PathBuf::from("/herdr/herdr.sock");
+        let chosen = choose_herdr_socket(
+            None,
+            Some("demos"),
+            Some(inherited.clone()),
+            Some("default"),
+            &base,
+        )
+        .unwrap();
+        assert_eq!(
+            chosen,
+            base.join("sessions").join("demos").join("herdr.sock")
+        );
+        let socket_flag = choose_herdr_socket(
+            Some(PathBuf::from("/tmp/other.sock")),
+            Some("demos"),
+            Some(inherited),
+            Some("other"),
+            &base,
+        )
+        .unwrap();
+        assert_eq!(socket_flag, PathBuf::from("/tmp/other.sock"));
+        let from_env_socket = choose_herdr_socket(
+            None,
+            None,
+            Some(PathBuf::from("/herdr/sessions/kept/herdr.sock")),
+            Some("ignored"),
+            &base,
+        )
+        .unwrap();
+        assert_eq!(
+            from_env_socket,
+            PathBuf::from("/herdr/sessions/kept/herdr.sock")
+        );
+        let from_env_session =
+            choose_herdr_socket(None, None, None, Some("demos"), &base).unwrap();
+        assert_eq!(
+            from_env_session,
+            base.join("sessions").join("demos").join("herdr.sock")
+        );
+        assert_eq!(
+            choose_herdr_socket(None, None, None, None, &base).unwrap(),
+            base.join("herdr.sock")
+        );
+        let err = choose_herdr_socket(None, Some("../secret"), None, None, &base).unwrap_err();
+        assert!(err.to_string().contains("invalid Herdr session name"));
+    }
+
+    #[test]
+    fn the_attached_session_is_reported_even_when_its_socket_is_not_a_file() {
+        let socket = PathBuf::from("/herdr/sessions/demos/herdr.sock");
+        let reported = include_attached_session("demos", socket.clone(), Vec::new());
+        assert_eq!(reported, vec![("demos".into(), socket.clone())]);
+        let already = include_attached_session(
+            "demos",
+            socket.clone(),
+            vec![("default".into(), PathBuf::from("/herdr/herdr.sock"))],
+        );
+        assert_eq!(
+            already,
+            vec![
+                ("demos".into(), socket),
+                ("default".into(), PathBuf::from("/herdr/herdr.sock")),
+            ]
+        );
+        let present = include_attached_session(
+            "demos",
+            PathBuf::new(),
+            vec![("demos".into(), PathBuf::from("/herdr/sessions/demos/herdr.sock"))],
+        );
+        assert_eq!(present.len(), 1);
+        assert_eq!(present[0].0, "demos");
+    }
+
+    #[test]
+    fn a_window_title_names_a_session_other_than_default() {
+        assert_eq!(desktop_window_title("demos"), "Herdr Panels - demos");
+        assert_eq!(desktop_window_title("default"), "Herdr Panels");
+        assert_eq!(desktop_window_title(""), "Herdr Panels");
+        assert_eq!(desktop_window_title("a/b"), "Herdr Panels");
+    }
+
+    #[test]
+    fn a_socket_counts_when_it_is_a_file_or_a_socket() {
+        let dir = std::env::temp_dir().join(format!("hwp-sock-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("herdr.sock");
+        std::fs::write(&file, b"").unwrap();
+        assert!(herdr_socket_exists(&file));
+        assert!(!herdr_socket_exists(&dir));
+        assert!(!herdr_socket_exists(&dir.join("missing.sock")));
+        #[cfg(unix)]
+        {
+            use std::os::unix::net::UnixListener;
+            let socket = dir.join("live.sock");
+            let _listener = UnixListener::bind(&socket).unwrap();
+            assert!(herdr_socket_exists(&socket));
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

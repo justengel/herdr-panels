@@ -46,6 +46,7 @@ export interface ViewerHealth {
   build: string;
   version: string;
   dev: boolean;
+  session?: string;
 }
 
 export interface HerdrCtlStatus {
@@ -66,15 +67,15 @@ function viewerToken(): string {
 const TAB_SESSION = "herdr-panels-session";
 const TAB_SESSION_EVENT = "herdr-tab-session";
 
-/** The session this browser tab is showing. A new tab starts at default. */
+/** The session this tab chose. Empty means follow the session the viewer attached to. */
 export function tabSession(): string {
   try {
     const stored = sessionStorage.getItem(TAB_SESSION)?.trim();
     if (stored) return stored;
   } catch {
-    // sessionStorage can be blocked. The tab then stays on default.
+    // sessionStorage can be blocked. The tab then follows the viewer.
   }
-  return "default";
+  return "";
 }
 
 /** Remember the session for this tab so a refresh stays on it. */
@@ -107,7 +108,10 @@ function authHeaders(): Record<string, string> {
 }
 
 function sessionHeaders(): Record<string, string> {
-  return { "X-Herdr-Session": tabSession(), "X-Herdr-Panels-Desk": "1" };
+  const headers: Record<string, string> = { "X-Herdr-Panels-Desk": "1" };
+  const session = tabSession();
+  if (session) headers["X-Herdr-Session"] = session;
+  return headers;
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -348,7 +352,8 @@ export function wsUrl(path: string): string {
   const extra = new URLSearchParams();
   const token = viewerToken();
   if (token) extra.set("token", token);
-  extra.set("session", tabSession());
+  const session = tabSession();
+  if (session) extra.set("session", session);
   const query = extra.toString();
   const joined = query ? `${path}${path.includes("?") ? "&" : "?"}${query}` : path;
   return `${protocol}//${location.host}${joined}`;
