@@ -828,6 +828,7 @@ mod tests {
         let html = b"<html><head></head><body>Hi</body></html>";
         let plain_page = String::from_utf8(prepare_entry(&plain, "index.html", html)).unwrap();
         assert!(plain_page.contains("/* hwp-frame-keys */"));
+        assert!(plain_page.contains("/* hwp-frame-find */"));
         assert!(plain_page.contains("/* hwp-frame-select */"));
         assert!(plain_page.contains("__hwpInstallSelect"));
         assert_eq!(plain_page.matches("/* hwp-frame-select */").count(), 1);

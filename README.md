@@ -171,7 +171,7 @@ Every panel title bar shows that panel's name, and the close button sits at the 
 
 ### Keyboard
 
-The desk can be driven from the keyboard. **Keys** in the top bar lists the shortcuts, and so does Prefix+? (the prefix defaults to Ctrl+B, the same one Herdr uses).
+The desk can be driven from the keyboard. **Keys** in the top bar lists the shortcuts, and so does Prefix+? (the prefix defaults to Ctrl+B, the same one Herdr uses). Ctrl+F, or Cmd+F, finds text in the focused panel. F3 and Shift+F3 move through the matches. Escape closes the bar. A terminal search covers the text on screen. A page opened in the desktop window is searched there. A remote page in a browser tab keeps that browser's own find once the page is clicked.
 
 Prefix+H, J, K, and L still move between Herdr panes. Focusing a desk panel is one shortcut with two chords by default: Alt+Shift+Arrow and Prefix+Arrow. Prefix+Alt+Arrow swaps that panel with the neighbor in that direction. The focused panel has an accent bar on its title. Prefix+Tab cycles panels. Prefix+F fills the screen with the focused panel, or shows the whole desk. Prefix+Z and Prefix+Shift+Z go back and forward in the selected panel, the same as the address bar buttons. Prefix+T reopens the last closed panel, and repeats for older ones. Those closed panels stay in this window, up to 30, and a restart clears them. The prefix works from a plugin, an HTML panel, and a browser panel. Ctrl+Z is left for the program inside a panel. Inside a terminal, Prefix+Z still belongs to Herdr.
 

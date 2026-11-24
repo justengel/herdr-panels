@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import frameFind from "../../../../assets/frame-find.js?raw";
 import frameKeys from "../../../../assets/frame-keys.js?raw";
 import frameSelect from "../../../../assets/frame-select.js?raw";
 import bridge from "../../../../assets/panel-bridge.js?raw";
@@ -90,7 +91,7 @@ export function HtmlView({ path, inline, title, control = false, design = false,
         );
     } else if (inline) {
       frame.removeAttribute("src");
-      frame.srcdoc = `<!doctype html><html><head><meta charset="utf-8"><script>${frameKeys}\n${frameSelect}\n${bridge}</script></head><body>${inline}</body></html>`;
+      frame.srcdoc = `<!doctype html><html><head><meta charset="utf-8"><script>${frameKeys}\n${frameFind}\n${frameSelect}\n${bridge}</script></head><body>${inline}</body></html>`;
     }
     return () => {
       cancelled = true;
@@ -137,7 +138,7 @@ function pageWithBridge(html: string, baseHref: string): string {
   const base = /<base\b/i.test(html)
     ? ""
     : `<base href="${baseHref.replace(/&/g, "&amp;").replace(/"/g, "&quot;")}">`;
-  const script = `<script>${frameKeys}\n${frameSelect}\n${bridge}</script>`;
+  const script = `<script>${frameKeys}\n${frameFind}\n${frameSelect}\n${bridge}</script>`;
   const lower = html.toLowerCase();
   const start = lower.indexOf("<head");
   if (start >= 0) {

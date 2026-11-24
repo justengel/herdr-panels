@@ -12,6 +12,29 @@ use tauri_plugin_opener::OpenerExt;
 use url::Url;
 
 const FRAME_SELECT: &str = include_str!("../../assets/frame-select.js");
+const FRAME_FIND: &str = include_str!("../../assets/frame-find.js");
+
+/// Ctrl+F and F3 inside a desktop browser page. The page cannot call the viewer, so it
+/// reports the chord by changing its title. The desk opens the find bar.
+const FIND_KEYS: &str = r#"
+if(!window.__hwpFindKeys){
+window.__hwpFindKeys=true;
+window.__hwpRunFind=function(query,index,matchCase,token){
+  var result=window.hwpApplyFind?window.hwpApplyFind(document.body,query,index,matchCase):{count:0,index:-1};
+  window.__hwpFindHeld=document.title;
+  document.title="hwp-find:"+token+":"+result.count+":"+result.index;
+};
+window.addEventListener("keydown",function(e){
+  var op=window.hwpFindChord?window.hwpFindChord(e):null;
+  if(!op)return;
+  e.preventDefault();
+  e.stopPropagation();
+  if(e.repeat&&op==="open")return;
+  window.__hwpFindHeld=document.title;
+  document.title="hwp-find-key:"+op;
+},true);
+}
+"#;
 
 pub const VIEWER: &str = "http://127.0.0.1:4737";
 
@@ -1233,9 +1256,18 @@ async fn place_browser(
     let window = app
         .get_window("main")
         .ok_or_else(|| "the desktop window is not open".to_string())?;
-    let boot = select_boot();
+    let mut boot = select_boot();
+    boot.push('\n');
+    boot.push_str(FRAME_FIND);
+    boot.push('\n');
+    boot.push_str(FIND_KEYS);
     #[cfg(target_os = "linux")]
-    let boot = format!("{boot}\n{ZOOM_BOOT}\n{}", page_url_boot(&label));
+    {
+        boot.push('\n');
+        boot.push_str(ZOOM_BOOT);
+        boot.push('\n');
+        boot.push_str(&page_url_boot(&label));
+    }
     let opener = app.clone();
     let panel_id = Arc::new(Mutex::new(
         panel_id_from_browser(&label).unwrap_or("").to_string(),
@@ -1259,6 +1291,9 @@ async fn place_browser(
         .on_document_title_changed({
             let select_app = app.clone();
             move |view, title| {
+                if forward_find(&select_app, &view, &title) {
+                    return;
+                }
                 if title == "hwp-select:off" {
                     // Windows has no page message. Linux sends `hwpLeave` and also sets this
                     // title only when that message is missing. Either way, leave the signal
@@ -1534,6 +1569,106 @@ fn set_desk_prefix(ctrl: bool, alt: bool, shift: bool, meta: bool, key: String) 
     Ok(())
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum FindSignal {
+    Key(&'static str),
+    Count { token: u32, count: u32, index: i32 },
+}
+
+fn parse_find_title(title: &str) -> Option<FindSignal> {
+    if let Some(op) = title.strip_prefix("hwp-find-key:") {
+        return match op {
+            "open" => Some(FindSignal::Key("open")),
+            "next" => Some(FindSignal::Key("next")),
+            "prev" => Some(FindSignal::Key("prev")),
+            _ => None,
+        };
+    }
+    let rest = title.strip_prefix("hwp-find:")?;
+    let mut parts = rest.split(':');
+    let token = parts.next()?.parse().ok()?;
+    let count = parts.next()?.parse().ok()?;
+    let index = parts.next()?.parse().ok()?;
+    if parts.next().is_some() || count > 1_000_000 {
+        return None;
+    }
+    Some(FindSignal::Count { token, count, index })
+}
+
+fn find_desk_script(label: &str, signal: &FindSignal) -> String {
+    let label = serde_json::to_string(label).unwrap_or_else(|_| "\"\"".into());
+    match signal {
+        FindSignal::Key(op) => {
+            let op = serde_json::to_string(op).unwrap_or_else(|_| "\"\"".into());
+            format!("window.dispatchEvent(new CustomEvent('herdr-find',{{detail:{{label:{label},op:{op}}}}}))")
+        }
+        FindSignal::Count { token, count, index } => format!(
+            "window.dispatchEvent(new CustomEvent('herdr-find-count',{{detail:{{label:{label},token:{token},count:{count},index:{index}}}}}))"
+        ),
+    }
+}
+
+fn find_browser_script(query: &str, index: i32, match_case: bool, token: u32) -> String {
+    let query = serde_json::to_string(query).unwrap_or_else(|_| "\"\"".into());
+    let case = if match_case { "true" } else { "false" };
+    format!("window.__hwpRunFind&&window.__hwpRunFind({query},{index},{case},{token})")
+}
+
+fn current_browser_label(view: &Webview) -> String {
+    let created = view.label().to_string();
+    let host = view.state::<BrowserHost>();
+    let Ok(guard) = host.slots.lock() else {
+        return created;
+    };
+    guard
+        .iter()
+        .find_map(|(key, slot)| (slot.view.label() == created).then(|| key.clone()))
+        .unwrap_or(created)
+}
+
+fn forward_find(app: &AppHandle, view: &Webview, title: &str) -> bool {
+    let Some(signal) = parse_find_title(title) else {
+        return false;
+    };
+    let label = current_browser_label(view);
+    let script = find_desk_script(&label, &signal);
+    if let Some(desk) = app.get_webview("main") {
+        let _ = desk.eval(&script);
+    }
+    let _ = view.eval(
+        "if(typeof window.__hwpFindHeld==='string'){var t=window.__hwpFindHeld;window.__hwpFindHeld=null;document.title=t;}",
+    );
+    true
+}
+
+/// Search the open desktop browser page. The script is built here. The page does not supply it.
+#[tauri::command]
+async fn find_browser(
+    host: State<'_, BrowserHost>,
+    label: String,
+    query: String,
+    index: i32,
+    match_case: bool,
+    token: u32,
+) -> Result<(), String> {
+    if !valid_browser_label(&label) {
+        return Err("browser label is invalid".into());
+    }
+    if query.chars().count() > 500 {
+        return Err("find text is too long".into());
+    }
+    let script = find_browser_script(&query, index.clamp(-1, 1_000_000), match_case, token);
+    let view = {
+        let guard = host.slots.lock().map_err(|_| "browser host is locked".to_string())?;
+        guard
+            .get(&label)
+            .ok_or_else(|| "that browser panel is not open".to_string())?
+            .view
+            .clone()
+    };
+    view.eval(script).map_err(|err| err.to_string())
+}
+
 /// Run one host-built script in a child webview. The page cannot call this.
 #[tauri::command]
 async fn eval_browser(host: State<'_, BrowserHost>, label: String, script: String) -> Result<(), String> {
@@ -1785,6 +1920,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             place_browser,
             adopt_browser,
+            find_browser,
             snapshot_browser,
             snapshot_view,
             close_browser,
@@ -1865,6 +2001,20 @@ fn cursor_place() -> CursorPlace {
     {
         CursorPlace::Page
     }
+}
+
+/// Ctrl+F or Cmd+F opens find. F3 moves to the next match. Alt is left for the page.
+pub fn find_chord_vk(vk: u16, ctrl: bool, alt: bool, shift: bool, meta: bool) -> Option<&'static str> {
+    if alt {
+        return None;
+    }
+    if !ctrl && !meta && vk == 0x72 {
+        return Some(if shift { "prev" } else { "next" });
+    }
+    if (ctrl || meta) && !shift && vk == 0x46 {
+        return Some("open");
+    }
+    None
 }
 
 /// Ctrl or Cmd with plus, minus, or 0. Alt is left for the page.
@@ -2392,6 +2542,14 @@ mod browser_wheel {
         *prefix = (false, chord);
     }
 
+    fn focused_browser_label() -> Option<String> {
+        let focus = unsafe { GetFocus() };
+        if !hwnd_in_desk(focus) {
+            return None;
+        }
+        browser_label_at(focus)
+    }
+
     fn focused_browser_panel() -> Option<String> {
         let focus = unsafe { GetFocus() };
         if !hwnd_in_desk(focus) {
@@ -2512,8 +2670,17 @@ mod browser_wheel {
             if !up && child {
                 let ctrl = unsafe { GetAsyncKeyState(VK_CONTROL.0 as i32) } < 0;
                 let alt = unsafe { GetAsyncKeyState(VK_MENU.0 as i32) } < 0;
+                let shift = unsafe { GetAsyncKeyState(VK_SHIFT.0 as i32) } < 0;
                 let meta = unsafe { GetAsyncKeyState(VK_LWIN.0 as i32) } < 0
                     || unsafe { GetAsyncKeyState(VK_RWIN.0 as i32) } < 0;
+                if let Some(op) = super::find_chord_vk(wparam.0 as u16, ctrl, alt, shift, meta) {
+                    if let Some(label) = focused_browser_label() {
+                        let script = super::find_desk_script(&label, &super::FindSignal::Key(op));
+                        if enqueue(HookWork::Eval(script)) {
+                            return LRESULT(1);
+                        }
+                    }
+                }
                 if let Some(chord) = zoom_chord_vk(wparam.0 as u16, ctrl, alt, meta) {
                     let detail = serde_json::to_string(chord).unwrap_or_else(|_| "\"\"".into());
                     let script =
@@ -2573,6 +2740,38 @@ mod tests {
         assert!(place_is_current(4, 5));
         assert!(!place_is_current(5, 4));
         assert!(place_is_current(5, 0));
+    }
+
+    #[test]
+    fn find_chords_are_ctrl_f_and_f3() {
+        assert_eq!(find_chord_vk(0x46, true, false, false, false), Some("open"));
+        assert_eq!(find_chord_vk(0x46, false, false, false, true), Some("open"));
+        assert_eq!(find_chord_vk(0x46, true, false, true, false), None);
+        assert_eq!(find_chord_vk(0x46, true, true, false, false), None);
+        assert_eq!(find_chord_vk(0x72, false, false, false, false), Some("next"));
+        assert_eq!(find_chord_vk(0x72, false, false, true, false), Some("prev"));
+        assert_eq!(find_chord_vk(0x72, true, false, false, false), None);
+    }
+
+    #[test]
+    fn find_titles_report_a_key_or_a_count() {
+        assert_eq!(parse_find_title("hwp-find-key:open"), Some(FindSignal::Key("open")));
+        assert_eq!(parse_find_title("hwp-find-key:next"), Some(FindSignal::Key("next")));
+        assert_eq!(parse_find_title("hwp-find-key:nope"), None);
+        assert_eq!(
+            parse_find_title("hwp-find:4:12:3"),
+            Some(FindSignal::Count { token: 4, count: 12, index: 3 })
+        );
+        assert_eq!(
+            parse_find_title("hwp-find:4:0:-1"),
+            Some(FindSignal::Count { token: 4, count: 0, index: -1 })
+        );
+        assert_eq!(parse_find_title("hwp-find:4:12"), None);
+        assert_eq!(parse_find_title("hwp-snap:{}"), None);
+        let script = find_browser_script("a\"b", 0, false, 2);
+        assert!(script.starts_with("window.__hwpRunFind&&window.__hwpRunFind("));
+        assert!(script.contains("\\\""));
+        assert!(find_desk_script("browser-notes", &FindSignal::Key("open")).contains("herdr-find"));
     }
 
     #[test]

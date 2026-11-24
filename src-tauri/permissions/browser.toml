@@ -29,6 +29,11 @@ description = "Run a host-built script in a browser panel. Remote pages cannot c
 commands.allow = ["eval_browser"]
 
 [[permission]]
+identifier = "allow-find-browser"
+description = "Find text in a desktop browser panel. The script is built by the host."
+commands.allow = ["find_browser"]
+
+[[permission]]
 identifier = "allow-set-browser-select"
 description = "Turn element selection on or off inside browser panels."
 commands.allow = ["set_browser_select"]

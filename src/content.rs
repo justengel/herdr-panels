@@ -6,6 +6,7 @@ use axum::response::IntoResponse;
 use crate::server::AppState;
 
 const FRAME_KEYS: &str = include_str!("../assets/frame-keys.js");
+const FRAME_FIND: &str = include_str!("../assets/frame-find.js");
 const FRAME_SELECT: &str = include_str!("../assets/frame-select.js");
 const BRIDGE: &str = include_str!("../assets/panel-bridge.js");
 const MAX_FILE: usize = 8 * 1024 * 1024;
@@ -87,7 +88,10 @@ pub fn inject_frame_keys(html: &str) -> String {
     if html.contains("/* hwp-frame-keys */") {
         return html.to_string();
     }
-    insert_script(html, &format!("<script>{FRAME_KEYS}</script>"))
+    insert_script(
+        html,
+        &format!("<script>{FRAME_KEYS}</script><script>{FRAME_FIND}</script>"),
+    )
 }
 
 const SELECT_BOOT: &str = r#"window.__hwpInstallSelect({draw:false,send:function(message){try{parent.postMessage(Object.assign({source:"hwp-panel"},message),"*")}catch(err){}}});"#;

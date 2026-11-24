@@ -2,7 +2,9 @@ import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent, type P
 import { Terminal } from "@xterm/xterm";
 import { api, useTabSession, wsUrl } from "../../api";
 import { panelZoom, subscribeZoom, terminalFontSize } from "../../displayZoom";
+import { terminalHits } from "../../findText";
 import { useHost } from "../../host";
+import { bindTerminalFind, unbindTerminalFind } from "../../terminalFind";
 import {
   caretSelection,
   clipboardAction,
@@ -206,6 +208,33 @@ export function HerdrTerminal({ paneId, source, lines, home, onGone }: Props) {
       },
     });
     term.open(stage);
+    bindTerminalFind(shell, {
+      search(query, matchCase) {
+        const buffer = term.buffer.active;
+        const lines: string[] = [];
+        for (let i = 0; i < buffer.length; i += 1) lines.push(buffer.getLine(i)?.translateToString(true) ?? "");
+        return terminalHits(lines, query, matchCase);
+      },
+      show(hit) {
+        restoringRef.current = true;
+        fromKeyboard.current = true;
+        term.scrollToLine(hit.line);
+        term.select(hit.column, hit.line, hit.length);
+        window.setTimeout(() => {
+          restoringRef.current = false;
+          fromKeyboard.current = false;
+        }, 30);
+      },
+      clear() {
+        restoringRef.current = true;
+        fromKeyboard.current = true;
+        term.clearSelection();
+        window.setTimeout(() => {
+          restoringRef.current = false;
+          fromKeyboard.current = false;
+        }, 30);
+      },
+    });
     paintTheme(term);
     termRef.current = term;
     let layoutEpoch = 0;
@@ -607,6 +636,7 @@ export function HerdrTerminal({ paneId, source, lines, home, onGone }: Props) {
       socket?.close();
       socketRef.current = null;
       onSelection.dispose();
+      unbindTerminalFind(shell);
       term.dispose();
       termRef.current = null;
     };

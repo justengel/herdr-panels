@@ -49,6 +49,7 @@ import { UnlockDialog } from "./components/UnlockDialog";
 import { ElementSelect, ScreenshotSave, type ShotOffer } from "./components/ElementSelect";
 import { desktopHost } from "./desktopBrowser";
 import { DeskKeyboard, KeyedPanelProvider } from "./deskKeyboard";
+import { FindController } from "./components/FindBar";
 import {
   deskFillRequest,
   insertVisitPanel,
@@ -649,6 +650,7 @@ export function App() {
     if (!visit) return;
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
+      if (document.querySelector(".find-bar")) return;
       if (document.querySelector("[data-visit-add]")) return;
       if (event.target instanceof Element && event.target.closest(".dialog")) return;
       event.preventDefault();
@@ -1277,6 +1279,7 @@ export function App() {
       >
       <KeyedPanelProvider id={keyId} set={setKeyId}>
       <div className="app">
+        <FindController focusedId={keyId} />
         <DeskKeyboard
           layout={layout.root}
           runtime={runtime}
