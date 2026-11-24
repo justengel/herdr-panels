@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 0.1.25 - 2026-11-24
+
+A second desktop window can use a named Herdr session. `herdr-panels server --config DIR --herdr-session NAME --port 4747` attaches to that session when the shell inherited another socket. `herdr-panels desktop --config DIR` or `--url` opens a window on that viewer. When the window starts the viewer, `--herdr-session`, `--herdr-socket`, and `--port` are passed through. `herdr-panels desktop --help` prints help. `--config` and `--url` may come before the command.
+
+The viewer names the session it attached to at startup, in `herdr-panels status`, and in `/api/sessions`. The name comes from `sessions/<name>/herdr.sock`. The window title is `Herdr Panels - <name>` for that session, and the top bar shows the name. The default session keeps the title `Herdr Panels`.
+
+Find in a note skips a diagram's stylesheet, so a search highlights the words on the page. Closing find clears those highlights.
+
 ## 0.1.24 - 2026-11-24
 
 `panel drive` accepts a selector and text together. `wait`, `click`, `fill`, `select`, and `scroll-to` use the first element for that selector whose visible text contains the text, ignoring case. A wait for a new response no longer succeeds on an older element that only matches the selector.

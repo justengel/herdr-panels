@@ -4,6 +4,11 @@ Recorded 2026-10-27 from the review before the first public release. Closed item
 
 ## Unreleased
 
+## Done in 0.1.25
+
+- A second desktop viewer attaches to a named Herdr session, reports that name, and titles the window with it.
+- Find in a note skips a diagram stylesheet.
+
 ## Done in 0.1.24
 
 - `panel drive` matches a selector and text together, so a wait does not pass on an older element that only matches the selector.
