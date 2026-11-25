@@ -79,7 +79,45 @@ function light(
   };
 }
 
+function reading(
+  bg: string,
+  elev: string,
+  panel: string,
+  line: string,
+  lineStrong: string,
+  text: string,
+  muted: string,
+  accent: string,
+  idle: string,
+  working: string,
+  blocked: string,
+  done: string,
+): Palette {
+  return {
+    scheme: "dark",
+    bg,
+    elev,
+    panel,
+    term: panel,
+    line,
+    lineStrong,
+    text,
+    muted,
+    accent,
+    idle,
+    working,
+    blocked,
+    done,
+    unknown: muted,
+    shell: text,
+  };
+}
+
 const PALETTES: Record<string, Palette> = {
+  // Body text sits near 8.5:1 on the panel, the surface under most of the type.
+  lumen: reading("#26221e", "#201d19", "#2e2924", "#3f3830", "#544a3f", "#d3c5af", "#b2a088", "#c9a673", "#88ad76", "#caac4f", "#d68c8c", "#80a8c2"),
+  cove: reading("#252422", "#201f1e", "#2d2c2a", "#3e3c38", "#524f4a", "#cfc9be", "#aca59a", "#c5a89d", "#85b181", "#caaf56", "#d28e8e", "#88a8c4"),
+  harbor: reading("#242628", "#1f2123", "#2c2e30", "#3c3f42", "#505458", "#ceccc5", "#a8a8a1", "#baa6c6", "#7fb38d", "#cbb25c", "#d09292", "#8ca8c6"),
   catppuccin: dark("#1e1e2e", "#181825", "#11111b", "#11111b", "#313244", "#45475a", "#cdd6f4", "#a6adc8", "#f5c2e7"),
   "catppuccin-latte": light("#eff1f5", "#e6e9ef", "#dce0e8", "#e6e9ef", "#ccd0da", "#bcc0cc", "#4c4f69", "#6c6f85", "#8839ef"),
   terminal: dark("#101114", "#181b20", "#12151a", "#101318", "#2a2f38", "#3c4451", "#e7e4dc", "#9aa3b2", "#e2b657"),

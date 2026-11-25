@@ -45,8 +45,17 @@ pub fn config_path() -> PathBuf {
 pub fn document() -> Value {
     let text = std::fs::read_to_string(config_path()).unwrap_or_default();
     let catalog = catalog();
-    let theme = read_value(&text, "theme", "name").unwrap_or_else(|| catalog.default_theme.clone());
+    let stored =
+        read_value(&text, "theme", "name").unwrap_or_else(|| catalog.default_theme.clone());
+    let theme = reading_theme_in(&text)
+        .unwrap_or(stored.as_str())
+        .to_string();
     let mut themes = catalog.themes.clone();
+    for name in ["harbor", "cove", "lumen"] {
+        if !themes.iter().any(|theme| theme == name) {
+            themes.insert(0, name.to_string());
+        }
+    }
     if !themes.iter().any(|name| name == &theme) {
         themes.insert(0, theme.clone());
     }
@@ -83,16 +92,38 @@ pub async fn apply(body: &Value, session: Option<&str>) -> Result<Value, String>
     let catalog = catalog();
     let mut next = current.clone();
     if let Some(theme) = body.get("theme").and_then(Value::as_str) {
-        next = assign(
-            &next,
-            "theme",
-            "name",
-            if theme == catalog.default_theme {
-                None
+        if reading_palette(theme).is_some() {
+            let current_name =
+                read_value(&next, "theme", "name").unwrap_or_else(|| catalog.default_theme.clone());
+            let base = if catalog.themes.iter().any(|name| name == &current_name) {
+                current_name
             } else {
-                Some(format!("name = \"{theme}\""))
-            },
-        );
+                catalog.default_theme.clone()
+            };
+            next = assign(
+                &next,
+                "theme",
+                "name",
+                if base == catalog.default_theme {
+                    None
+                } else {
+                    Some(format!("name = \"{base}\""))
+                },
+            );
+            next = write_reading_custom(&next, theme);
+        } else {
+            next = assign(
+                &next,
+                "theme",
+                "name",
+                if theme == catalog.default_theme {
+                    None
+                } else {
+                    Some(format!("name = \"{theme}\""))
+                },
+            );
+            next = remove_reading_custom(&next);
+        }
     }
     if let Some(settings) = body.get("settings").and_then(Value::as_object) {
         for field in catalog
@@ -708,6 +739,140 @@ fn render_token_rows(default_raw: &str, options: &[String], enabled: &[String]) 
     format!("[{body}]")
 }
 
+fn reading_palette(name: &str) -> Option<&'static [(&'static str, &'static str)]> {
+    Some(match name {
+        "lumen" => LUMEN,
+        "cove" => COVE,
+        "harbor" => HARBOR,
+        _ => return None,
+    })
+}
+
+fn reading_theme_in(text: &str) -> Option<&'static str> {
+    for line in text.lines() {
+        let Some(rest) = line.trim().strip_prefix("# herdr-panels reading theme:") else {
+            continue;
+        };
+        let name = rest.trim();
+        if reading_palette(name).is_some() {
+            return Some(match name {
+                "cove" => "cove",
+                "harbor" => "harbor",
+                _ => "lumen",
+            });
+        }
+    }
+    None
+}
+
+fn remove_reading_custom(text: &str) -> String {
+    let mut rows = Vec::new();
+    let mut skipping = false;
+    for row in text.lines() {
+        if let Some(name) = table_name(row.trim()) {
+            skipping = name == "theme.custom" || name.starts_with("theme.custom.");
+            if skipping {
+                continue;
+            }
+        }
+        if skipping {
+            continue;
+        }
+        rows.push(row.to_string());
+    }
+    while rows.last().is_some_and(|row| row.trim().is_empty()) {
+        rows.pop();
+    }
+    if rows.is_empty() {
+        return String::new();
+    }
+    let mut out = rows.join("\n");
+    out.push('\n');
+    out
+}
+
+fn write_reading_custom(text: &str, theme: &str) -> String {
+    let Some(colors) = reading_palette(theme) else {
+        return text.to_string();
+    };
+    let mut next = remove_reading_custom(text);
+    if !next.is_empty() && !next.ends_with("\n\n") {
+        next.push('\n');
+    }
+    next.push_str("[theme.custom]\n");
+    next.push_str(&format!("# herdr-panels reading theme: {theme}\n"));
+    for (key, value) in colors {
+        next.push_str(&format!("{key} = \"{value}\"\n"));
+    }
+    next
+}
+
+const LUMEN: &[(&str, &str)] = &[
+    ("panel_bg", "#2e2924"),
+    ("sidebar_bg", "#201d19"),
+    ("active_row_bg", "#3f3830"),
+    ("selection_bg", "#544a3f"),
+    ("surface0", "#3f3830"),
+    ("surface1", "#544a3f"),
+    ("surface_dim", "#26221e"),
+    ("overlay0", "#b2a088"),
+    ("overlay1", "#c3b29c"),
+    ("text", "#d3c5af"),
+    ("subtext0", "#b2a088"),
+    ("accent", "#c9a673"),
+    ("mauve", "#c9a673"),
+    ("green", "#88ad76"),
+    ("yellow", "#caac4f"),
+    ("red", "#d68c8c"),
+    ("blue", "#80a8c2"),
+    ("teal", "#80a8c2"),
+    ("peach", "#caac4f"),
+];
+
+const COVE: &[(&str, &str)] = &[
+    ("panel_bg", "#2d2c2a"),
+    ("sidebar_bg", "#201f1e"),
+    ("active_row_bg", "#3e3c38"),
+    ("selection_bg", "#524f4a"),
+    ("surface0", "#3e3c38"),
+    ("surface1", "#524f4a"),
+    ("surface_dim", "#252422"),
+    ("overlay0", "#aca59a"),
+    ("overlay1", "#bdb7ac"),
+    ("text", "#cfc9be"),
+    ("subtext0", "#aca59a"),
+    ("accent", "#c5a89d"),
+    ("mauve", "#c5a89d"),
+    ("green", "#85b181"),
+    ("yellow", "#caaf56"),
+    ("red", "#d28e8e"),
+    ("blue", "#88a8c4"),
+    ("teal", "#88a8c4"),
+    ("peach", "#caaf56"),
+];
+
+const HARBOR: &[(&str, &str)] = &[
+    ("panel_bg", "#2c2e30"),
+    ("sidebar_bg", "#1f2123"),
+    ("active_row_bg", "#3c3f42"),
+    ("selection_bg", "#505458"),
+    ("surface0", "#3c3f42"),
+    ("surface1", "#505458"),
+    ("surface_dim", "#242628"),
+    ("overlay0", "#a8a8a1"),
+    ("overlay1", "#bbbab3"),
+    ("text", "#ceccc5"),
+    ("subtext0", "#a8a8a1"),
+    ("accent", "#baa6c6"),
+    ("mauve", "#baa6c6"),
+    ("green", "#7fb38d"),
+    ("yellow", "#cbb25c"),
+    ("red", "#d09292"),
+    ("blue", "#8ca8c6"),
+    ("teal", "#8ca8c6"),
+    ("peach", "#cbb25c"),
+];
+
 fn theme_ok(theme: &str) -> bool {
     let mut chars = theme.chars();
     let Some(first) = chars.next() else {
@@ -1267,6 +1432,37 @@ mod tests {
         assert_eq!(
             read_value(&updated, "keys", "prefix").as_deref(),
             Some("f12")
+        );
+    }
+
+    #[test]
+    fn a_reading_theme_paints_herdr_without_replacing_its_built_in_name() {
+        let text = "onboarding = false\n\n[theme]\nname = \"tokyo-night\"\nauto_switch = false\n\n[ui.toast]\ndelivery = \"herdr\"\n";
+        let painted = write_reading_custom(text, "cove");
+        assert_eq!(
+            read_value(&painted, "theme", "name").as_deref(),
+            Some("tokyo-night")
+        );
+        assert_eq!(reading_theme_in(&painted), Some("cove"));
+        assert_eq!(
+            read_value(&painted, "theme.custom", "text").as_deref(),
+            Some("#cfc9be")
+        );
+        assert_eq!(
+            read_value(&painted, "theme.custom", "panel_bg").as_deref(),
+            Some("#2d2c2a")
+        );
+        assert_eq!(
+            read_value(&painted, "ui.toast", "delivery").as_deref(),
+            Some("herdr")
+        );
+        assert!(painted.contains("auto_switch = false"));
+        let cleared = remove_reading_custom(&painted);
+        assert_eq!(reading_theme_in(&cleared), None);
+        assert!(read_value(&cleared, "theme.custom", "text").is_none());
+        assert_eq!(
+            read_value(&cleared, "theme", "name").as_deref(),
+            Some("tokyo-night")
         );
     }
 }
