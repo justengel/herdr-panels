@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.1.27 - 2026-11-25
+
+Lumen, Cove, and Harbor are dark reading themes. Body text sits near 8.5:1 on a lifted surface, and secondary text stays readable. Lumen is warm, Harbor is neutral, and Cove sits between them. Choosing one paints Herdr with the same colors. Choosing a built-in theme clears those colors.
+
 ## 0.1.26 - 2026-11-25
 
 A desktop browser stays on the loaded page when the address only changes its fragment. The field shows that address. Typing another section moves to it on the same page. Back and Forward walk through the page's own history, and the field follows.
