@@ -60,6 +60,9 @@ struct Slot {
     seq: u64,
     /// The last rectangle applied to the webview. Absent until the first place lands.
     placed: Option<WindowPlace>,
+    /// The address the navigation callback reads. The callback cannot lock `slots`:
+    /// a place may be navigating on this thread while the webview thread decides.
+    page_url: Arc<Mutex<String>>,
 }
 
 /// `0` is an unsequenced place and always applies. A smaller number is stale.
@@ -67,28 +70,85 @@ fn place_is_current(applied: u64, next: u64) -> bool {
     next == 0 || next >= applied
 }
 
-/// A place repeats the address on every move. Navigate for a reload or a new address.
-/// Once the page has moved on, a place that still carries the previous address must not pull it back.
-fn desk_should_navigate(current: &str, asked: &str, target: &str, reload: bool) -> bool {
-    reload || (current != target && asked != target)
-}
-
 #[derive(Debug, PartialEq, Eq)]
 enum PlaceNav {
     Stay,
     /// The webview is already at this address. `navigate` to the same URL does not load it again.
     Reload,
+    /// The same document with a different fragment. Assign `location.hash` and leave the document loaded.
+    Fragment,
     Navigate,
 }
 
-fn place_navigation(current: &str, asked: &str, target: &str, reload: bool) -> PlaceNav {
-    if !desk_should_navigate(current, asked, target, reload) {
-        return PlaceNav::Stay;
+fn http_url(raw: &str) -> Option<Url> {
+    let url = Url::parse(raw.trim()).ok()?;
+    if (url.scheme() != "http" && url.scheme() != "https") || url.host_str().is_none() {
+        return None;
     }
-    if reload && current == target {
+    Some(url)
+}
+
+/// Parsed addresses, so host case and a default port are the same page.
+fn same_address(left: &str, right: &str) -> bool {
+    if left == right {
+        return true;
+    }
+    match (http_url(left), http_url(right)) {
+        (Some(left), Some(right)) => left == right,
+        _ => false,
+    }
+}
+
+fn same_document(left: &str, right: &str) -> bool {
+    let (Some(mut left), Some(mut right)) = (http_url(left), http_url(right)) else {
+        return false;
+    };
+    left.set_fragment(None);
+    right.set_fragment(None);
+    left == right
+}
+
+/// A place repeats the address on every move.
+/// The open document stays loaded: a fragment is assigned, and reload reloads that document.
+/// A place that still carries an address the page has left must not pull the page back.
+fn place_navigation(current: &str, asked: &str, target: &str, reload: bool) -> PlaceNav {
+    if reload && same_document(current, target) {
         return PlaceNav::Reload;
     }
+    if !reload && (same_address(current, target) || same_address(asked, target)) {
+        return PlaceNav::Stay;
+    }
+    if !reload && same_document(current, target) {
+        return PlaceNav::Fragment;
+    }
     PlaceNav::Navigate
+}
+
+/// One assignment. The fragment is a JSON string so it cannot close the script.
+fn hash_script(url: &Url) -> String {
+    let hash = match url.fragment() {
+        Some(fragment) if !fragment.is_empty() => format!("#{fragment}"),
+        _ => String::new(),
+    };
+    let encoded = serde_json::to_string(&hash).unwrap_or_else(|_| "\"\"".to_string());
+    format!("location.hash={encoded};")
+}
+
+/// A hash change of the document already showing. The site check is for a new page.
+fn fragment_navigation(current: &str, next: &str) -> bool {
+    !current.is_empty() && same_document(current, next) && !same_address(current, next)
+}
+
+/// The first load still asks the viewer, so a locked site is not skipped.
+/// After that, a hash change of the open document does not wait on the site check.
+fn open_document_fragment(document_ready: bool, current: &str, next: &str) -> bool {
+    document_ready && fragment_navigation(current, next)
+}
+
+fn remember_page_url(slot: &Slot) {
+    if let Ok(mut page) = slot.page_url.lock() {
+        *page = slot.url.clone();
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -137,6 +197,7 @@ fn apply_live_page(slot: &mut Slot, live: &str) -> Option<String> {
         LivePage::Moved(next) => {
             slot.left.clear();
             slot.url = next.clone();
+            remember_page_url(slot);
             Some(next)
         }
     }
@@ -235,14 +296,14 @@ struct WindowPlace {
     cuts: Vec<CssBox>,
 }
 
-/// True when this place has to touch the webview. A fragment change that the page
-/// already made, with the window left where it is, does not.
+/// True when this place has to touch the webview. A fragment change, with the window
+/// left where it is, does not. Waking the webview throws away the scroll a click just made.
 fn place_leaves_the_view(
     action: PlaceNav,
     previous: Option<&WindowPlace>,
     next: &WindowPlace,
 ) -> bool {
-    if action != PlaceNav::Stay {
+    if !matches!(action, PlaceNav::Stay | PlaceNav::Fragment) {
         return true;
     }
     match previous {
@@ -1402,21 +1463,33 @@ async fn place_browser(
         }
         // A reload, or a page that never landed, has to load again. Moving the
         // window is not enough: the address-bar reload used to leave the old document.
-        // Navigating to the URL the webview is already on does not load it again.
+        // The same document stays loaded. `navigate` would abort the request a
+        // same-page control, such as a diff expand, just started.
         // A link that already left this address must not be sent back by a later place.
         let action = place_navigation(&slot.url, &slot.asked, &target, reload);
-        slot.asked = target.clone();
+        if !matches!(action, PlaceNav::Fragment) {
+            slot.asked = target.clone();
+        }
         match action {
             PlaceNav::Stay => {}
             PlaceNav::Reload => {
                 slot.left.clear();
                 slot.view.reload().map_err(|err| err.to_string())?;
             }
+            PlaceNav::Fragment => {
+                slot.view
+                    .eval(hash_script(&parsed))
+                    .map_err(|err| err.to_string())?;
+                slot.asked = target.clone();
+                slot.url = target.clone();
+                remember_page_url(slot);
+            }
             PlaceNav::Navigate => {
                 let previous = slot.url.clone();
                 slot.view.navigate(parsed).map_err(|err| err.to_string())?;
                 slot.left = previous;
                 slot.url = target;
+                remember_page_url(slot);
             }
         }
         let next_place = WindowPlace {
@@ -1462,12 +1535,29 @@ async fn place_browser(
         panel_id_from_browser(&label).unwrap_or("").to_string(),
     ));
     let navigation_panel = Arc::clone(&panel_id);
+    let page_url = Arc::new(Mutex::new(target.clone()));
+    let navigation_page = Arc::clone(&page_url);
+    let document_ready = Arc::new(AtomicBool::new(false));
+    let navigation_ready = Arc::clone(&document_ready);
     let report_label = Arc::new(Mutex::new(label.clone()));
     let page_label = Arc::clone(&report_label);
     let builder =
         tauri::webview::WebviewBuilder::new(&label, tauri::WebviewUrl::External(parsed.clone()))
             .initialization_script(boot)
             .on_navigation(move |url| {
+                let shown = navigation_page
+                    .lock()
+                    .map(|page| page.clone())
+                    .unwrap_or_default();
+                // A fragment of the open document is not a new page. Deciding it
+                // with a site check blocks the webview thread and can drop the click.
+                if open_document_fragment(
+                    navigation_ready.load(Ordering::Acquire),
+                    &shown,
+                    url.as_str(),
+                ) {
+                    return true;
+                }
                 let id = navigation_panel
                     .lock()
                     .map(|id| id.clone())
@@ -1497,10 +1587,12 @@ async fn place_browser(
             })
             .on_page_load({
                 let page_app = app.clone();
+                let ready = Arc::clone(&document_ready);
                 move |webview, payload| {
                     if payload.event() != PageLoadEvent::Finished {
                         return;
                     }
+                    ready.store(true, Ordering::Release);
                     let reported = current_report_label(&page_label);
                     let label = if reported.is_empty() {
                         webview.label().to_string()
@@ -1584,6 +1676,7 @@ async fn place_browser(
             clipped,
             panel_id,
             seq,
+            page_url,
             placed: Some(WindowPlace {
                 x,
                 y,
@@ -3519,6 +3612,123 @@ mod tests {
         ));
         assert!(place_leaves_the_view(PlaceNav::Reload, Some(&here), &here));
         assert!(place_leaves_the_view(PlaceNav::Stay, None, &here));
+        assert!(!place_leaves_the_view(
+            PlaceNav::Fragment,
+            Some(&here),
+            &here
+        ));
+    }
+
+    #[test]
+    fn a_fragment_on_the_open_document_is_not_a_new_page() {
+        let page = "https://github.com/cli/cli/pull/15111/files";
+        let expanded = "https://github.com/cli/cli/pull/15111/files#diff-abc";
+        assert_eq!(
+            place_navigation(page, page, expanded, false),
+            PlaceNav::Fragment
+        );
+        assert_eq!(
+            place_navigation(expanded, expanded, page, false),
+            PlaceNav::Fragment
+        );
+        assert_eq!(
+            place_navigation(
+                page,
+                page,
+                "https://github.com/cli/cli/pull/15111/commits",
+                false
+            ),
+            PlaceNav::Navigate
+        );
+        assert_eq!(
+            place_navigation(
+                "https://example.com/b",
+                "https://example.com/a",
+                "https://example.com/a",
+                true
+            ),
+            PlaceNav::Navigate
+        );
+    }
+
+    #[test]
+    fn the_page_already_showing_stays_when_only_the_spelling_differs() {
+        assert_eq!(
+            place_navigation(
+                "https://GitHub.com/cli/cli/pull/15111/files#diff-abc",
+                "https://github.com/cli/cli/pull/15111/files",
+                "https://github.com:443/cli/cli/pull/15111/files#diff-abc",
+                false
+            ),
+            PlaceNav::Stay
+        );
+    }
+
+    #[test]
+    fn reloading_another_fragment_of_the_open_document_reloads_it() {
+        assert_eq!(
+            place_navigation(
+                "https://github.com/cli/cli/pull/15111/files",
+                "https://github.com/cli/cli/pull/15111/files",
+                "https://github.com/cli/cli/pull/15111/files#diff-abc",
+                true
+            ),
+            PlaceNav::Reload
+        );
+    }
+
+    #[test]
+    fn a_hash_assignment_is_only_the_fragment() {
+        let files = Url::parse("https://github.com/cli/cli/pull/15111/files").unwrap();
+        assert_eq!(hash_script(&files), "location.hash=\"\";");
+        let section = Url::parse("https://github.com/cli/cli/pull/15111/files#diff-abc").unwrap();
+        assert_eq!(hash_script(&section), "location.hash=\"#diff-abc\";");
+        let mut hostile = Url::parse("https://example.com/a").unwrap();
+        hostile.set_fragment(Some("\";alert(1)//"));
+        let script = hash_script(&hostile);
+        let value = script
+            .strip_prefix("location.hash=")
+            .and_then(|rest| rest.strip_suffix(';'))
+            .expect("hash assignment");
+        let parsed: String = serde_json::from_str(value).expect("one json string");
+        assert_eq!(parsed, format!("#{}", hostile.fragment().unwrap_or("")));
+    }
+
+    #[test]
+    fn a_hash_change_on_the_open_document_is_allowed_immediately() {
+        assert!(fragment_navigation(
+            "https://github.com/cli/cli/pull/15111/files",
+            "https://github.com/cli/cli/pull/15111/files#diff-abc"
+        ));
+        assert!(fragment_navigation(
+            "https://GitHub.com/cli/cli/pull/15111/files",
+            "https://github.com/cli/cli/pull/15111/files#diff-abc"
+        ));
+        assert!(!fragment_navigation(
+            "https://github.com/cli/cli/pull/15111/files",
+            "https://github.com/cli/cli/pull/15111/files"
+        ));
+        assert!(!fragment_navigation(
+            "",
+            "https://github.com/cli/cli/pull/15111/files#diff-abc"
+        ));
+        assert!(!fragment_navigation(
+            "https://github.com/cli/cli/pull/15111/files",
+            "https://github.com/cli/cli/pull/15111/commits"
+        ));
+    }
+
+    #[test]
+    fn the_first_load_of_a_page_still_goes_through_the_site_check() {
+        let page = "https://github.com/cli/cli/pull/15111/files";
+        let expanded = "https://github.com/cli/cli/pull/15111/files#diff-abc";
+        assert!(!open_document_fragment(false, page, expanded));
+        assert!(open_document_fragment(true, page, expanded));
+        assert!(!open_document_fragment(
+            true,
+            page,
+            "https://github.com/cli/cli/pull/15111/commits"
+        ));
     }
 
     #[test]
@@ -3581,36 +3791,51 @@ mod tests {
 
     #[test]
     fn a_later_place_does_not_pull_back_a_page_that_navigated() {
-        assert!(!desk_should_navigate(
-            "https://example.com/b",
-            "https://example.com/a",
-            "https://example.com/a",
-            false
-        ));
-        assert!(!desk_should_navigate(
-            "https://example.com/b",
-            "https://example.com/a",
-            "https://example.com/b",
-            false
-        ));
-        assert!(desk_should_navigate(
-            "https://example.com/b",
-            "https://example.com/b",
-            "https://example.com/c",
-            false
-        ));
-        assert!(desk_should_navigate(
-            "https://example.com/b",
-            "https://example.com/a",
-            "https://example.com/a",
-            true
-        ));
-        assert!(!desk_should_navigate(
-            "https://example.com/a",
-            "https://example.com/a",
-            "https://example.com/a",
-            false
-        ));
+        assert_eq!(
+            place_navigation(
+                "https://example.com/b",
+                "https://example.com/a",
+                "https://example.com/a",
+                false
+            ),
+            PlaceNav::Stay
+        );
+        assert_eq!(
+            place_navigation(
+                "https://example.com/b",
+                "https://example.com/a",
+                "https://example.com/b",
+                false
+            ),
+            PlaceNav::Stay
+        );
+        assert_eq!(
+            place_navigation(
+                "https://example.com/b",
+                "https://example.com/b",
+                "https://example.com/c",
+                false
+            ),
+            PlaceNav::Navigate
+        );
+        assert_eq!(
+            place_navigation(
+                "https://example.com/b",
+                "https://example.com/a",
+                "https://example.com/a",
+                true
+            ),
+            PlaceNav::Navigate
+        );
+        assert_eq!(
+            place_navigation(
+                "https://example.com/a",
+                "https://example.com/a",
+                "https://example.com/a",
+                false
+            ),
+            PlaceNav::Stay
+        );
     }
 
     #[test]

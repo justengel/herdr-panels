@@ -24,7 +24,7 @@ import { BorrowSlot } from "../borrowKeep";
 import { useBrowserRole, useKeptIds, useStayFill, useVisitIds } from "../browserPlace";
 import { usePanelActions } from "../panelActions";
 import { PanelChrome } from "./PanelChrome";
-import { requestBrowserLoad } from "../desktopBrowser";
+import { desktopHost, requestBrowserLoad, stepBrowserHistory } from "../desktopBrowser";
 import { addressOf, DocumentFrame } from "./LocationBar";
 import { OpenAddressDialog } from "./OpenAddressDialog";
 import { PinDialog, type PinDialogResult } from "./PinDialog";
@@ -809,6 +809,13 @@ function DocumentSurface({
         panel.type === "iframe"
           ? () => {
               requestBrowserLoad(`browser-${id}`);
+            }
+          : undefined
+      }
+      onPageHistory={
+        panel.type === "iframe" && desktopHost()
+          ? (direction) => {
+              void stepBrowserHistory(`browser-${id}`, direction).catch(() => undefined);
             }
           : undefined
       }

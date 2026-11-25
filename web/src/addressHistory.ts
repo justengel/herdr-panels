@@ -60,6 +60,43 @@ export function visitAddress(history: AddressHistory, next: string): AddressHist
  * A bar submission rewrites the step it just created when the address is canonicalized.
  * Any other change pushes a step so Back can return to the previous address.
  */
+function sameReportedAddress(left: string, right: string): boolean {
+  return left === right || continuesVisit(left, right);
+}
+
+/**
+ * The page changed its own address. Step back or forward when that address is
+ * the neighbor, and rewrite a spelling difference of the step being shown.
+ * Anything else is a new step.
+ */
+export function followPage(history: AddressHistory, value: string): AddressHistory {
+  if (!value) return history;
+  const current = history.entries[history.index];
+  if (current !== undefined && sameReportedAddress(current, value)) {
+    if (current === value) return history;
+    const entries = history.entries.slice();
+    entries[history.index] = value;
+    return { entries, index: history.index };
+  }
+  if (history.index > 0) {
+    const previous = history.entries[history.index - 1];
+    if (previous !== undefined && sameReportedAddress(previous, value)) {
+      const entries = history.entries.slice();
+      entries[history.index - 1] = value;
+      return { entries, index: history.index - 1 };
+    }
+  }
+  const next = history.entries[history.index + 1];
+  if (next !== undefined && sameReportedAddress(next, value)) {
+    const entries = history.entries.slice();
+    entries[history.index + 1] = value;
+    return { entries, index: history.index + 1 };
+  }
+  const kept = history.entries.slice(0, Math.max(history.index, -1) + 1);
+  kept.push(value);
+  return { entries: kept, index: kept.length - 1 };
+}
+
 export function noteAddress(history: AddressHistory, value: string, fromBar: boolean): AddressHistory {
   if (!value) return history;
   if (history.entries[history.index] === value) return history;

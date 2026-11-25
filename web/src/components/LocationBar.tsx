@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { api } from "../api";
-import { historyForSurface, noteAddress, visitAddress, type AddressHistory } from "../addressHistory";
+import { followPage, historyForSurface, noteAddress, visitAddress, type AddressHistory } from "../addressHistory";
 import {
   addressToCopy,
   addressToOpen,
@@ -75,6 +75,7 @@ export function LocationBar({
   visible = true,
   canUp = false,
   onUp,
+  onPageHistory,
 }: {
   value: string;
   historyKey: string;
@@ -83,6 +84,8 @@ export function LocationBar({
   visible?: boolean;
   canUp?: boolean;
   onUp?: () => void;
+  /** Browser panels move with the page's own back and forward stack. */
+  onPageHistory?: (direction: -1 | 1) => void;
 }) {
   const [draft, setDraft] = useState(value);
   const [history, setHistory] = useState<string[]>(value ? [value] : []);
@@ -132,7 +135,11 @@ export function LocationBar({
     }
     const fromBar = pendingVisit.current !== null;
     pendingVisit.current = null;
-    commitHistory(noteAddress({ entries: historyRef.current, index: indexRef.current }, value, fromBar));
+    const recorded =
+      onPageHistory && !fromBar
+        ? followPage({ entries: historyRef.current, index: indexRef.current }, value)
+        : noteAddress({ entries: historyRef.current, index: indexRef.current }, value, fromBar);
+    commitHistory(recorded);
     const input = inputRef.current;
     const editing = Boolean(input && document.activeElement === input && undoRef.current.length > 0);
     if (!editing) replaceDraft(draftFor(value), true);
@@ -393,14 +400,31 @@ export function LocationBar({
         openAddress(next);
       }}
     >
-      <button type="button" aria-label="Back" disabled={index <= 0} onClick={() => go(index - 1)}>
+      <button
+        type="button"
+        aria-label="Back"
+        disabled={index <= 0}
+        onClick={() => {
+          if (onPageHistory) {
+            onPageHistory(-1);
+            return;
+          }
+          go(index - 1);
+        }}
+      >
         ‹
       </button>
       <button
         type="button"
         aria-label="Forward"
         disabled={index >= history.length - 1}
-        onClick={() => go(index + 1)}
+        onClick={() => {
+          if (onPageHistory) {
+            onPageHistory(1);
+            return;
+          }
+          go(index + 1);
+        }}
       >
         ›
       </button>
@@ -533,6 +557,7 @@ export function DocumentFrame({
   onPluginNavigate,
   onPluginReload,
   onForceLoad,
+  onPageHistory,
 }: {
   historyKey: string;
   address: string;
@@ -545,6 +570,8 @@ export function DocumentFrame({
   onPluginReload?: () => void;
   /** Load the address again when it is already the stored one. A native page ignores a repeated place. */
   onForceLoad?: () => void;
+  /** Browser panels move with the page's own back and forward stack. */
+  onPageHistory?: (direction: -1 | 1) => void;
 }) {
   const [error, setError] = useState<string | null>(null);
   const [generation, setGeneration] = useState(0);
@@ -559,6 +586,7 @@ export function DocumentFrame({
         visible={visible}
         canUp={canUp}
         onUp={onUp}
+        onPageHistory={onPageHistory}
         onNavigate={async (next) => {
           if (onPluginNavigate) {
             setError(null);

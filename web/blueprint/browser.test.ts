@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { BROWSER_OVERLAYS, browserBounds, browserDocument, browserLoadPending, browserSlotKey, hideBrowserPanels, isRemotePage, menuCuts, nativePopupUsesStill, overlayBoxes, requestBrowserLoad, takeBrowserLoad } from "../src/desktopBrowser";
+import { BROWSER_OVERLAYS, browserBounds, browserDocument, browserHistoryScript, browserLoadPending, browserSlotKey, hideBrowserPanels, isRemotePage, menuCuts, nativePopupUsesStill, overlayBoxes, requestBrowserLoad, takeBrowserLoad } from "../src/desktopBrowser";
 
 describe("a browser address fragment", () => {
   it("keeps the document and drops only the fragment", () => {
@@ -8,6 +8,13 @@ describe("a browser address fragment", () => {
     );
     expect(browserDocument("https://example.com/a")).toBe("https://example.com/a");
     expect(browserDocument("https://example.com/a#one#two")).toBe("https://example.com/a");
+  });
+});
+
+describe("browser back and forward", () => {
+  it("asks the page to move through its own history", () => {
+    expect(browserHistoryScript(-1)).toBe("history.back()");
+    expect(browserHistoryScript(1)).toBe("history.forward()");
   });
 });
 

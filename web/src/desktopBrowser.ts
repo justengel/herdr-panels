@@ -45,6 +45,17 @@ export function desktopHost(): Internals | null {
   };
 }
 
+/** Back and Forward in a browser panel use the page's own history. */
+export function browserHistoryScript(direction: -1 | 1): "history.back()" | "history.forward()" {
+  return direction < 0 ? "history.back()" : "history.forward()";
+}
+
+export async function stepBrowserHistory(label: string, direction: -1 | 1): Promise<void> {
+  const host = desktopHost();
+  if (!host) return;
+  await host.invoke("eval_browser", { label, script: browserHistoryScript(direction) });
+}
+
 /** The address before a fragment. A fragment scrolls the open page to a section. It is not a new document. */
 export function browserDocument(url: string): string {
   const hash = url.indexOf("#");

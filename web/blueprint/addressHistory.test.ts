@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { historyForSurface, noteAddress, visitAddress, type AddressHistory } from "../src/addressHistory";
+import { followPage, historyForSurface, noteAddress, visitAddress, type AddressHistory } from "../src/addressHistory";
 
 const start: AddressHistory = { entries: ["C:\\Users"], index: 0 };
 
@@ -41,6 +41,54 @@ describe("address history", () => {
     expect(noteAddress(history, "https://example.com/docs/", true)).toEqual({
       entries: ["https://a.example/docs", "https://example.com/docs/"],
       index: 1,
+    });
+  });
+
+  it("steps back when the page reports the previous address", () => {
+    const history: AddressHistory = {
+      entries: [
+        "https://github.com/cli/cli/pull/1/files",
+        "https://github.com/cli/cli/pull/1/files#diff-abc",
+      ],
+      index: 1,
+    };
+    expect(followPage(history, "https://github.com/cli/cli/pull/1/files")).toEqual({
+      entries: history.entries,
+      index: 0,
+    });
+  });
+
+  it("steps forward when the page reports the next address", () => {
+    const history: AddressHistory = {
+      entries: ["https://github.com/cli/cli/pull/1/files", "https://github.com/cli/cli/pull/1/commits"],
+      index: 0,
+    };
+    expect(followPage(history, "https://github.com/cli/cli/pull/1/commits")).toEqual({
+      entries: history.entries,
+      index: 1,
+    });
+  });
+
+  it("pushes a new fragment and drops the pages beyond the current one", () => {
+    const history: AddressHistory = {
+      entries: ["https://github.com/cli/cli/pull/1/files", "https://github.com/cli/cli/pull/1/commits"],
+      index: 0,
+    };
+    expect(followPage(history, "https://github.com/cli/cli/pull/1/files#diff-abc")).toEqual({
+      entries: [
+        "https://github.com/cli/cli/pull/1/files",
+        "https://github.com/cli/cli/pull/1/files#diff-abc",
+      ],
+      index: 1,
+    });
+  });
+
+  it("keeps the current step when the page repeats that address", () => {
+    const history: AddressHistory = { entries: ["https://example.com/a#x"], index: 0 };
+    expect(followPage(history, "https://example.com/a#x")).toEqual(history);
+    expect(followPage(history, "https://example.com/a/#x")).toEqual({
+      entries: ["https://example.com/a/#x"],
+      index: 0,
     });
   });
 
