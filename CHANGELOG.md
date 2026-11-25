@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.1.26 - 2026-11-25
+
+A desktop browser stays on the loaded page when the address only changes its fragment. The field shows that address. Typing another section moves to it on the same page. Back and Forward walk through the page's own history, and the field follows.
+
 ## 0.1.25 - 2026-11-24
 
 A second desktop window can use a named Herdr session. `herdr-panels server --config DIR --herdr-session NAME --port 4747` attaches to that session when the shell inherited another socket. `herdr-panels desktop --config DIR` or `--url` opens a window on that viewer. When the window starts the viewer, `--herdr-session`, `--herdr-socket`, and `--port` are passed through. `herdr-panels desktop --help` prints help. `--config` and `--url` may come before the command.

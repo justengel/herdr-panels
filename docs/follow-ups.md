@@ -4,6 +4,10 @@ Recorded 2026-10-27 from the review before the first public release. Closed item
 
 ## Unreleased
 
+## Done in 0.1.26
+
+- A desktop browser stays on the loaded page when only the address fragment changes, and Back and Forward use that page's history.
+
 ## Done in 0.1.25
 
 - A second desktop viewer attaches to a named Herdr session, reports that name, and titles the window with it.
