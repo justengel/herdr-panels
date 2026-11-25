@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+`panel zoom --cover-bar` hides the top bar so that panel fills the window. The usual zoom leaves the bar in place. A zoom still finds a panel on the layout that is showing when Herdr has no current workspace.
+
 ## 0.1.27 - 2026-11-25
 
 Lumen, Cove, and Harbor are dark reading themes. Body text sits near 8.5:1 on a lifted surface, and secondary text stays readable. Lumen is warm, Harbor is neutral, and Cove sits between them. Choosing one paints Herdr with the same colors. Choosing a built-in theme clears those colors.

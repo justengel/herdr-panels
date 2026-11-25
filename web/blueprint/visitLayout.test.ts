@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   deskFillRequest,
+  includeShowingLayout,
   insertVisitPanel,
   joinVisit,
   leaveVisitPanel,
@@ -27,6 +28,31 @@ const spaces: VisitSpace[] = [
   space("wG", "garden", panel("agents", "Agents")),
   space("wK", "kitchen", panel("files", "Files")),
 ];
+
+describe("the layout on screen", () => {
+  it("can be zoomed when no workspace is current", () => {
+    const listed = includeShowingLayout([], {
+      id: "side-by-side",
+      title: "Side by side",
+      root: panel("spaces", "Spaces"),
+    });
+    const opened = openVisit(listed, [{ panelId: "spaces", spaceId: "side-by-side" }]);
+    expect(opened).toMatchObject({
+      single: true,
+      panelIds: ["spaces"],
+      spaceIds: { spaces: "side-by-side" },
+    });
+  });
+
+  it("stays out of the way while a workspace is current", () => {
+    const listed = includeShowingLayout(spaces, {
+      id: "side-by-side",
+      title: "Side by side",
+      root: panel("spaces", "Spaces"),
+    });
+    expect(listed).toBe(spaces);
+  });
+});
 
 describe("maximizing a panel", () => {
   it("keeps the copy on this space when another space reused the id", () => {

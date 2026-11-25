@@ -135,7 +135,13 @@ enum PanelCommand {
         control: bool,
     },
     /// Fill the page with one panel. Omit the panel to restore the layout
-    Zoom { panel: Option<String> },
+    Zoom {
+        /// Panel to fill the page with. Omit it to restore the layout
+        panel: Option<String>,
+        /// Hide the top bar so this panel uses the whole window
+        #[arg(long)]
+        cover_bar: bool,
+    },
     /// Show panels from any space over this one. Omit the names to list every space
     Visit {
         /// Panel names or ids. Leave these out to list panels on every space
@@ -618,13 +624,17 @@ async fn panel_command(
             println!("{response}");
             Ok(())
         }
-        PanelCommand::Zoom { panel } => {
+        PanelCommand::Zoom { panel, cover_bar } => {
+            let mut body = json!({ "panelId": panel });
+            if cover_bar {
+                body["coverBar"] = json!(true);
+            }
             let response = call(
                 base,
                 token,
                 "POST",
                 "/api/agent/zoom",
-                Some(with_space(json!({ "panelId": panel }), space)),
+                Some(with_space(body, space)),
             )
             .await?;
             println!("{response}");

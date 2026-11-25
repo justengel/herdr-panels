@@ -43,6 +43,10 @@ button, select, input { font: inherit; color: inherit; }
   overflow: hidden;
 }
 
+.app.is-covered .topbar-slot {
+  display: none;
+}
+
 .topbar {
   height: 44px;
   width: 100%;

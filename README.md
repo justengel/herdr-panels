@@ -243,7 +243,7 @@ POST /api/agent/resize    {"panelId","ratio"}
 POST /api/agent/update    {"panelId","title?","panel?"}
 POST /api/agent/tab       {"panelId","op":"list"|"rename"|"focus"|"open"|"close","tab?","title?","target?"}
 POST /api/agent/move      {"panelId","target","place":"swap"|"right"|"below"}
-POST /api/agent/zoom      {"panelId":null}
+POST /api/agent/zoom      {"panelId":null,"coverBar?":true}
 POST /api/agent/visit     {"panelId"} or {"panelIds","arrange?","sizes?","columns?","rows?"}
 GET  /api/agent/spaces
 GET  /api/agent/panels/{id}?selector=h2&text=workspace
@@ -322,6 +322,7 @@ herdr-panels panel resize Notes 0.4
 herdr-panels panel move Notes --to Herdr --place below
 herdr-panels panel update Chat --title Shell --kind herdr
 herdr-panels panel zoom Notes
+herdr-panels panel zoom Notes --cover-bar
 herdr-panels panel visit
 herdr-panels panel visit google
 herdr-panels panel visit google Notes Agents Files

@@ -1828,6 +1828,7 @@ async fn plugin_bridge(
                 &sizes,
                 &columns,
                 &rows,
+                false,
             )
             .await
             .map(Json)
@@ -1838,12 +1839,12 @@ async fn plugin_bridge(
             if panel_id.trim().is_empty() {
                 return Err(ApiError::bad("panelId is required"));
             }
-            crate::agent::visit_desk(&state, &link, &[panel_id], None, &[], &[], &[])
+            crate::agent::visit_desk(&state, &link, &[panel_id], None, &[], &[], &[], false)
                 .await
                 .map(Json)
                 .map_err(agent_error)
         }
-        "showDesk" => crate::agent::zoom_desk(&state, &link, None, None)
+        "showDesk" => crate::agent::zoom_desk(&state, &link, None, None, false)
             .await
             .map(Json)
             .map_err(agent_error),

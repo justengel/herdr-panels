@@ -147,7 +147,7 @@ async fn index(State(state): State<AppState>) -> Json<Value> {
         "update": "POST /api/agent/update {panelId, title?, panel?, space?, control?}",
         "tab": "POST /api/agent/tab {panelId, op: list|rename|focus|open|close, tab?, title?, target?, space?}",
         "move": "POST /api/agent/move {panelId, target, place?: swap|right|below, space?}",
-        "zoom": "POST /api/agent/zoom {panelId?, space?}",
+        "zoom": "POST /api/agent/zoom {panelId?, space?, coverBar?}",
         "visit": "POST /api/agent/visit {panelId | panelIds, arrange?} -> {arrange, panels: [{panelId, title, spaceId, space}]}",
         "spaces": "GET /api/agent/spaces",
         "open": "POST /api/agent/open {target, panelId?, id?, from?, direction?: right|down, reuse?: bool, title?, space?, control?, tab?}",
@@ -1008,6 +1008,9 @@ struct ZoomBody {
     panel_id: Option<String>,
     #[serde(default)]
     space: Option<String>,
+    /// Hide the top bar. Omitted, the panel fills the page under that bar.
+    #[serde(default)]
+    cover_bar: bool,
 }
 
 async fn zoom(
@@ -1020,6 +1023,7 @@ async fn zoom(
         &link,
         body.panel_id.as_deref(),
         named_space(body.space.as_deref()),
+        body.cover_bar,
     )
     .await
     .map(Json)
@@ -1031,6 +1035,7 @@ pub(crate) async fn zoom_desk(
     link: &SessionLink,
     panel_id: Option<&str>,
     _space: Option<&str>,
+    cover_bar: bool,
 ) -> Result<Value, AgentError> {
     let Some(panel_id) = panel_id else {
         state.agent.publish(&json!({
@@ -1039,7 +1044,17 @@ pub(crate) async fn zoom_desk(
         }));
         return Ok(json!({"ok": true, "viewer": state.agent.viewers() > 0}));
     };
-    visit_desk(state, link, &[panel_id.to_string()], None, &[], &[], &[]).await
+    visit_desk(
+        state,
+        link,
+        &[panel_id.to_string()],
+        None,
+        &[],
+        &[],
+        &[],
+        cover_bar,
+    )
+    .await
 }
 
 #[derive(Deserialize)]
@@ -1077,6 +1092,7 @@ async fn visit(
         &body.sizes,
         &body.columns,
         &body.rows,
+        false,
     )
     .await
     .map(Json)
@@ -1150,6 +1166,12 @@ async fn visit_spaces(state: &AppState, link: &SessionLink) -> Result<Vec<OwnedS
     Ok(spaces)
 }
 
+fn mark_cover(message: &mut Value, cover_bar: bool) {
+    if cover_bar {
+        message["coverBar"] = json!(true);
+    }
+}
+
 /// Show one or more panels from any saved space. One missing name rejects the whole visit.
 pub(crate) async fn visit_desk(
     state: &AppState,
@@ -1159,6 +1181,7 @@ pub(crate) async fn visit_desk(
     sizes: &[f64],
     columns: &[f64],
     rows: &[f64],
+    cover_bar: bool,
 ) -> Result<Value, AgentError> {
     if queries.is_empty()
         || queries
@@ -1214,6 +1237,7 @@ pub(crate) async fn visit_desk(
         message["columns"] = json!(weights.columns);
         message["rows"] = json!(weights.rows);
     }
+    mark_cover(&mut message, cover_bar);
     state.agent.publish(&message);
     let named: Vec<Value> = found
         .iter()
@@ -2738,6 +2762,16 @@ impl IntoResponse for AgentError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_fill_covers_the_top_bar_only_when_asked() {
+        let mut plain = json!({ "type": "visit", "panelId": "notes" });
+        mark_cover(&mut plain, false);
+        assert!(plain.get("coverBar").is_none());
+        let mut covered = json!({ "type": "visit", "panelId": "notes" });
+        mark_cover(&mut covered, true);
+        assert_eq!(covered["coverBar"], true);
+    }
 
     #[test]
     fn a_space_name_selects_that_workspace() {

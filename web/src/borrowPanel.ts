@@ -224,6 +224,25 @@ export function deskFillRequest(
   return spaceId ? { panelId, spaceId } : { panelId };
 }
 
+/** The page can be showing a layout before Herdr has a workspace. A zoom still has to find those panels. */
+export function includeShowingLayout(
+  spaces: readonly VisitSpace[],
+  showing: { id: string; title: string; root: LayoutNode } | null,
+): VisitSpace[] {
+  if (!showing || spaces.some((space) => space.current)) return spaces as VisitSpace[];
+  const id = showing.id;
+  const next = spaces.filter(
+    (space) => space.id !== id && spaceLayoutKey(space.id) !== spaceLayoutKey(id),
+  );
+  next.push({
+    id,
+    label: showing.title.trim() || id,
+    root: showing.root,
+    current: true,
+  });
+  return next;
+}
+
 /** Resolve every panel, then place them. One failure returns only the error. */
 export function openVisit(
   spaces: readonly VisitSpace[],

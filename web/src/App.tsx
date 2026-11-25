@@ -53,6 +53,7 @@ import { DeskKeyboard, KeyedPanelProvider } from "./deskKeyboard";
 import { FindController } from "./components/FindBar";
 import {
   deskFillRequest,
+  includeShowingLayout,
   insertVisitPanel,
   joinVisit as appendVisitPanel,
   leaveVisitPanel,
@@ -135,7 +136,7 @@ export function App() {
   const [design, setDesign] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [element, setElement] = useState<{ panelId: string; tag: string; text: string } | null>(null);
-  const [visit, setVisit] = useState<(OpenedVisit & { openedOn: string }) | null>(null);
+  const [visit, setVisit] = useState<(OpenedVisit & { openedOn: string; cover: boolean }) | null>(null);
   const [unlockAsk, setUnlockAsk] = useState<{ requestId: string; panelId: string } | null>(null);
   const [kept, setKept] = useState<KeptPanel[]>([]);
   const [chatTarget, setChatTarget] = useState("");
@@ -570,11 +571,12 @@ export function App() {
       panels: { panelId: string; spaceId?: string }[],
       arrange?: string,
       weights?: VisitWeights,
+      cover?: boolean,
     ) => OpenedVisit | { error: string }
   >(() => ({
     error: "The desk could not show that panel.",
   }));
-  visitRef.current = (panels, arrange, weights) => {
+  visitRef.current = (panels, arrange, weights, cover = false) => {
     const current = spaceRef.current;
     const stored = readSpaceLayouts();
     const workspaces = runtimeRef.current?.workspaces ?? [];
@@ -607,7 +609,16 @@ export function App() {
       if (listed.has(key) || (current && spaceLayoutKey(current) === key)) continue;
       spaces.push({ id: key, label: key, root, current: false });
     }
-    const opened = openVisit(spaces, panels, arrange, weights);
+    const showing = layoutRef.current;
+    const opened = openVisit(
+      includeShowingLayout(
+        spaces,
+        showing ? { id: showing.id, title: showing.title, root: showing.root } : null,
+      ),
+      panels,
+      arrange,
+      weights,
+    );
     if ("error" in opened) return opened;
     const deskIds = new Set(layoutRef.current ? listPanels(layoutRef.current.root).map((panel) => panel.id) : []);
     setKept((current) => {
@@ -625,6 +636,7 @@ export function App() {
       node:
         showing && showing.arrange === opened.arrange ? reuseVisit(showing.node, opened) : opened.node,
       openedOn: showing?.openedOn ?? openedOn,
+      cover,
     }));
     return opened;
   };
@@ -681,6 +693,7 @@ export function App() {
         sizes?: number[];
         columns?: number[];
         rows?: number[];
+        coverBar?: boolean;
         selector?: string;
         text?: string;
         requestId?: string;
@@ -735,7 +748,12 @@ export function App() {
           setKept([]);
           return;
         }
-        const result = visitRef.current([{ panelId: msg.panelId, spaceId: msg.space ?? undefined }], "row");
+        const result = visitRef.current(
+          [{ panelId: msg.panelId, spaceId: msg.space ?? undefined }],
+          "row",
+          undefined,
+          msg.coverBar === true,
+        );
         if ("error" in result) notify(result.error);
         return;
       }
@@ -782,11 +800,16 @@ export function App() {
         const panels = listed.length
           ? listed
           : [{ panelId: msg.panelId ?? "", spaceId: msg.spaceId }];
-        const result = visitRef.current(panels, msg.arrange, {
-          sizes: msg.sizes,
-          columns: msg.columns,
-          rows: msg.rows,
-        });
+        const result = visitRef.current(
+          panels,
+          msg.arrange,
+          {
+            sizes: msg.sizes,
+            columns: msg.columns,
+            rows: msg.rows,
+          },
+          msg.coverBar === true,
+        );
         if ("error" in result) notify(result.error);
         return;
       }
@@ -1242,7 +1265,7 @@ export function App() {
               notify(next.error);
               return;
             }
-            setVisit({ ...next, openedOn: visit.openedOn });
+            setVisit({ ...next, openedOn: visit.openedOn, cover: visit.cover });
             keepVisit(next.node, next.origins, next.panelIds);
           },
           visitChoices,
@@ -1283,7 +1306,7 @@ export function App() {
         }}
       >
       <KeyedPanelProvider id={keyId} set={setKeyId}>
-      <div className="app">
+      <div className={visit?.cover ? "app is-covered" : "app"}>
         <FindController focusedId={keyId} />
         <DeskKeyboard
           layout={layout.root}
