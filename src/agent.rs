@@ -563,7 +563,16 @@ pub(crate) async fn open_desk(
 }
 
 fn locate_target(target: &str, roots: &[std::path::PathBuf]) -> String {
-    let trimmed = crate::files::plain_path(std::path::Path::new(target.trim()));
+    locate_target_with(target, roots, crate::paths::home_directory().as_deref())
+}
+
+fn locate_target_with(
+    target: &str,
+    roots: &[std::path::PathBuf],
+    home: Option<&std::path::Path>,
+) -> String {
+    let expanded = crate::paths::expand_home_prefix(target.trim(), home);
+    let trimmed = crate::files::plain_path(std::path::Path::new(&expanded));
     if trimmed.contains("://") || trimmed.contains(':') && !looks_like_windows_path(&trimmed) {
         return trimmed;
     }
@@ -2701,6 +2710,23 @@ impl IntoResponse for AgentError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_home_shortcut_opens_that_file() {
+        let home = std::env::temp_dir().join(format!("hwp-tilde-open-{}", std::process::id()));
+        let notes = home.join("notes");
+        std::fs::create_dir_all(&notes).unwrap();
+        let file = notes.join("a.md");
+        std::fs::write(&file, "hi").unwrap();
+        let located = locate_target_with("~/notes/a.md", &[], Some(&home));
+        let canonical = file.canonicalize().unwrap();
+        assert_eq!(located, crate::files::plain_path(&canonical));
+        assert_eq!(
+            locate_target_with("~other/notes/a.md", &[], Some(&home)),
+            "~other/notes/a.md"
+        );
+        let _ = std::fs::remove_dir_all(&home);
+    }
 
     #[test]
     fn a_plugin_desk_edit_cannot_turn_on_herdr_control() {

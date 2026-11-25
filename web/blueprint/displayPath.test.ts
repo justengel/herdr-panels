@@ -96,6 +96,13 @@ describe("opening the address that is shown", () => {
     expect(addressToOpen("https://example.com/a", "https://example.com/b", true)).toBe("https://example.com/b");
   });
 
+  it("keeps a home shortcut when this page cannot see a home directory", () => {
+    expect(expandDisplayPath("~/notes/a.md", "")).toBe("~/notes/a.md");
+    expect(expandDisplayPath("~", "")).toBe("~");
+    expect(addressToOpen("https://example.com/a", "~/notes/a.md", true)).toBe("~/notes/a.md");
+    expect(addressToOpen("", "~/other/note.md", true)).toBe("~/other/note.md");
+  });
+
   it("follows the stored address when a shortened field is still marked edited", () => {
     const fitted = middleEllipsis(displayPath(stored, guessHome(stored)), 16);
     expect(fitted.includes("…")).toBe(true);

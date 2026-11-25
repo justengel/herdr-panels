@@ -1290,6 +1290,10 @@ async fn refuse_locked_panel(
 }
 
 fn pick_start_dir(directory: Option<&str>) -> Option<PathBuf> {
+    pick_start_dir_in(directory, crate::paths::home_directory().as_deref())
+}
+
+fn pick_start_dir_in(directory: Option<&str>, home: Option<&Path>) -> Option<PathBuf> {
     let raw = directory?.trim();
     if raw.is_empty() {
         return None;
@@ -1301,6 +1305,7 @@ fn pick_start_dir(directory: Option<&str>) -> Option<PathBuf> {
     {
         return None;
     }
+    let raw = crate::paths::expand_home_prefix(raw, home);
     let path = PathBuf::from(raw);
     if path.is_dir() {
         return Some(path);
@@ -2677,6 +2682,17 @@ mod tests {
         assert_eq!(pick_start_dir(Some("https://example.com")), None);
         assert_eq!(pick_start_dir(Some("plugin:welcome")), None);
         assert_eq!(pick_start_dir(Some("")), None);
+
+        let home = root.join("home");
+        let notes = home.join("notes");
+        std::fs::create_dir_all(&notes).unwrap();
+        let file = notes.join("a.md");
+        std::fs::write(&file, "hi").unwrap();
+        assert_eq!(
+            pick_start_dir_in(Some("~/notes/a.md"), Some(&home)),
+            Some(notes.clone())
+        );
+        assert_eq!(pick_start_dir_in(Some("~/notes"), Some(&home)), Some(notes));
 
         let _ = std::fs::remove_dir_all(&root);
     }

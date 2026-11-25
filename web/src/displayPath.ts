@@ -43,6 +43,8 @@ export function expandDisplayPath(path: string, home: string): string {
   if (trimmed === "~" || trimmed.startsWith("~/") || trimmed.startsWith("~\\")) {
     const rest = trimmed.slice(1).replace(/^[\\/]/, "");
     const base = plainPath(home).replace(/[\\/]+$/, "");
+    // No home on this page: leave `~/...` so the server can expand it. An empty home must not become `/...`.
+    if (!base) return trimmed;
     if (!rest) return base;
     const sep = isWindowsPath(home) ? "\\" : "/";
     return `${base}${sep}${rest.replace(/\//g, sep)}`;

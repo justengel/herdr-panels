@@ -1126,11 +1126,19 @@ fn space_query(space: Option<String>) -> String {
 
 /// A relative file from the CLI is the caller's file. The viewer still resolves a relative path from the page against its content roots.
 pub(crate) fn cli_open_target(cwd: &std::path::Path, target: &str) -> String {
-    let target = target.trim();
-    if !crate::open_target::is_filesystem_target(target) {
-        return target.to_string();
+    cli_open_target_with(cwd, target, crate::paths::home_directory().as_deref())
+}
+
+fn cli_open_target_with(
+    cwd: &std::path::Path,
+    target: &str,
+    home: Option<&std::path::Path>,
+) -> String {
+    let target = crate::paths::expand_home_prefix(target.trim(), home);
+    if !crate::open_target::is_filesystem_target(&target) {
+        return target;
     }
-    let path = std::path::Path::new(target);
+    let path = std::path::Path::new(&target);
     if path.is_absolute() {
         return crate::files::plain_path(path);
     }
@@ -1255,7 +1263,7 @@ async fn call(
 
 #[cfg(test)]
 mod tests {
-    use super::cli_open_target;
+    use super::{cli_open_target, cli_open_target_with};
 
     #[test]
     fn a_relative_open_target_uses_the_caller_directory() {
@@ -1288,6 +1296,15 @@ mod tests {
             "https://example.com/a"
         );
         assert_eq!(cli_open_target(&dir, "example.com"), "example.com");
+        let home = dir.join("home");
+        std::fs::create_dir_all(home.join("notes")).unwrap();
+        std::fs::write(home.join("notes").join("a.md"), "hi\n").unwrap();
+        let sent = cli_open_target_with(&dir, "~/notes/a.md", Some(&home));
+        assert!(
+            std::path::Path::new(&sent).starts_with(&home),
+            "a home shortcut should open under that home, got {sent}"
+        );
+        assert!(sent.ends_with("a.md"), "{sent}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

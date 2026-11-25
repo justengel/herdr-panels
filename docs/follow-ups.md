@@ -7,6 +7,7 @@ Recorded 2026-10-27 from the review before the first public release. Closed item
 ## Done in 0.1.27
 
 - Lumen, Cove, and Harbor are dark reading themes. Choosing one paints Herdr with the same colors.
+- A path that starts with `~` or `${HOME}` opens from the address bar and from Open file or URL.
 
 ## Done in 0.1.26
 

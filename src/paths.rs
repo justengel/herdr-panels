@@ -437,6 +437,51 @@ pub fn find_dist_dir() -> Option<PathBuf> {
         .find(|path| path.join("index.html").is_file())
 }
 
+/// This user's home directory, from `HOME` or `USERPROFILE`.
+pub fn home_directory() -> Option<PathBuf> {
+    std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(PathBuf::from)
+        .filter(|path| !path.as_os_str().is_empty())
+}
+
+/// A leading `~`, `~/`, `~\`, or `${HOME}` becomes `home`.
+/// `~someone` stays as typed. An unknown home leaves the shortcut in place.
+pub fn expand_home_prefix(path: &str, home: Option<&Path>) -> String {
+    let path = path.trim();
+    let Some(rest) = home_shortcut_rest(path) else {
+        return path.to_string();
+    };
+    let Some(home) = home.filter(|path| !path.as_os_str().is_empty()) else {
+        return path.to_string();
+    };
+    let rest = rest.trim_start_matches(['/', '\\']);
+    if rest.is_empty() {
+        return home.display().to_string();
+    }
+    let mut expanded = home.to_path_buf();
+    for part in rest.split(['/', '\\']) {
+        if part.is_empty() || part == "." {
+            continue;
+        }
+        expanded.push(part);
+    }
+    expanded.display().to_string()
+}
+
+fn home_shortcut_rest(path: &str) -> Option<String> {
+    if let Some(rest) = path.strip_prefix("${HOME}") {
+        return Some(rest.to_string());
+    }
+    if path == "~" {
+        return Some(String::new());
+    }
+    if let Some(rest) = path.strip_prefix("~/").or_else(|| path.strip_prefix("~\\")) {
+        return Some(rest.to_string());
+    }
+    None
+}
+
 /// File or folder name at the end of a path.
 /// A drive or UNC path uses Windows separators. A `/...` path uses `/` only.
 /// A relative path uses the host's separator.
@@ -676,6 +721,41 @@ mod tests {
         );
         let _ = std::fs::remove_dir_all(&root);
         let _ = std::fs::remove_dir_all(&outside);
+    }
+
+    #[test]
+    fn a_home_shortcut_expands_to_that_directory() {
+        let home = Path::new("/home/me");
+        let notes = home.join("notes").join("a.md");
+        assert_eq!(
+            expand_home_prefix("~/notes/a.md", Some(home)),
+            notes.display().to_string()
+        );
+        assert_eq!(expand_home_prefix("~/notes/a.md", None), "~/notes/a.md");
+        assert_eq!(
+            expand_home_prefix("~other/notes/a.md", Some(home)),
+            "~other/notes/a.md"
+        );
+        assert_eq!(
+            expand_home_prefix("~", Some(home)),
+            home.display().to_string()
+        );
+        assert_eq!(
+            expand_home_prefix("~/", Some(home)),
+            home.display().to_string()
+        );
+        assert_eq!(
+            expand_home_prefix("${HOME}", Some(home)),
+            home.display().to_string()
+        );
+        assert_eq!(
+            expand_home_prefix("${HOME}/notes/a.md", Some(home)),
+            notes.display().to_string()
+        );
+        assert_eq!(
+            expand_home_prefix("/home/me/notes/a.md", Some(home)),
+            "/home/me/notes/a.md"
+        );
     }
 
     #[test]
