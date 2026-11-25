@@ -4,6 +4,10 @@ Recorded 2026-10-27 from the review before the first public release. Closed item
 
 ## Unreleased
 
+## Done in 0.1.28
+
+- `panel zoom --cover-bar` hides the top bar so that panel fills the window. The usual zoom leaves the bar in place.
+
 ## Done in 0.1.27
 
 - Lumen, Cove, and Harbor are dark reading themes. Choosing one paints Herdr with the same colors.

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.1.28 - 2026-11-25
+
 `panel zoom --cover-bar` hides the top bar so that panel fills the window. The usual zoom leaves the bar in place. A zoom still finds a panel on the layout that is showing when Herdr has no current workspace.
 
 ## 0.1.27 - 2026-11-25
