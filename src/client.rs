@@ -34,7 +34,7 @@ enum ClientCommand {
     Status,
     /// Arrange the open layout
     Panel {
-        /// Herdr workspace to edit. Defaults to the focused space.
+        /// Herdr workspace to edit, by id or label. Defaults to the focused space.
         #[arg(long, global = true)]
         space: Option<String>,
         #[command(subcommand)]

@@ -8,6 +8,8 @@ Lumen, Cove, and Harbor are dark reading themes. Body text sits near 8.5:1 on a 
 
 A path that starts with `~` or `${HOME}` opens that file from the address bar and from Open file or URL. The field can still show and copy `~/`.
 
+`panel --space` accepts a space's label as well as its id. The same label on two spaces is an error. A task that opens a panel later passes that space on every later panel command, so a switch while the work runs does not move the panel.
+
 ## 0.1.26 - 2026-11-25
 
 A desktop browser stays on the loaded page when the address only changes its fragment. The field shows that address. Typing another section moves to it on the same page. Back and Forward walk through the page's own history, and the field follows.

@@ -1966,6 +1966,31 @@ fn workspace_id_for_key(desk: &desk::DeskDocument, key: &str) -> String {
     key.to_string()
 }
 
+fn resolve_space_id(spaces: &[(&str, &str)], requested: &str) -> Result<String, String> {
+    let requested = requested.trim();
+    if requested.is_empty() {
+        return Err("space was not found".into());
+    }
+    if let Some((id, _)) = spaces.iter().find(|(id, _)| *id == requested) {
+        return Ok((*id).to_string());
+    }
+    let mut matched: Vec<&str> = spaces
+        .iter()
+        .filter(|(_, label)| {
+            let label = label.trim();
+            !label.is_empty() && label.eq_ignore_ascii_case(requested)
+        })
+        .map(|(id, _)| *id)
+        .collect();
+    matched.sort_unstable();
+    matched.dedup();
+    match matched.as_slice() {
+        [id] => Ok((*id).to_string()),
+        [] => Err(format!("space {requested} was not found")),
+        _ => Err("more than one space has that name".into()),
+    }
+}
+
 async fn active_source(
     state: &AppState,
     link: &SessionLink,
@@ -1975,19 +2000,22 @@ async fn active_source(
     let session = link.name.clone();
     if let Some(requested) = requested {
         if snapshot.connected {
-            if snapshot
+            let pairs: Vec<(&str, &str)> = snapshot
                 .workspaces
                 .iter()
-                .any(|space| space.workspace_id == requested)
-            {
-                return Ok(ActiveSource::Space {
-                    session,
-                    workspace_id: requested.to_string(),
-                });
-            }
-            return Err(AgentError::missing(format!(
-                "space {requested} was not found"
-            )));
+                .map(|space| (space.workspace_id.as_str(), space.label.as_str()))
+                .collect();
+            let workspace_id = resolve_space_id(&pairs, requested).map_err(|err| {
+                if err.contains("more than one") {
+                    AgentError::bad(err)
+                } else {
+                    AgentError::missing(err)
+                }
+            })?;
+            return Ok(ActiveSource::Space {
+                session,
+                workspace_id,
+            });
         }
         let stored = desk::load_desk(&state.config_dir, &session).map_err(AgentError::bad)?;
         if stored.spaces.contains_key(&desk::space_key(requested)) {
@@ -2710,6 +2738,21 @@ impl IntoResponse for AgentError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_space_name_selects_that_workspace() {
+        let spaces = [("w1", "notes"), ("w4", "Reports")];
+        assert_eq!(resolve_space_id(&spaces, "w4").unwrap(), "w4");
+        assert_eq!(resolve_space_id(&spaces, "Reports").unwrap(), "w4");
+        assert_eq!(resolve_space_id(&spaces, "reports").unwrap(), "w4");
+        let err = resolve_space_id(&spaces, "missing").unwrap_err();
+        assert!(err.contains("was not found"), "{err}");
+        let same_id = [("w1", "w2"), ("w2", "Other")];
+        assert_eq!(resolve_space_id(&same_id, "w2").unwrap(), "w2");
+        let dup = [("w1", "Desk"), ("w2", "desk")];
+        let err = resolve_space_id(&dup, "Desk").unwrap_err();
+        assert!(err.contains("more than one"), "{err}");
+    }
 
     #[test]
     fn a_home_shortcut_opens_that_file() {

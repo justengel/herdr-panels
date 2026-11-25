@@ -8,6 +8,7 @@ Recorded 2026-10-27 from the review before the first public release. Closed item
 
 - Lumen, Cove, and Harbor are dark reading themes. Choosing one paints Herdr with the same colors.
 - A path that starts with `~` or `${HOME}` opens from the address bar and from Open file or URL.
+- `panel --space` accepts a space's label. A task pins that space so a later switch does not move the panel.
 
 ## Done in 0.1.26
 
